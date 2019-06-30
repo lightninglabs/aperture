@@ -1,0 +1,7 @@
+listenaddr: "localhost:8081"
+services:
+  - fqdn: "service1.com"
+    address: "127.0.0.1:10009"
+    tlscertpath: "path-to-optional-tls-cert/tls.crt"
+  - fqdn: "service2.com:8083"
+    address: "123.456.789:8082"
