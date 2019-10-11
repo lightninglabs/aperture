@@ -13,7 +13,7 @@ services:
     pathregexp: '^/.*$'
     address: "127.0.0.1:10009"
     protocol: https
-    tlscertpath: "path-to-optional-tls-cert/tls.crt"
+    tlscertpath: "path-to-optional-tls-cert/tls.cert"
 
   - hostregexp: "service2.com:8083"
     pathregexp: '^/.*$'

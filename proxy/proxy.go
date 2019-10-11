@@ -5,14 +5,18 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"regexp"
 
 	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/kirin/freebie"
 )
 
-const formatPattern = "%s - - \"%s %s %s\" \"%s\" \"%s\""
+const (
+	formatPattern = "%s - - \"%s %s %s\" \"%s\" \"%s\""
+)
 
 // Proxy is a HTTP, HTTP/2 and gRPC handler that takes an incoming request,
 // uses its authenticator to validate the request's headers, and either returns
@@ -26,14 +30,17 @@ type Proxy struct {
 	authenticator auth.Authenticator
 
 	services []*Service
-
-	freebieCounter map[string]uint8
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
 func New(auth auth.Authenticator, services []*Service) (*Proxy, error) {
+	err := prepareServices(services)
+	if err != nil {
+		return nil, err
+	}
+
 	cp, err := certPool(services)
 	if err != nil {
 		return nil, err
@@ -64,12 +71,107 @@ func New(auth auth.Authenticator, services []*Service) (*Proxy, error) {
 	staticServer := http.FileServer(http.Dir("static"))
 
 	return &Proxy{
-		server:         grpcProxy,
-		staticServer:   staticServer,
-		authenticator:  auth,
-		services:       services,
-		freebieCounter: map[string]uint8{},
+		server:        grpcProxy,
+		staticServer:  staticServer,
+		authenticator: auth,
+		services:      services,
 	}, nil
+}
+
+// ServeHTTP checks a client's headers for appropriate authorization and either
+// returns a challenge or forwards their request to the target backend service.
+func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Parse and log the remote IP address. We also need the parsed IP
+	// address for the freebie count.
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteHost = "0.0.0.0"
+	}
+	remoteIp := net.ParseIP(remoteHost)
+	if remoteIp == nil {
+		remoteIp = net.IPv4zero
+	}
+	logRequest := func() {
+		log.Infof(formatPattern, remoteIp.String(), r.Method,
+			r.RequestURI, r.Proto, r.Referer(), r.UserAgent())
+	}
+	defer logRequest()
+
+	// Serve static index HTML page.
+	if r.Method == "GET" &&
+		(r.URL.Path == "/" || r.URL.Path == "/index.html") {
+
+		log.Debugf("Dispatching request %s to static file server.",
+			r.URL.Path)
+		p.staticServer.ServeHTTP(w, r)
+		return
+	}
+
+	// For OPTIONS requests we only need to set the CORS headers, not serve
+	// any content;
+	if r.Method == "OPTIONS" {
+		addCorsHeaders(w.Header())
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Every request that makes it to here must be matched to a backend
+	// service. Otherwise it a wrong request and receives a 404 not found.
+	target, ok := matchService(r, p.services)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Determine auth level required to access service and dispatch request
+	// accordingly.
+	switch {
+	case target.Auth.IsOn():
+		if !p.authenticator.Accept(&r.Header) {
+			p.handlePaymentRequired(w, r)
+			return
+		}
+	case target.Auth.IsFreebie():
+		// We only need to respect the freebie counter if the user
+		// is not authenticated at all.
+		if !p.authenticator.Accept(&r.Header) {
+			ok, err := target.freebieDb.CanPass(r, remoteIp)
+			if err != nil {
+				log.Errorf("Error querying freebie db: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if !ok {
+				p.handlePaymentRequired(w, r)
+				return
+			}
+			_, err = target.freebieDb.TallyFreebie(r, remoteIp)
+			if err != nil {
+				log.Errorf("Error updating freebie db: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+	case target.Auth.IsOff():
+	}
+
+	// If we got here, it means everything is OK to pass the request to the
+	// service backend via the reverse proxy.
+	p.server.ServeHTTP(w, r)
+}
+
+// prepareServices prepares the backend service configurations to be used by the
+// proxy.
+func prepareServices(services []*Service) error {
+	for _, service := range services {
+		// Each freebie enabled service gets its own store.
+		if service.Auth.IsFreebie() {
+			service.freebieDb = freebie.NewMemIpMaskStore(
+				service.Auth.FreebieCount(),
+			)
+		}
+	}
+	return nil
 }
 
 // certPool builds a pool of x509 certificates from the backend services.
@@ -188,69 +290,4 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte("payment required")); err != nil {
 		log.Errorf("Error writing response: %v", err)
 	}
-}
-
-// ServeHTTP checks a client's headers for appropriate authorization and either
-// returns a challenge or forwards their request to the target backend service.
-func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	logRequest := func() {
-		log.Infof(formatPattern, r.RemoteAddr, r.Method, r.RequestURI,
-			r.Proto, r.Referer(), r.UserAgent())
-	}
-	defer logRequest()
-
-	// Serve static index HTML page.
-	if r.Method == "GET" &&
-		(r.URL.Path == "/" || r.URL.Path == "/index.html") {
-
-		log.Debugf("Dispatching request %s to static file server.",
-			r.URL.Path)
-		p.staticServer.ServeHTTP(w, r)
-		return
-	}
-
-	// For OPTIONS requests we only need to set the CORS headers, not serve
-	// any content;
-	if r.Method == "OPTIONS" {
-		addCorsHeaders(w.Header())
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	// Every request that makes it to here must be matched to a backend
-	// service. Otherwise it a wrong request and receives a 404 not found.
-	target, ok := matchService(r, p.services)
-	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-
-	// Determine auth level required to access service and dispatch request
-	// accordingly.
-	switch {
-	case target.Auth.IsOn():
-		if !p.authenticator.Accept(&r.Header) {
-			p.handlePaymentRequired(w, r)
-			return
-		}
-	case target.Auth.IsFreebie():
-		// We only need to respect the freebie counter if the user
-		// is not authenticated at all.
-		if !p.authenticator.Accept(&r.Header) {
-			counter, ok := p.freebieCounter[r.RemoteAddr]
-			if !ok {
-				counter = 0
-			}
-			if counter >= target.Auth.FreebieCount() {
-				p.handlePaymentRequired(w, r)
-				return
-			}
-			p.freebieCounter[r.RemoteAddr] = counter + 1
-		}
-	case target.Auth.IsOff():
-	}
-
-	// If we got here, it means everything is OK to pass the request to the
-	// service backend via the reverse proxy.
-	p.server.ServeHTTP(w, r)
 }

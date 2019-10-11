@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/lightninglabs/kirin/freebie"
 )
 
 type Config struct {
@@ -32,7 +34,7 @@ func (l Level) IsFreebie() bool {
 	return strings.HasPrefix(l.lower(), "freebie")
 }
 
-func (l Level) FreebieCount() uint8 {
+func (l Level) FreebieCount() freebie.Count {
 	parts := strings.Split(l.lower(), " ")
 	if len(parts) != 2 {
 		panic(fmt.Errorf("invalid auth value: %s", l.lower()))
@@ -41,7 +43,7 @@ func (l Level) FreebieCount() uint8 {
 	if err != nil {
 		panic(err)
 	}
-	return uint8(count)
+	return freebie.Count(count)
 }
 
 func (l Level) IsOff() bool {

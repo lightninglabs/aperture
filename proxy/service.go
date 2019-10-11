@@ -1,6 +1,9 @@
 package proxy
 
-import "github.com/lightninglabs/kirin/auth"
+import (
+	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/kirin/freebie"
+)
 
 // Service generically specifies configuration data for backend services to the
 // Kirin proxy.
@@ -28,4 +31,6 @@ type Service struct {
 	// PathRegexp is a regular expression that is tested against the path
 	// of the URL of a request to find out if this service should be used.
 	PathRegexp string `long:"pathregexp" description:"Regular expression to match the path of the URL against"`
+
+	freebieDb freebie.DB
 }
