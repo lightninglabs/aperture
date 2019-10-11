@@ -55,38 +55,45 @@ func NewLndAuthenticator(cfg *Config) (*LndAuthenticator, error) {
 // NOTE: This is part of the Authenticator interface.
 func (l *LndAuthenticator) Accept(header *http.Header) bool {
 	authHeader := header.Get("Authorization")
+	log.Debugf("Trying to authorize with header value [%s].", authHeader)
 	if authHeader == "" {
 		return false
 	}
 
 	if !authRegex.MatchString(authHeader) {
+		log.Debugf("Deny: Auth header in invalid format.")
 		return false
 	}
 
 	matches := authRegex.FindStringSubmatch(authHeader)
 	if len(matches) != 3 {
+		log.Debugf("Deny: Auth header in invalid format.")
 		return false
 	}
 
 	macBase64, preimageHex := matches[1], matches[2]
 	macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 	if err != nil {
+		log.Debugf("Deny: Base64 decode of macaroon failed: %v", err)
 		return false
 	}
 
 	preimageBytes, err := hex.DecodeString(preimageHex)
 	if err != nil {
+		log.Debugf("Deny: Hex decode of preimage failed: %v", err)
 		return false
 	}
 
 	// TODO(guggero): check preimage against payment hash caveat in the
 	//  macaroon.
 	if len(preimageBytes) != 32 {
+		log.Debugf("Deny: Decoded preimage has invalid length.")
 		return false
 	}
 
 	err = l.macService.ValidateMacaroon(macBytes, []bakery.Op{})
 	if err != nil {
+		log.Debugf("Deny: Macaroon validation failed: %v", err)
 		return false
 	}
 	return true
@@ -108,7 +115,7 @@ func (l *LndAuthenticator) FreshChallengeHeader(r *http.Request) (
 	}
 	response, err := l.client.AddInvoice(ctx, invoice)
 	if err != nil {
-		fmt.Printf("error adding invoice: %v\n", err)
+		log.Errorf("Error adding invoice: %v", err)
 		return nil, err
 	}
 	paymentHashHex := hex.EncodeToString(response.RHash)
@@ -122,7 +129,7 @@ func (l *LndAuthenticator) FreshChallengeHeader(r *http.Request) (
 		},
 	)
 	if err != nil {
-		fmt.Printf("error creating macaroon: %v\n", err)
+		log.Errorf("Error creating macaroon: %v", err)
 		return nil, err
 	}
 
@@ -133,5 +140,7 @@ func (l *LndAuthenticator) FreshChallengeHeader(r *http.Request) (
 	)
 	header := r.Header
 	header.Set("WWW-Authenticate", str)
+
+	log.Debugf("Created new challenge header: [%s]", str)
 	return header, nil
 }

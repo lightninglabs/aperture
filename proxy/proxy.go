@@ -12,6 +12,8 @@ import (
 	"github.com/lightninglabs/kirin/auth"
 )
 
+const formatPattern = "%s - - \"%s %s %s\" \"%s\" \"%s\""
+
 // Proxy is a HTTP, HTTP/2 and gRPC handler that takes an incoming request,
 // uses its authenticator to validate the request's headers, and either returns
 // a challenge to the client or forwards the request to another server and
@@ -98,20 +100,33 @@ func matchService(req *http.Request, services []*Service) (*Service, bool) {
 	for _, service := range services {
 		hostRegexp := regexp.MustCompile(service.HostRegexp)
 		if !hostRegexp.MatchString(req.Host) {
+			log.Tracef("Req host [%s] doesn't match [%s].",
+				req.Host, hostRegexp)
 			continue
 		}
 
 		if service.PathRegexp == "" {
+			log.Debugf("Host [%s] matched pattern [%s] and path "+
+				"expression is empty. Using service [%s].",
+				req.Host, hostRegexp, service.Address)
 			return service, true
 		}
 
-		urlRegexp := regexp.MustCompile(service.PathRegexp)
-		if !urlRegexp.MatchString(req.URL.Path) {
+		pathRegexp := regexp.MustCompile(service.PathRegexp)
+		if !pathRegexp.MatchString(req.URL.Path) {
+			log.Tracef("Req path [%s] doesn't match [%s].",
+				req.URL.Path, pathRegexp)
 			continue
 		}
 
+		log.Debugf("Host [%s] matched pattern [%s] and path [%s] "+
+			"matched [%s]. Using service [%s].",
+			req.Host, hostRegexp, req.URL.Path, pathRegexp,
+			service.Address)
 		return service, true
 	}
+	log.Errorf("No backend service matched request [%s%s].", req.Host,
+		req.URL.Path)
 	return nil, false
 }
 
@@ -139,6 +154,8 @@ func director(services []*Service) func(req *http.Request) {
 // that it's ok to allow requests to sub domains, even if the JS was served from
 // the top level domain.
 func addCorsHeaders(header http.Header) {
+	log.Debugf("Adding CORS headers to response.")
+
 	header.Add("Access-Control-Allow-Origin", "*")
 	header.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	header.Add("Access-Control-Expose-Headers", "WWW-Authenticate")
@@ -155,6 +172,7 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request) {
 
 	header, err := p.authenticator.FreshChallengeHeader(r)
 	if err != nil {
+		log.Errorf("Error creating new challenge header, response 500.")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -168,16 +186,25 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusPaymentRequired)
 	if _, err := w.Write([]byte("payment required")); err != nil {
-		fmt.Printf("error writing response: %v", err)
+		log.Errorf("Error writing response: %v", err)
 	}
 }
 
 // ServeHTTP checks a client's headers for appropriate authorization and either
 // returns a challenge or forwards their request to the target backend service.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logRequest := func() {
+		log.Infof(formatPattern, r.RemoteAddr, r.Method, r.RequestURI,
+			r.Proto, r.Referer(), r.UserAgent())
+	}
+	defer logRequest()
+
 	// Serve static index HTML page.
 	if r.Method == "GET" &&
 		(r.URL.Path == "/" || r.URL.Path == "/index.html") {
+
+		log.Debugf("Dispatching request %s to static file server.",
+			r.URL.Path)
 		p.staticServer.ServeHTTP(w, r)
 		return
 	}

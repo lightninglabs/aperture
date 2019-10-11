@@ -46,8 +46,6 @@ func start() error {
 	if err != nil {
 		return err
 	}
-
-	// Finally start the reverse proxy.
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: http.HandlerFunc(servicesProxy.ServeHTTP),
@@ -59,6 +57,9 @@ func start() error {
 	// occurs. So we can just defer a cleanup function here that will close
 	// everything on shutdown.
 	defer cleanup(server)
+
+	// Finally start the server.
+	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
 	return server.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 }
 
