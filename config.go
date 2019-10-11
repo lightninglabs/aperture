@@ -11,6 +11,10 @@ var (
 	defaultConfigFilename  = "kirin.yaml"
 	defaultTLSKeyFilename  = "tls.key"
 	defaultTLSCertFilename = "tls.cert"
+	defaultLogLevel        = "info"
+	defaultLogFilename     = "kirin.log"
+	defaultMaxLogFiles     = 3
+	defaultMaxLogFileSize  = 10
 )
 
 type config struct {
@@ -23,4 +27,8 @@ type config struct {
 	// Services is a list of JSON objects in string format, which specify
 	// each backend service to Kirin.
 	Services []*proxy.Service `long:"service" description:"Configurations for each Kirin backend service."`
+
+	// DebugLevel is a string defining the log level for the service either
+	// for all subsystems the same or individual level by subsystem.
+	DebugLevel string `long:"debuglevel" description:"Debug level for the Kirin application and its subsystems."`
 }

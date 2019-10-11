@@ -1,4 +1,6 @@
 listenaddr: "localhost:8081"
+debuglevel: "debug"
+
 services:
   # List of services that should be reachable behind the proxy.
   # Requests will be matched to the services in order, picking the first
