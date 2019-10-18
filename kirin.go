@@ -42,7 +42,9 @@ func start() error {
 	if err != nil {
 		return err
 	}
-	servicesProxy, err := proxy.New(authenticator, cfg.Services)
+	servicesProxy, err := proxy.New(
+		authenticator, cfg.Services, cfg.StaticRoot,
+	)
 	if err != nil {
 		return err
 	}

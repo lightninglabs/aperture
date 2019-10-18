@@ -35,7 +35,9 @@ type Proxy struct {
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
-func New(auth auth.Authenticator, services []*Service) (*Proxy, error) {
+func New(auth auth.Authenticator, services []*Service, staticRoot string) (
+	*Proxy, error) {
+
 	err := prepareServices(services)
 	if err != nil {
 		return nil, err
@@ -68,7 +70,7 @@ func New(auth auth.Authenticator, services []*Service) (*Proxy, error) {
 		FlushInterval: -1,
 	}
 
-	staticServer := http.FileServer(http.Dir("static"))
+	staticServer := http.FileServer(http.Dir(staticRoot))
 
 	return &Proxy{
 		server:        grpcProxy,

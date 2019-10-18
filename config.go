@@ -22,6 +22,10 @@ type config struct {
 	// to listen for requests.
 	ListenAddr string `long:"listenaddr" description:"The interface we should listen on for client requests"`
 
+	// StaticRoot is the folder where the static content served by the proxy
+	// is located.
+	StaticRoot string `long:"staticroot" description:"The folder where the static content is located."`
+
 	Authenticator *auth.Config `long:"authenticator" description:"Configuration for the authenticator."`
 
 	// Services is a list of JSON objects in string format, which specify

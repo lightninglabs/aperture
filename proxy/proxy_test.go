@@ -30,7 +30,7 @@ func TestProxy(t *testing.T) {
 	}}
 
 	auth := auth.NewMockAuthenticator()
-	proxy, err := proxy.New(auth, services)
+	proxy, err := proxy.New(auth, services, "static")
 	if err != nil {
 		t.Fatalf("failed to create new proxy: %v", err)
 	}
