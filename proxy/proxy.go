@@ -19,6 +19,8 @@ import (
 type Proxy struct {
 	server *httputil.ReverseProxy
 
+	staticServer http.Handler
+
 	authenticator auth.Authenticator
 }
 
@@ -40,13 +42,20 @@ func New(auth auth.Authenticator, services []*Service) (*Proxy, error) {
 		TLSClientConfig:   tlsConfig,
 	}
 	grpcProxy := &httputil.ReverseProxy{
-		Director:      director(auth, services),
-		Transport:     transport,
+		Director:  director(auth, services),
+		Transport: transport,
+		ModifyResponse: func(res *http.Response) error {
+			addCorsHeaders(res.Header)
+			return nil
+		},
 		FlushInterval: -1,
 	}
 
+	staticServer := http.FileServer(http.Dir("static"))
+
 	return &Proxy{
 		grpcProxy,
+		staticServer,
 		auth,
 	}, nil
 }
@@ -108,9 +117,27 @@ func director(auth auth.Authenticator, services []*Service) func(req *http.Reque
 	}
 }
 
+func addCorsHeaders(header http.Header) {
+	header.Add("Access-Control-Allow-Origin", "*")
+	header.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	header.Add("Access-Control-Allow-Headers", "Authorization, Grpc-Metadata-macaroon")
+}
+
 // ServeHTTP checks a client's headers for appropriate authorization and either
 // returns a challenge or forwards their request to the target backend service.
 func (g *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" &&
+		(r.URL.Path == "/" || r.URL.Path == "/index.html") {
+		g.staticServer.ServeHTTP(w, r)
+		return
+	}
+
+	if r.Method == "OPTIONS" {
+		addCorsHeaders(w.Header())
+		w.WriteHeader(200)
+		return
+	}
+
 	if !g.authenticator.Accept(&r.Header) {
 		challengeHeader, err := g.authenticator.FreshChallengeHeader(r)
 		if err != nil {
