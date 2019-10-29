@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -9,8 +8,6 @@ import (
 	"regexp"
 
 	"github.com/lightninglabs/kirin/macaroons"
-	"github.com/lightninglabs/loop/lndclient"
-	"github.com/lightningnetwork/lnd/lnrpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
 )
@@ -20,31 +17,27 @@ var (
 	opWildcard = "*"
 )
 
-type LndAuthenticator struct {
-	client     lnrpc.LightningClient
+// LsatAuthenticator is an authenticator that uses the LSAT protocol to
+// authenticate requests.
+type LsatAuthenticator struct {
+	challenger Challenger
 	macService *macaroons.Service
 }
 
-// A compile time flag to ensure the LndAuthenticator satisfies the
+// A compile time flag to ensure the LsatAuthenticator satisfies the
 // Authenticator interface.
-var _ Authenticator = (*LndAuthenticator)(nil)
+var _ Authenticator = (*LsatAuthenticator)(nil)
 
-// NewLndAuthenticator creates a new authenticator that is connected to an lnd
-// backend and can create new invoices if required.
-func NewLndAuthenticator(cfg *Config) (*LndAuthenticator, error) {
-	client, err := lndclient.NewBasicClient(
-		cfg.LndHost, cfg.TlsPath, cfg.MacDir, cfg.Network,
-	)
-	if err != nil {
-		return nil, err
-	}
+// NewLsatAuthenticator creates a new authenticator that authenticates requests
+// based on LSAT tokens.
+func NewLsatAuthenticator(challenger Challenger) (*LsatAuthenticator, error) {
 	macService, err := macaroons.NewService()
 	if err != nil {
 		return nil, err
 	}
 
-	return &LndAuthenticator{
-		client:     client,
+	return &LsatAuthenticator{
+		challenger: challenger,
 		macService: macService,
 	}, nil
 }
@@ -53,7 +46,7 @@ func NewLndAuthenticator(cfg *Config) (*LndAuthenticator, error) {
 // to a given backend service.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LndAuthenticator) Accept(header *http.Header) bool {
+func (l *LsatAuthenticator) Accept(header *http.Header) bool {
 	authHeader := header.Get("Authorization")
 	log.Debugf("Trying to authorize with header value [%s].", authHeader)
 	if authHeader == "" {
@@ -103,29 +96,23 @@ func (l *LndAuthenticator) Accept(header *http.Header) bool {
 // complete.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LndAuthenticator) FreshChallengeHeader(r *http.Request) (
+func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request) (
 	http.Header, error) {
 
-	// Obtain a new invoice from lnd first. We need to know the payment hash
-	// so we can add it as a caveat to the macaroon.
-	ctx := context.Background()
-	invoice := &lnrpc.Invoice{
-		Memo:  "LSAT",
-		Value: 1,
-	}
-	response, err := l.client.AddInvoice(ctx, invoice)
+	paymentRequest, paymentHash, err := l.challenger.NewChallenge()
 	if err != nil {
-		log.Errorf("Error adding invoice: %v", err)
+		log.Errorf("Error creating new challenge: %v", err)
 		return nil, err
 	}
-	paymentHashHex := hex.EncodeToString(response.RHash)
 
 	// Create a new macaroon and add the payment hash as a caveat.
 	// The bakery requires at least one operation so we add an "allow all"
 	// permission set for now.
 	mac, err := l.macService.NewMacaroon(
 		[]bakery.Op{{Entity: opWildcard, Action: opWildcard}}, []string{
-			checkers.Condition(macaroons.CondRHash, paymentHashHex),
+			checkers.Condition(
+				macaroons.CondRHash, paymentHash.String(),
+			),
 		},
 	)
 	if err != nil {
@@ -135,8 +122,7 @@ func (l *LndAuthenticator) FreshChallengeHeader(r *http.Request) (
 
 	str := "LSAT macaroon='%s' invoice='%s'"
 	str = fmt.Sprintf(
-		str, base64.StdEncoding.EncodeToString(mac),
-		response.GetPaymentRequest(),
+		str, base64.StdEncoding.EncodeToString(mac), paymentRequest,
 	)
 	header := r.Header
 	header.Set("WWW-Authenticate", str)

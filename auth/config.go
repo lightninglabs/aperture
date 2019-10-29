@@ -8,17 +8,6 @@ import (
 	"github.com/lightninglabs/kirin/freebie"
 )
 
-type Config struct {
-	// LndHost is the hostname of the LND instance to connect to.
-	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
-
-	TlsPath string `long:"tlspath"`
-
-	MacDir string `long:"macdir"`
-
-	Network string `long:"network"`
-}
-
 type Level string
 
 func (l Level) lower() string {

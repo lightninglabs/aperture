@@ -10,6 +10,7 @@ import (
 	"github.com/lightninglabs/kirin/auth"
 	"github.com/lightninglabs/kirin/proxy"
 	"github.com/lightningnetwork/lnd/build"
+	"github.com/lightningnetwork/lnd/lnrpc"
 	"gopkg.in/yaml.v2"
 )
 
@@ -37,17 +38,14 @@ func start() error {
 		return fmt.Errorf("unable to set up logging: %v", err)
 	}
 
-	// Create the auxiliary services the proxy needs to work.
-	authenticator, err := auth.NewLndAuthenticator(cfg.Authenticator)
-	if err != nil {
-		return err
+	// Create the proxy and connect it to lnd.
+	genInvoiceReq := func() (*lnrpc.Invoice, error) {
+		return &lnrpc.Invoice{
+			Memo:  "LSAT",
+			Value: 1,
+		}, nil
 	}
-	servicesProxy, err := proxy.New(
-		authenticator, cfg.Services, cfg.StaticRoot,
-	)
-	if err != nil {
-		return err
-	}
+	servicesProxy, err := createProxy(cfg, genInvoiceReq)
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: http.HandlerFunc(servicesProxy.ServeHTTP),
@@ -101,6 +99,23 @@ func setupLogging(cfg *config) error {
 		return err
 	}
 	return build.ParseAndSetDebugLevels(cfg.DebugLevel, logWriter)
+}
+
+// createProxy creates the proxy with all the services it needs.
+func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator) (
+	*proxy.Proxy, error) {
+
+	challenger, err := NewLndChallenger(
+		cfg.Authenticator, genInvoiceReq,
+	)
+	if err != nil {
+		return nil, err
+	}
+	authenticator, err := auth.NewLsatAuthenticator(challenger)
+	if err != nil {
+		return nil, err
+	}
+	return proxy.New(authenticator, cfg.Services, cfg.StaticRoot)
 }
 
 // cleanup closes the given server and shuts down the log rotator.

@@ -2,7 +2,6 @@ package kirin
 
 import (
 	"github.com/btcsuite/btcutil"
-	"github.com/lightninglabs/kirin/auth"
 	"github.com/lightninglabs/kirin/proxy"
 )
 
@@ -17,6 +16,17 @@ var (
 	defaultMaxLogFileSize  = 10
 )
 
+type authConfig struct {
+	// LndHost is the hostname of the LND instance to connect to.
+	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
+
+	TlsPath string `long:"tlspath"`
+
+	MacDir string `long:"macdir"`
+
+	Network string `long:"network"`
+}
+
 type config struct {
 	// ListenAddr is the listening address that we should use to allow Kirin
 	// to listen for requests.
@@ -26,7 +36,7 @@ type config struct {
 	// is located.
 	StaticRoot string `long:"staticroot" description:"The folder where the static content is located."`
 
-	Authenticator *auth.Config `long:"authenticator" description:"Configuration for the authenticator."`
+	Authenticator *authConfig `long:"authenticator" description:"Configuration for the authenticator."`
 
 	// Services is a list of JSON objects in string format, which specify
 	// each backend service to Kirin.
