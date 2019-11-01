@@ -173,6 +173,12 @@ func (p *Proxy) director(req *http.Request) {
 		// Don't forward the authorization header since the
 		// services won't know what it is.
 		req.Header.Del("Authorization")
+
+		// Now overwrite header fields of the client request
+		// with the fields from the configuration file.
+		for name, value := range target.Headers {
+			req.Header.Add(name, value)
+		}
 	}
 }
 

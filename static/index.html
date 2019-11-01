@@ -1,5 +1,125 @@
 <html>
+<head>
+    <title>LSAT proxy demo page</title>
+    <style>
+        .row:after {
+            content: "";
+            display: table;
+            clear: both;
+        }
+
+        .col {
+            width: 45%;
+            float: left;
+            padding: 10px;
+        }
+
+        .max-height-scroll {
+            max-height: 500px;
+            overflow-y: scroll;
+        }
+
+        pre {
+            white-space: pre-wrap;       /* Since CSS 2.1 */
+            white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */
+            white-space: -o-pre-wrap;    /* Opera 7 */
+            word-wrap: break-word;       /* Internet Explorer 5.5+ */
+        }
+    </style>
+</head>
 <body>
-<h1>LSAT auth server</h1>
+<div class="row">
+    <div class="col">
+        <h1>LND node info</h1>
+        <pre id="getinfo-lnd"></pre>
+        <button id="reload-lnd">Reload</button>
+    </div>
+    <div class="col">
+        <h1>Bos Scores</h1>
+        <pre id="bos-scores" class="max-height-scroll"></pre>
+        <button id="reload-bos">Reload</button>
+        <button id="pay">Pay invoice with Joule</button>
+        <button id="add-preimage">Paste preimage of manual payment</button>
+    </div>
+</div>
+<script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+<script src="https://unpkg.com/webln@0.2.1/dist/webln.min.js"
+        integrity="sha384-Enk2tnv6U0yPoFk7RasscZ5oQIG2fzVYaG4ledkAf7MdEXP9fMazV74tAgEwvxm7"
+        crossorigin="anonymous"></script>
+<script>
+
+  let authorization = "";
+  let lastMacaroon = null;
+  let lastInvoice = null;
+
+  function parseInvoice(invoice) {
+    const rex = /LSAT macaroon='(.*?)' invoice='(.*?)'/i;
+    parts = invoice.match(rex);
+    lastMacaroon = parts[1];
+    lastInvoice = parts[2];
+  }
+
+  function loadJSON(url, elem) {
+    elem.text("");
+    $.ajax(url, {
+      cache: false,
+      dataType: 'json',
+      crossDomain: true,
+      headers: {
+        'Authorization': authorization,
+      },
+      success: (data, status) => {
+        elem.text(JSON.stringify(data, null, 2));
+      },
+      statusCode: {
+        402: (xhr, status, err) => {
+          var invoice = xhr.getResponseHeader('www-authenticate');
+          parseInvoice(invoice);
+          elem.text("payment required: " + invoice);
+        }
+      },
+      error: (xhr, status, err) => {
+        console.log("error: " + err + ", headers: " + xhr.getAllResponseHeaders())
+      }
+    });
+  }
+  
+  function payInvoice() {
+    if (window.WebLN) {
+      WebLN.requestProvider()
+        .then((provider) => {
+          provider.sendPayment(lastInvoice)
+            .then((response) => {
+              authorization = "LSAT " + lastMacaroon + ":" + response.preimage;
+              $('#reload-bos').click();
+              $('#reload-lnd').click();
+            });
+        })
+        .catch((err) => {
+          alert(err);
+        });
+    } else {
+      alert("Joule not installed or failed to load WebLN library.");
+    }
+  }
+  
+  function addPreimage() {
+    let preimage = prompt("Enter hex encoded preimage");
+    authorization = "LSAT " + lastMacaroon + ":" + preimage;
+    $('#reload-bos').click();
+    $('#reload-lnd').click();
+  }
+
+  $(document).ready(() => {
+    const host = document.location.host;
+    
+    $('#reload-lnd').on('click', () => loadJSON('//alice.' + host + '/v1/getinfo', $('#getinfo-lnd'))).click();
+    $('#reload-bos').on('click', () => loadJSON('//' + host + '/availability/v1/btc.json', $('#bos-scores'))).click();
+    $('#pay').on('click', () => payInvoice());
+    $('#add-preimage').on('click', () => addPreimage());
+  });
+
+
+</script>
 </body>
 </html>
