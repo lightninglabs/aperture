@@ -9,7 +9,7 @@ var (
 	kirinDataDir           = btcutil.AppDataDir("kirin", false)
 	defaultConfigFilename  = "kirin.yaml"
 	defaultTLSKeyFilename  = "tls.key"
-	defaultTLSCertFilename = "tls.crt"
+	defaultTLSCertFilename = "tls.cert"
 )
 
 type config struct {

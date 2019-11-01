@@ -34,7 +34,10 @@ func start() error {
 		return err
 	}
 
-	yaml.Unmarshal(b, &cfg)
+	err = yaml.Unmarshal(b, &cfg)
+	if err != nil {
+		return err
+	}
 	if cfg.ListenAddr == "" {
 		return fmt.Errorf("missing listen address for server")
 	}

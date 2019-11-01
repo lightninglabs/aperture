@@ -9,6 +9,11 @@ type Service struct {
 	// Address is the service's IP address and port.
 	Address string `long:"address" description:"lnd instance rpc address"`
 
-	// FQDN is the FQDN of the service.
-	FQDN string `long:"fqdn" description:"FQDN of the service."`
+	// HostRegexp is a regular expression that is tested against the 'Host'
+	// HTTP header field to find out if this service should be used.
+	HostRegexp string `long:"hostregexp" description:"Regular expression to match the host against"`
+
+	// PathRegexp is a regular expression that is tested against the path
+	// of the URL of a request to find out if this service should be used.
+	PathRegexp string `long:"pathregexp" description:"Regular expression to match the path of the URL against"`
 }

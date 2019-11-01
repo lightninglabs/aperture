@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"regexp"
 
 	"github.com/lightninglabs/kirin/auth"
 )
@@ -38,9 +39,8 @@ func New(auth auth.Authenticator, services []*Service) (*Proxy, error) {
 		ForceAttemptHTTP2: true,
 		TLSClientConfig:   tlsConfig,
 	}
-	nameToService := formatServices(services)
 	grpcProxy := &httputil.ReverseProxy{
-		Director:      director(auth, nameToService),
+		Director:      director(auth, services),
 		Transport:     transport,
 		FlushInterval: -1,
 	}
@@ -72,19 +72,32 @@ func certPool(services []*Service) (*x509.CertPool, error) {
 	return cp, nil
 }
 
-func formatServices(servicesList []*Service) map[string]*Service {
-	services := make(map[string]*Service)
-	for _, service := range servicesList {
-		services[service.FQDN] = service
-	}
+func matchService(req *http.Request, services []*Service) (*Service, bool) {
+	for _, service := range services {
+		hostRegexp := regexp.MustCompile(service.HostRegexp)
+		if !hostRegexp.MatchString(req.Host) {
+			continue
+		}
 
-	return services
+		if service.PathRegexp == "" {
+			return service, true
+		}
+
+		urlRegexp := regexp.MustCompile(service.PathRegexp)
+		if !urlRegexp.MatchString(req.URL.Path) {
+			continue
+		}
+
+		return service, true
+
+	}
+	return nil, false
 }
 
-func director(auth auth.Authenticator, services map[string]*Service) func(req *http.Request) {
+func director(auth auth.Authenticator, services []*Service) func(req *http.Request) {
 	return func(req *http.Request) {
-		target := services[req.Host]
-		if target != nil {
+		target, ok := matchService(req, services)
+		if ok {
 			req.URL.Scheme = "http"
 			if target.TLSCertPath != "" {
 				req.URL.Scheme = "https"
