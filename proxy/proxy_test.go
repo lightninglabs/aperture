@@ -6,25 +6,28 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lightninglabs/kirin/auth"
 	"github.com/lightninglabs/kirin/proxy"
 )
 
 const (
-	testFQDN                 = "localhost:10019"
+	testAddr                 = "localhost:10019"
+	testHostRegexp           = "^localhost:.*$"
+	testPathRegexp           = "^/grpc/.*$"
 	testTargetServiceAddress = "localhost:8082"
 	testHTTPResponseBody     = "HTTP Hello"
 )
 
 func TestProxy(t *testing.T) {
 	// Create a list of services to proxy between.
-	services := []*proxy.Service{
-		&proxy.Service{
-			Address: testTargetServiceAddress,
-			FQDN:    testFQDN,
-		},
-	}
+	services := []*proxy.Service{{
+		Address:    testTargetServiceAddress,
+		HostRegexp: testHostRegexp,
+		PathRegexp: testPathRegexp,
+		Protocol:   "http",
+	}}
 
 	auth := auth.NewMockAuthenticator()
 	proxy, err := proxy.New(auth, services)
@@ -34,7 +37,7 @@ func TestProxy(t *testing.T) {
 
 	// Start server that gives requests to the proxy.
 	server := &http.Server{
-		Addr:    testFQDN,
+		Addr:    testAddr,
 		Handler: http.HandlerFunc(proxy.ServeHTTP),
 	}
 
@@ -51,10 +54,13 @@ func TestProxy(t *testing.T) {
 		}
 	}()
 
+	// Wait for servers to start.
+	time.Sleep(100 * time.Millisecond)
+
 	// Test making a request to the backend service without the
 	// Authorization header set.
 	client := &http.Client{}
-	url := fmt.Sprintf("http://%s", testFQDN)
+	url := fmt.Sprintf("http://%s/grpc/test", testAddr)
 	resp, err := client.Get(url)
 	if err != nil {
 		t.Fatalf("errored making http request: %v", err)

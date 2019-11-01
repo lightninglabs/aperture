@@ -6,11 +6,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-
-	"gopkg.in/yaml.v2"
-
+	
 	"github.com/lightninglabs/kirin/auth"
 	"github.com/lightninglabs/kirin/proxy"
+	"gopkg.in/yaml.v2"
 )
 
 /**
@@ -42,8 +41,11 @@ func start() error {
 		return fmt.Errorf("missing listen address for server")
 	}
 
-	authenticator := auth.NewMockAuthenticator()
-	servicesProxy, err := proxy.New(*authenticator, cfg.Services)
+	authenticator, err := auth.NewLndAuthenticator(cfg.Authenticator)
+	if err != nil {
+		return err
+	}
+	servicesProxy, err := proxy.New(authenticator, cfg.Services)
 	if err != nil {
 		return err
 	}
