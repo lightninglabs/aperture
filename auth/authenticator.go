@@ -10,6 +10,21 @@ import (
 	"github.com/lightninglabs/kirin/macaroons"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
+	"gopkg.in/macaroon.v2"
+)
+
+const (
+	// HeaderAuthorization is the HTTP header field name that is used to
+	// send the LSAT by REST clients.
+	HeaderAuthorization = "Authorization"
+
+	// HeaderMacaroonMD is the HTTP header field name that is used to send
+	// the LSAT by certain REST and gRPC clients.
+	HeaderMacaroonMD = "Grpc-Metadata-Macaroon"
+
+	// HeaderMacaroon is the HTTP header field name that is used to send the
+	// LSAT by our own gRPC clients.
+	HeaderMacaroon = "Macaroon"
 )
 
 var (
@@ -47,33 +62,12 @@ func NewLsatAuthenticator(challenger Challenger) (*LsatAuthenticator, error) {
 //
 // NOTE: This is part of the Authenticator interface.
 func (l *LsatAuthenticator) Accept(header *http.Header) bool {
-	authHeader := header.Get("Authorization")
-	log.Debugf("Trying to authorize with header value [%s].", authHeader)
-	if authHeader == "" {
-		return false
-	}
-
-	if !authRegex.MatchString(authHeader) {
-		log.Debugf("Deny: Auth header in invalid format.")
-		return false
-	}
-
-	matches := authRegex.FindStringSubmatch(authHeader)
-	if len(matches) != 3 {
-		log.Debugf("Deny: Auth header in invalid format.")
-		return false
-	}
-
-	macBase64, preimageHex := matches[1], matches[2]
-	macBytes, err := base64.StdEncoding.DecodeString(macBase64)
+	// Try reading the macaroon and preimage from the HTTP header. This can
+	// be in different header fields depending on the implementation and/or
+	// protocol.
+	mac, preimageBytes, err := authFromHeader(header)
 	if err != nil {
-		log.Debugf("Deny: Base64 decode of macaroon failed: %v", err)
-		return false
-	}
-
-	preimageBytes, err := hex.DecodeString(preimageHex)
-	if err != nil {
-		log.Debugf("Deny: Hex decode of preimage failed: %v", err)
+		log.Debugf("Deny: %v", err)
 		return false
 	}
 
@@ -84,7 +78,7 @@ func (l *LsatAuthenticator) Accept(header *http.Header) bool {
 		return false
 	}
 
-	err = l.macService.ValidateMacaroon(macBytes, []bakery.Op{})
+	err = l.macService.ValidateMacaroon(mac, []bakery.Op{})
 	if err != nil {
 		log.Debugf("Deny: Macaroon validation failed: %v", err)
 		return false
@@ -129,4 +123,96 @@ func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request) (
 
 	log.Debugf("Created new challenge header: [%s]", str)
 	return header, nil
+}
+
+// authFromHeader tries to extract authentication information from HTTP headers.
+// There are two supported formats that can be sent in three different header
+// fields:
+//    1.      Authorization: LSAT <macBase64>:<preimageHex>
+//    2.      Grpc-Metadata-Macaroon: <macHex>
+//    3.      Macaroon: <macHex>
+// If only the macaroon is sent in header 2 or three then it is expected to have
+// a caveat with the preimage attached to it.
+func authFromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
+	var authHeader string
+
+	switch {
+	// Header field 1 contains the macaroon and the preimage as distinct
+	// values separated by a colon.
+	case header.Get(HeaderAuthorization) != "":
+		// Parse the content of the header field and check that it is in
+		// the correct format.
+		authHeader = header.Get(HeaderAuthorization)
+		log.Debugf("Trying to authorize with header value [%s].",
+			authHeader)
+		if !authRegex.MatchString(authHeader) {
+			return nil, nil, fmt.Errorf("invalid auth header "+
+				"format: %s", authHeader)
+		}
+		matches := authRegex.FindStringSubmatch(authHeader)
+		if len(matches) != 3 {
+			return nil, nil, fmt.Errorf("invalid auth header "+
+				"format: %s", authHeader)
+		}
+
+		// Decode the content of the two parts of the header value.
+		macBase64, preimageHex := matches[1], matches[2]
+		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
+		if err != nil {
+			return nil, nil, fmt.Errorf("base64 decode of "+
+				"macaroon failed: %v", err)
+		}
+		mac := &macaroon.Macaroon{}
+		err = mac.UnmarshalBinary(macBytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to unmarshal " +
+				"macaroon: %v", err)
+		}
+		preimageBytes, err := hex.DecodeString(preimageHex)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hex decode of preimage "+
+				"failed: %v", err)
+		}
+
+		// All done, we don't need to extract anything from the
+		// macaroon since the preimage was presented separately.
+		return mac, preimageBytes, nil
+
+	// Header field 2: Contains only the macaroon.
+	case header.Get(HeaderMacaroonMD) != "":
+		authHeader = header.Get(HeaderMacaroonMD)
+
+	// Header field 3: Contains only the macaroon.
+	case header.Get(HeaderMacaroon) != "":
+		authHeader = header.Get(HeaderMacaroon)
+
+	default:
+		return nil, nil, fmt.Errorf("no auth header provided")
+	}
+
+	// For case 2 and 3, we need to actually unmarshal the macaroon to
+	// extract the preimage.
+	macBytes, err := hex.DecodeString(authHeader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hex decode of macaroon "+
+			"failed: %v", err)
+	}
+	mac := &macaroon.Macaroon{}
+	err = mac.UnmarshalBinary(macBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to unmarshal macaroon: "+
+			"%v", err)
+	}
+	preimageHex, err := macaroons.ExtractCaveat(mac, macaroons.CondPreimage)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to extract preimage from "+
+			"macaroon: %v", err)
+	}
+	preimageBytes, err := hex.DecodeString(preimageHex)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hex decode of preimage "+
+			"failed: %v", err)
+	}
+
+	return mac, preimageBytes, nil
 }
