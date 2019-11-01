@@ -11,7 +11,6 @@ import (
 	"regexp"
 
 	"github.com/lightninglabs/kirin/auth"
-	"github.com/lightninglabs/kirin/freebie"
 )
 
 const (
@@ -23,13 +22,10 @@ const (
 // a challenge to the client or forwards the request to another server and
 // proxies the response back to the client.
 type Proxy struct {
-	server *httputil.ReverseProxy
-
-	staticServer http.Handler
-
+	proxyBackend  *httputil.ReverseProxy
+	staticServer  http.Handler
 	authenticator auth.Authenticator
-
-	services []*Service
+	services      []*Service
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
@@ -38,46 +34,18 @@ type Proxy struct {
 func New(auth auth.Authenticator, services []*Service, staticRoot string) (
 	*Proxy, error) {
 
-	err := prepareServices(services)
-	if err != nil {
-		return nil, err
-	}
-
-	cp, err := certPool(services)
-	if err != nil {
-		return nil, err
-	}
-
-	tlsConfig := &tls.Config{
-		RootCAs:            cp,
-		InsecureSkipVerify: true,
-	}
-	transport := &http.Transport{
-		ForceAttemptHTTP2: true,
-		TLSClientConfig:   tlsConfig,
-	}
-
-	grpcProxy := &httputil.ReverseProxy{
-		Director:  director(services),
-		Transport: transport,
-		ModifyResponse: func(res *http.Response) error {
-			addCorsHeaders(res.Header)
-			return nil
-		},
-
-		// A negative value means to flush immediately after each write
-		// to the client.
-		FlushInterval: -1,
-	}
-
 	staticServer := http.FileServer(http.Dir(staticRoot))
-
-	return &Proxy{
-		server:        grpcProxy,
+	proxy := &Proxy{
 		staticServer:  staticServer,
 		authenticator: auth,
 		services:      services,
-	}, nil
+	}
+	err := proxy.UpdateServices(services)
+	if err != nil {
+		return nil, err
+	}
+
+	return proxy, nil
 }
 
 // ServeHTTP checks a client's headers for appropriate authorization and either
@@ -159,21 +127,59 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
-	p.server.ServeHTTP(w, r)
+	p.proxyBackend.ServeHTTP(w, r)
 }
 
-// prepareServices prepares the backend service configurations to be used by the
-// proxy.
-func prepareServices(services []*Service) error {
-	for _, service := range services {
-		// Each freebie enabled service gets its own store.
-		if service.Auth.IsFreebie() {
-			service.freebieDb = freebie.NewMemIpMaskStore(
-				service.Auth.FreebieCount(),
-			)
-		}
+// UpdateServices re-configures the proxy to use a new set of backend services.
+func (p *Proxy) UpdateServices(services []*Service) error {
+	err := prepareServices(services)
+	if err != nil {
+		return err
 	}
+
+	certPool, err := certPool(services)
+	if err != nil {
+		return err
+	}
+	transport := &http.Transport{
+		ForceAttemptHTTP2: true,
+		TLSClientConfig: &tls.Config{
+			RootCAs:            certPool,
+			InsecureSkipVerify: true,
+		},
+	}
+
+	p.proxyBackend = &httputil.ReverseProxy{
+		Director:  p.director,
+		Transport: transport,
+		ModifyResponse: func(res *http.Response) error {
+			addCorsHeaders(res.Header)
+			return nil
+		},
+
+		// A negative value means to flush immediately after each write
+		// to the client.
+		FlushInterval: -1,
+	}
+
 	return nil
+}
+
+// director is a method that rewrites an incoming request to be forwarded to a
+// backend service.
+func (p *Proxy) director(req *http.Request) {
+	target, ok := matchService(req, p.services)
+	if ok {
+		// Rewrite address and protocol in the request so the
+		// real service is called instead.
+		req.Host = target.Address
+		req.URL.Host = target.Address
+		req.URL.Scheme = target.Protocol
+
+		// Don't forward the authorization header since the
+		// services won't know what it is.
+		req.Header.Del("Authorization")
+	}
 }
 
 // certPool builds a pool of x509 certificates from the backend services.
@@ -232,25 +238,6 @@ func matchService(req *http.Request, services []*Service) (*Service, bool) {
 	log.Errorf("No backend service matched request [%s%s].", req.Host,
 		req.URL.Path)
 	return nil, false
-}
-
-// director returns a closure that rewrites an incoming request to be forwarded
-// to a backend service.
-func director(services []*Service) func(req *http.Request) {
-	return func(req *http.Request) {
-		target, ok := matchService(req, services)
-		if ok {
-			// Rewrite address and protocol in the request so the
-			// real service is called instead.
-			req.Host = target.Address
-			req.URL.Host = target.Address
-			req.URL.Scheme = target.Protocol
-
-			// Don't forward the authorization header since the
-			// services won't know what it is.
-			req.Header.Del("Authorization")
-		}
-	}
 }
 
 // addCorsHeaders adds HTTP header fields that are required for Cross Origin

@@ -34,3 +34,17 @@ type Service struct {
 
 	freebieDb freebie.DB
 }
+
+// prepareServices prepares the backend service configurations to be used by the
+// proxy.
+func prepareServices(services []*Service) error {
+	for _, service := range services {
+		// Each freebie enabled service gets its own store.
+		if service.Auth.IsFreebie() {
+			service.freebieDb = freebie.NewMemIpMaskStore(
+				service.Auth.FreebieCount(),
+			)
+		}
+	}
+	return nil
+}
