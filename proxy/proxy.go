@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"regexp"
@@ -14,7 +13,12 @@ import (
 )
 
 const (
-	formatPattern = "%s - - \"%s %s %s\" \"%s\" \"%s\""
+	// formatPattern is the pattern in which the request log will be
+	// printed. This is loosely oriented on the apache log format.
+	// An example entry would look like this:
+	// 2019-11-09 04:07:55.072 [INF] PRXY: 66.249.69.89 - - 
+	// "GET /availability/v1/btc.json HTTP/1.1" "" "Mozilla/5.0 ..."
+	formatPattern = "- - \"%s %s %s\" \"%s\" \"%s\""
 )
 
 // Proxy is a HTTP, HTTP/2 and gRPC handler that takes an incoming request,
@@ -53,17 +57,10 @@ func New(auth auth.Authenticator, services []*Service, staticRoot string) (
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse and log the remote IP address. We also need the parsed IP
 	// address for the freebie count.
-	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteHost = "0.0.0.0"
-	}
-	remoteIp := net.ParseIP(remoteHost)
-	if remoteIp == nil {
-		remoteIp = net.IPv4zero
-	}
+	remoteIp, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
 	logRequest := func() {
-		log.Infof(formatPattern, remoteIp.String(), r.Method,
-			r.RequestURI, r.Proto, r.Referer(), r.UserAgent())
+		prefixLog.Infof(formatPattern, r.Method, r.RequestURI, r.Proto,
+			r.Referer(), r.UserAgent())
 	}
 	defer logRequest()
 
@@ -81,8 +78,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// will return a 404 for us.
 	target, ok := matchService(r, p.services)
 	if !ok {
-		log.Debugf("Dispatching request %s to static file server.",
-			r.URL.Path)
+		prefixLog.Debugf("Dispatching request %s to static file "+
+			"server.", r.URL.Path)
 		p.staticServer.ServeHTTP(w, r)
 		return
 	}
@@ -92,6 +89,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case target.Auth.IsOn():
 		if !p.authenticator.Accept(&r.Header) {
+			prefixLog.Infof("Authentication failed. Sending 402.")
 			p.handlePaymentRequired(w, r)
 			return
 		}
@@ -101,7 +99,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !p.authenticator.Accept(&r.Header) {
 			ok, err := target.freebieDb.CanPass(r, remoteIp)
 			if err != nil {
-				log.Errorf("Error querying freebie db: %v", err)
+				prefixLog.Errorf("Error querying freebie db: "+
+					"%v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -111,7 +110,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			_, err = target.freebieDb.TallyFreebie(r, remoteIp)
 			if err != nil {
-				log.Errorf("Error updating freebie db: %v", err)
+				prefixLog.Errorf("Error updating freebie db: "+
+					"%v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
