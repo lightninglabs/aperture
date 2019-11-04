@@ -67,16 +67,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer logRequest()
 
-	// Serve static index HTML page.
-	if r.Method == "GET" &&
-		(r.URL.Path == "/" || r.URL.Path == "/index.html") {
-
-		log.Debugf("Dispatching request %s to static file server.",
-			r.URL.Path)
-		p.staticServer.ServeHTTP(w, r)
-		return
-	}
-
 	// For OPTIONS requests we only need to set the CORS headers, not serve
 	// any content;
 	if r.Method == "OPTIONS" {
@@ -85,11 +75,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Every request that makes it to here must be matched to a backend
-	// service. Otherwise it a wrong request and receives a 404 not found.
+	// Requests that can't be matched to a service backend will be
+	// dispatched to the static file server. If the file exists in the
+	// static file folder it will be served, otherwise the static server
+	// will return a 404 for us.
 	target, ok := matchService(r, p.services)
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
+		log.Debugf("Dispatching request %s to static file server.",
+			r.URL.Path)
+		p.staticServer.ServeHTTP(w, r)
 		return
 	}
 
