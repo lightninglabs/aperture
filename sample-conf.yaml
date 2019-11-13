@@ -1,0 +1,22 @@
+listenaddr: "localhost:8081"
+staticroot: "./static"
+debuglevel: "debug"
+
+services:
+  # List of services that should be reachable behind the proxy.
+  # Requests will be matched to the services in order, picking the first
+  # that satisfies hostregexp and (if set) pathregexp.
+  # So order is important!
+  #
+  # Use single quotes for regular expressions with special characters in them to
+  # avoid YAML parsing errors!
+  - hostregexp: '^service1.com$'
+    pathregexp: '^/.*$'
+    address: "127.0.0.1:10009"
+    protocol: https
+    tlscertpath: "path-to-optional-tls-cert/tls.cert"
+
+  - hostregexp: "service2.com:8083"
+    pathregexp: '^/.*$'
+    address: "123.456.789:8082"
+    protocol: https
