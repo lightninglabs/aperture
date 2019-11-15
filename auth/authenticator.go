@@ -29,6 +29,7 @@ const (
 
 var (
 	authRegex  = regexp.MustCompile("LSAT (.*?):([a-f0-9]{64})")
+	authFormat = "LSAT %s:%s"
 	opWildcard = "*"
 )
 
@@ -65,7 +66,7 @@ func (l *LsatAuthenticator) Accept(header *http.Header) bool {
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
-	mac, preimageBytes, err := authFromHeader(header)
+	mac, preimageBytes, err := FromHeader(header)
 	if err != nil {
 		log.Debugf("Deny: %v", err)
 		return false
@@ -125,7 +126,7 @@ func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request) (
 	return header, nil
 }
 
-// authFromHeader tries to extract authentication information from HTTP headers.
+// FromHeader tries to extract authentication information from HTTP headers.
 // There are two supported formats that can be sent in three different header
 // fields:
 //    1.      Authorization: LSAT <macBase64>:<preimageHex>
@@ -133,7 +134,7 @@ func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request) (
 //    3.      Macaroon: <macHex>
 // If only the macaroon is sent in header 2 or three then it is expected to have
 // a caveat with the preimage attached to it.
-func authFromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
+func FromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
 	var authHeader string
 
 	switch {
@@ -165,7 +166,7 @@ func authFromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
 		mac := &macaroon.Macaroon{}
 		err = mac.UnmarshalBinary(macBytes)
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to unmarshal " +
+			return nil, nil, fmt.Errorf("unable to unmarshal "+
 				"macaroon: %v", err)
 		}
 		preimageBytes, err := hex.DecodeString(preimageHex)
@@ -215,4 +216,21 @@ func authFromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
 	}
 
 	return mac, preimageBytes, nil
+}
+
+// SetHeader sets the provided authentication elements as the default/standard
+// HTTP header for the LSAT protocol.
+func SetHeader(header *http.Header, mac *macaroon.Macaroon,
+	preimage []byte) error {
+
+	macBytes, err := mac.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	value := fmt.Sprintf(
+		authFormat, base64.StdEncoding.EncodeToString(macBytes),
+		hex.EncodeToString(preimage),
+	)
+	header.Set(HeaderAuthorization, value)
+	return nil
 }

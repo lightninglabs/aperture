@@ -19,7 +19,7 @@ const (
 	// formatPattern is the pattern in which the request log will be
 	// printed. This is loosely oriented on the apache log format.
 	// An example entry would look like this:
-	// 2019-11-09 04:07:55.072 [INF] PRXY: 66.249.69.89 - - 
+	// 2019-11-09 04:07:55.072 [INF] PRXY: 66.249.69.89 - -
 	// "GET /availability/v1/btc.json HTTP/1.1" "" "Mozilla/5.0 ..."
 	formatPattern  = "- - \"%s %s %s\" \"%s\" \"%s\""
 	hdrContentType = "Content-Type"
@@ -181,9 +181,18 @@ func (p *Proxy) director(req *http.Request) {
 		req.URL.Host = target.Address
 		req.URL.Scheme = target.Protocol
 
-		// Don't forward the authorization header since the
-		// services won't know what it is.
-		req.Header.Del("Authorization")
+		// Make sure we always forward the authorization in the correct/
+		// default format so the backend knows what to do with it.
+		mac, preimage, err := auth.FromHeader(&req.Header)
+		if err == nil {
+			// It could be that there is no auth information because
+			// none is needed for this particular request. So we
+			// only continue if no error is set.
+			err := auth.SetHeader(&req.Header, mac, preimage)
+			if err != nil {
+				log.Errorf("could not set header: %v", err)
+			}
+		}
 
 		// Now overwrite header fields of the client request
 		// with the fields from the configuration file.
