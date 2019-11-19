@@ -8,17 +8,22 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/lightninglabs/kirin/auth"
+	"google.golang.org/grpc/codes"
 )
 
 const (
 	// formatPattern is the pattern in which the request log will be
 	// printed. This is loosely oriented on the apache log format.
 	// An example entry would look like this:
-	// 2019-11-09 04:07:55.072 [INF] PRXY: 66.249.69.89 - - 
+	// 2019-11-09 04:07:55.072 [INF] PRXY: 66.249.69.89 - -
 	// "GET /availability/v1/btc.json HTTP/1.1" "" "Mozilla/5.0 ..."
-	formatPattern = "- - \"%s %s %s\" \"%s\" \"%s\""
+	formatPattern  = "- - \"%s %s %s\" \"%s\" \"%s\""
+	hdrContentType = "Content-Type"
+	hdrTypeGrpc    = "application/grpc"
 )
 
 // Proxy is a HTTP, HTTP/2 and gRPC handler that takes an incoming request,
@@ -68,7 +73,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// any content;
 	if r.Method == "OPTIONS" {
 		addCorsHeaders(w.Header())
-		w.WriteHeader(http.StatusOK)
+		sendDirectResponse(w, r, http.StatusOK, "")
 		return
 	}
 
@@ -101,7 +106,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				prefixLog.Errorf("Error querying freebie db: "+
 					"%v", err)
-				w.WriteHeader(http.StatusInternalServerError)
+				sendDirectResponse(
+					w, r, http.StatusInternalServerError,
+					"freebie DB failure",
+				)
 				return
 			}
 			if !ok {
@@ -112,7 +120,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				prefixLog.Errorf("Error updating freebie db: "+
 					"%v", err)
-				w.WriteHeader(http.StatusInternalServerError)
+				sendDirectResponse(
+					w, r, http.StatusInternalServerError,
+					"freebie DB failure",
+				)
 				return
 			}
 		}
@@ -170,9 +181,18 @@ func (p *Proxy) director(req *http.Request) {
 		req.URL.Host = target.Address
 		req.URL.Scheme = target.Protocol
 
-		// Don't forward the authorization header since the
-		// services won't know what it is.
-		req.Header.Del("Authorization")
+		// Make sure we always forward the authorization in the correct/
+		// default format so the backend knows what to do with it.
+		mac, preimage, err := auth.FromHeader(&req.Header)
+		if err == nil {
+			// It could be that there is no auth information because
+			// none is needed for this particular request. So we
+			// only continue if no error is set.
+			err := auth.SetHeader(&req.Header, mac, preimage)
+			if err != nil {
+				log.Errorf("could not set header: %v", err)
+			}
+		}
 
 		// Now overwrite header fields of the client request
 		// with the fields from the configuration file.
@@ -263,8 +283,11 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request) {
 
 	header, err := p.authenticator.FreshChallengeHeader(r)
 	if err != nil {
-		log.Errorf("Error creating new challenge header, response 500.")
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Errorf("Error creating new challenge header: %v", err)
+		sendDirectResponse(
+			w, r, http.StatusInternalServerError,
+			"challenge failure",
+		)
 		return
 	}
 
@@ -275,8 +298,26 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.WriteHeader(http.StatusPaymentRequired)
-	if _, err := w.Write([]byte("payment required")); err != nil {
-		log.Errorf("Error writing response: %v", err)
+	sendDirectResponse(w, r, http.StatusPaymentRequired, "payment required")
+}
+
+// sendDirectResponse sends a response directly to the client without proxying
+// anything to a backend. The given error is transported in a way the client can
+// understand. This means, for a gRPC client it is sent as specific header
+// fields.
+func sendDirectResponse(w http.ResponseWriter, r *http.Request,
+	statusCode int, errInfo string) {
+
+	// Find out if the client is a normal HTTP or a gRPC client. Every gRPC
+	// request should have the Content-Type header field set accordingly
+	// so we can use that.
+	switch {
+	case strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc):
+		w.Header().Set("Grpc-Status", strconv.Itoa(int(codes.Internal)))
+		w.Header().Set("Grpc-Message", errInfo)
+		w.WriteHeader(statusCode)
+
+	default:
+		http.Error(w, errInfo, statusCode)
 	}
 }

@@ -16,6 +16,12 @@ func (a MockAuthenticator) Accept(header *http.Header) bool {
 	if header.Get("Authorization") != "" {
 		return true
 	}
+	if header.Get("Grpc-Metadata-macaroon") != "" {
+		return true
+	}
+	if header.Get("Macaroon") != "" {
+		return true
+	}
 	return false
 }
 
