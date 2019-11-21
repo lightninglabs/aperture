@@ -2,6 +2,11 @@ listenaddr: "localhost:8081"
 staticroot: "./static"
 debuglevel: "debug"
 
+etcd:
+  host: "localhost:2379"
+  user: "user"
+  password: "password"
+
 services:
   # List of services that should be reachable behind the proxy.
   # Requests will be matched to the services in order, picking the first

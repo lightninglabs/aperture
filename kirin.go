@@ -6,13 +6,25 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/coreos/etcd/clientv3"
 	"github.com/lightninglabs/kirin/auth"
 	"github.com/lightninglabs/kirin/proxy"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"gopkg.in/yaml.v2"
+)
+
+const (
+	// topLevelKey is the top level key for an etcd cluster where we'll
+	// store all LSAT proxy related data.
+	topLevelKey = "lsat/proxy"
+
+	// etcdKeyDelimeter is the delimeter we'll use for all etcd keys to
+	// represent a path-like structure.
+	etcdKeyDelimeter = "/"
 )
 
 // Main is the true entrypoint of Kirin.
@@ -37,6 +49,17 @@ func start() error {
 	err = setupLogging(cfg)
 	if err != nil {
 		return fmt.Errorf("unable to set up logging: %v", err)
+	}
+
+	// Initialize our etcd client.
+	etcdClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{cfg.Etcd.Host},
+		DialTimeout: 5 * time.Second,
+		Username:    cfg.Etcd.User,
+		Password:    cfg.Etcd.Password,
+	})
+	if err != nil {
+		return fmt.Errorf("unable to connect to etcd: %v", err)
 	}
 
 	// Create the proxy and connect it to lnd.
@@ -70,7 +93,7 @@ func start() error {
 	// The ListenAndServeTLS below will block until shut down or an error
 	// occurs. So we can just defer a cleanup function here that will close
 	// everything on shutdown.
-	defer cleanup(server)
+	defer cleanup(etcdClient, server)
 
 	// Finally start the server.
 	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
@@ -144,7 +167,10 @@ func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator) (
 }
 
 // cleanup closes the given server and shuts down the log rotator.
-func cleanup(server *http.Server) {
+func cleanup(etcdClient *clientv3.Client, server *http.Server) {
+	if err := etcdClient.Close(); err != nil {
+		log.Errorf("Error terminating etcd client: %v", err)
+	}
 	err := server.Close()
 	if err != nil {
 		log.Errorf("Error closing server: %v", err)
