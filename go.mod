@@ -7,7 +7,7 @@ require (
 	github.com/btcsuite/btcutil v0.0.0-20190425235716-9e5f4b9a998d
 	github.com/golang/protobuf v1.3.2
 	github.com/lightninglabs/loop v0.2.4-alpha.0.20191116024025-539d6ed9e3e8
-	github.com/lightningnetwork/lnd v0.8.0-beta-rc3.0.20191119135609-79051ac63f1a
+	github.com/lightningnetwork/lnd v0.8.0-beta-rc3.0.20191115230031-4d7a151b4763
 	github.com/lightningnetwork/lnd/cert v1.0.0
 	golang.org/x/net v0.0.0-20191112182307-2180aed22343 // indirect
 	golang.org/x/sys v0.0.0-20191112214154-59a1497f0cea // indirect
