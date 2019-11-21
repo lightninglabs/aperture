@@ -20,6 +20,9 @@ var (
 // Service generically specifies configuration data for backend services to the
 // Kirin proxy.
 type Service struct {
+	// Name is the name of the LSAT-enabled service.
+	Name string `long:"name" description:"Name of the LSAT-enabled service"`
+
 	// TLSCertPath is the optional path to the service's TLS certificate.
 	TLSCertPath string `long:"tlscertpath" description:"Path to the service's TLS certificate"`
 
@@ -54,6 +57,15 @@ type Service struct {
 	// If the value starts with the prefix "!file+base64:", the content of
 	// the file is sent encoded as base64.
 	Headers map[string]string `long:"headers" description:"Header fields to always pass to the service"`
+
+	// Capabilities is the list of capabilities authorized for the service
+	// at the base tier.
+	Capabilities string `long:"capabilities" description:"A comma-separated list of the service capabilities authorized for the base tier"`
+
+	// Constraints is the set of constraints that will take form of caveats.
+	// They'll be enforced for a service at the base tier. The key should
+	// correspond to the caveat's condition.
+	Constraints map[string]string `long:"constraints" description:"The service constraints to enforce at the base tier"`
 
 	freebieDb freebie.DB
 }
