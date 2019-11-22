@@ -6,7 +6,6 @@ import (
 
 	"github.com/lightninglabs/kirin/mint"
 	"github.com/lightninglabs/loop/lsat"
-	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
 
@@ -20,13 +19,6 @@ type Authenticator interface {
 	// FreshChallengeHeader returns a header containing a challenge for the
 	// user to complete.
 	FreshChallengeHeader(*http.Request, string) (http.Header, error)
-}
-
-// Challenger is an interface for generating new payment challenges.
-type Challenger interface {
-	// NewChallenge creates a new LSAT payment challenge, returning a
-	// payment request (invoice) and the corresponding payment hash.
-	NewChallenge() (string, lntypes.Hash, error)
 }
 
 // Minter is an entity that is able to mint and verify LSATs for a set of
