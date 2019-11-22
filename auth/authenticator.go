@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/lightninglabs/kirin/macaroons"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
 	"gopkg.in/macaroon.v2"
@@ -66,7 +67,7 @@ func (l *LsatAuthenticator) Accept(header *http.Header) bool {
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
-	mac, preimageBytes, err := FromHeader(header)
+	mac, _, err := FromHeader(header)
 	if err != nil {
 		log.Debugf("Deny: %v", err)
 		return false
@@ -74,10 +75,6 @@ func (l *LsatAuthenticator) Accept(header *http.Header) bool {
 
 	// TODO(guggero): check preimage against payment hash caveat in the
 	//  macaroon.
-	if len(preimageBytes) != 32 {
-		log.Debugf("Deny: Decoded preimage has invalid length.")
-		return false
-	}
 
 	err = l.macService.ValidateMacaroon(mac, []bakery.Op{})
 	if err != nil {
@@ -134,7 +131,7 @@ func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request) (
 //    3.      Macaroon: <macHex>
 // If only the macaroon is sent in header 2 or three then it is expected to have
 // a caveat with the preimage attached to it.
-func FromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
+func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, error) {
 	var authHeader string
 
 	switch {
@@ -147,37 +144,37 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
 		log.Debugf("Trying to authorize with header value [%s].",
 			authHeader)
 		if !authRegex.MatchString(authHeader) {
-			return nil, nil, fmt.Errorf("invalid auth header "+
-				"format: %s", authHeader)
+			return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
+				"auth header format: %s", authHeader)
 		}
 		matches := authRegex.FindStringSubmatch(authHeader)
 		if len(matches) != 3 {
-			return nil, nil, fmt.Errorf("invalid auth header "+
-				"format: %s", authHeader)
+			return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
+				"auth header format: %s", authHeader)
 		}
 
 		// Decode the content of the two parts of the header value.
 		macBase64, preimageHex := matches[1], matches[2]
 		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 		if err != nil {
-			return nil, nil, fmt.Errorf("base64 decode of "+
-				"macaroon failed: %v", err)
+			return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
+				"decode of macaroon failed: %v", err)
 		}
 		mac := &macaroon.Macaroon{}
 		err = mac.UnmarshalBinary(macBytes)
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to unmarshal "+
-				"macaroon: %v", err)
+			return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
+				"unmarshal macaroon: %v", err)
 		}
-		preimageBytes, err := hex.DecodeString(preimageHex)
+		preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 		if err != nil {
-			return nil, nil, fmt.Errorf("hex decode of preimage "+
-				"failed: %v", err)
+			return nil, lntypes.Preimage{}, fmt.Errorf("hex "+
+				"decode of preimage failed: %v", err)
 		}
 
 		// All done, we don't need to extract anything from the
 		// macaroon since the preimage was presented separately.
-		return mac, preimageBytes, nil
+		return mac, preimage, nil
 
 	// Header field 2: Contains only the macaroon.
 	case header.Get(HeaderMacaroonMD) != "":
@@ -188,40 +185,41 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, []byte, error) {
 		authHeader = header.Get(HeaderMacaroon)
 
 	default:
-		return nil, nil, fmt.Errorf("no auth header provided")
+		return nil, lntypes.Preimage{}, fmt.Errorf("no auth header " +
+			"provided")
 	}
 
 	// For case 2 and 3, we need to actually unmarshal the macaroon to
 	// extract the preimage.
 	macBytes, err := hex.DecodeString(authHeader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("hex decode of macaroon "+
-			"failed: %v", err)
+		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
+			"macaroon failed: %v", err)
 	}
 	mac := &macaroon.Macaroon{}
 	err = mac.UnmarshalBinary(macBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("unable to unmarshal macaroon: "+
-			"%v", err)
+		return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
+			"unmarshal macaroon: %v", err)
 	}
 	preimageHex, err := macaroons.ExtractCaveat(mac, macaroons.CondPreimage)
 	if err != nil {
-		return nil, nil, fmt.Errorf("unable to extract preimage from "+
-			"macaroon: %v", err)
+		return nil, lntypes.Preimage{}, fmt.Errorf("unable to extract "+
+			"preimage from macaroon: %v", err)
 	}
-	preimageBytes, err := hex.DecodeString(preimageHex)
+	preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 	if err != nil {
-		return nil, nil, fmt.Errorf("hex decode of preimage "+
-			"failed: %v", err)
+		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
+			"preimage failed: %v", err)
 	}
 
-	return mac, preimageBytes, nil
+	return mac, preimage, nil
 }
 
 // SetHeader sets the provided authentication elements as the default/standard
 // HTTP header for the LSAT protocol.
 func SetHeader(header *http.Header, mac *macaroon.Macaroon,
-	preimage []byte) error {
+	preimage lntypes.Preimage) error {
 
 	macBytes, err := mac.MarshalBinary()
 	if err != nil {
@@ -229,7 +227,7 @@ func SetHeader(header *http.Header, mac *macaroon.Macaroon,
 	}
 	value := fmt.Sprintf(
 		authFormat, base64.StdEncoding.EncodeToString(macBytes),
-		hex.EncodeToString(preimage),
+		preimage.String(),
 	)
 	header.Set(HeaderAuthorization, value)
 	return nil
