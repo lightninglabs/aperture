@@ -141,7 +141,7 @@ func TestLsatAuthenticator(t *testing.T) {
 	}
 
 	for _, testCase := range headerTests {
-		result := a.Accept(testCase.header)
+		result := a.Accept(testCase.header, "test")
 		if result != testCase.result {
 			t.Fatalf("test case %s failed. got %v expected %v",
 				testCase.id, result, testCase.result)

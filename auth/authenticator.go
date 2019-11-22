@@ -63,7 +63,7 @@ func NewLsatAuthenticator(challenger Challenger) (*LsatAuthenticator, error) {
 // to a given backend service.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LsatAuthenticator) Accept(header *http.Header) bool {
+func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool {
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
@@ -88,8 +88,8 @@ func (l *LsatAuthenticator) Accept(header *http.Header) bool {
 // complete.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request) (
-	http.Header, error) {
+func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request,
+	serviceName string) (http.Header, error) {
 
 	paymentRequest, paymentHash, err := l.challenger.NewChallenge()
 	if err != nil {

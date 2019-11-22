@@ -11,11 +11,11 @@ import (
 type Authenticator interface {
 	// Accept returns whether or not the header successfully authenticates
 	// the user to a given backend service.
-	Accept(*http.Header) bool
+	Accept(*http.Header, string) bool
 
 	// FreshChallengeHeader returns a header containing a challenge for the
 	// user to complete.
-	FreshChallengeHeader(r *http.Request) (http.Header, error)
+	FreshChallengeHeader(*http.Request, string) (http.Header, error)
 }
 
 // Challenger is an interface for generating new payment challenges.
