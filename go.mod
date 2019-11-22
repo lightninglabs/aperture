@@ -29,7 +29,7 @@ require (
 	golang.org/x/sys v0.0.0-20191112214154-59a1497f0cea // indirect
 	google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a // indirect
 	google.golang.org/grpc v1.25.1
-	gopkg.in/macaroon-bakery.v2 v2.1.0
+	gopkg.in/macaroon-bakery.v2 v2.1.0 // indirect
 	gopkg.in/macaroon.v2 v2.1.0
 	gopkg.in/yaml.v2 v2.2.2
 	sigs.k8s.io/yaml v1.1.0 // indirect

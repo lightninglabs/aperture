@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 
-	"github.com/lightninglabs/kirin/macaroons"
 	"github.com/lightninglabs/kirin/mint"
 	"github.com/lightninglabs/loop/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -187,10 +187,10 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
 			"unmarshal macaroon: %v", err)
 	}
-	preimageHex, err := macaroons.ExtractCaveat(mac, macaroons.CondPreimage)
-	if err != nil {
-		return nil, lntypes.Preimage{}, fmt.Errorf("unable to extract "+
-			"preimage from macaroon: %v", err)
+	preimageHex, ok := lsat.HasCaveat(mac, lsat.PreimageKey)
+	if !ok {
+		return nil, lntypes.Preimage{}, errors.New("preimage caveat " +
+			"not found")
 	}
 	preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 	if err != nil {

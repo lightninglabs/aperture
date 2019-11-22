@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/lightninglabs/kirin/auth"
-	"github.com/lightninglabs/kirin/macaroons"
+	"github.com/lightninglabs/loop/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
@@ -27,9 +27,8 @@ func createDummyMacHex(preimage string) string {
 	if err != nil {
 		panic(err)
 	}
-	err = dummyMac.AddFirstPartyCaveat(
-		[]byte(macaroons.CondPreimage + " " + preimage),
-	)
+	preimageCaveat := lsat.Caveat{Condition: lsat.PreimageKey, Value: preimage}
+	err = lsat.AddFirstPartyCaveats(dummyMac, preimageCaveat)
 	if err != nil {
 		panic(err)
 	}
