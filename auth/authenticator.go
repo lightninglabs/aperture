@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -8,9 +9,9 @@ import (
 	"regexp"
 
 	"github.com/lightninglabs/kirin/macaroons"
+	"github.com/lightninglabs/kirin/mint"
+	"github.com/lightninglabs/loop/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
-	"gopkg.in/macaroon-bakery.v2/bakery"
-	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
 	"gopkg.in/macaroon.v2"
 )
 
@@ -37,8 +38,7 @@ var (
 // LsatAuthenticator is an authenticator that uses the LSAT protocol to
 // authenticate requests.
 type LsatAuthenticator struct {
-	challenger Challenger
-	macService *macaroons.Service
+	minter Minter
 }
 
 // A compile time flag to ensure the LsatAuthenticator satisfies the
@@ -47,16 +47,8 @@ var _ Authenticator = (*LsatAuthenticator)(nil)
 
 // NewLsatAuthenticator creates a new authenticator that authenticates requests
 // based on LSAT tokens.
-func NewLsatAuthenticator(challenger Challenger) (*LsatAuthenticator, error) {
-	macService, err := macaroons.NewService()
-	if err != nil {
-		return nil, err
-	}
-
-	return &LsatAuthenticator{
-		challenger: challenger,
-		macService: macService,
-	}, nil
+func NewLsatAuthenticator(minter Minter) *LsatAuthenticator {
+	return &LsatAuthenticator{minter: minter}
 }
 
 // Accept returns whether or not the header successfully authenticates the user
@@ -67,20 +59,23 @@ func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
-	mac, _, err := FromHeader(header)
+	mac, preimage, err := FromHeader(header)
 	if err != nil {
 		log.Debugf("Deny: %v", err)
 		return false
 	}
 
-	// TODO(guggero): check preimage against payment hash caveat in the
-	//  macaroon.
-
-	err = l.macService.ValidateMacaroon(mac, []bakery.Op{})
+	verificationParams := &mint.VerificationParams{
+		Macaroon:      mac,
+		Preimage:      preimage,
+		TargetService: serviceName,
+	}
+	err = l.minter.VerifyLSAT(context.Background(), verificationParams)
 	if err != nil {
-		log.Debugf("Deny: Macaroon validation failed: %v", err)
+		log.Debugf("Deny: LSAT validation failed: %v", err)
 		return false
 	}
+
 	return true
 }
 
@@ -91,31 +86,21 @@ func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool
 func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request,
 	serviceName string) (http.Header, error) {
 
-	paymentRequest, paymentHash, err := l.challenger.NewChallenge()
-	if err != nil {
-		log.Errorf("Error creating new challenge: %v", err)
-		return nil, err
-	}
-
-	// Create a new macaroon and add the payment hash as a caveat.
-	// The bakery requires at least one operation so we add an "allow all"
-	// permission set for now.
-	mac, err := l.macService.NewMacaroon(
-		[]bakery.Op{{Entity: opWildcard, Action: opWildcard}}, []string{
-			checkers.Condition(
-				macaroons.CondRHash, paymentHash.String(),
-			),
-		},
+	service := lsat.Service{Name: serviceName, Tier: lsat.BaseTier}
+	mac, paymentRequest, err := l.minter.MintLSAT(
+		context.Background(), service,
 	)
 	if err != nil {
-		log.Errorf("Error creating macaroon: %v", err)
+		log.Errorf("Error minting LSAT: %v", err)
 		return nil, err
 	}
+	macBytes, err := mac.MarshalBinary()
+	if err != nil {
+		log.Errorf("Error serializing LSAT: %v", err)
+	}
 
-	str := "LSAT macaroon='%s' invoice='%s'"
-	str = fmt.Sprintf(
-		str, base64.StdEncoding.EncodeToString(mac), paymentRequest,
-	)
+	str := fmt.Sprintf("LSAT macaroon='%s' invoice='%s'",
+		base64.StdEncoding.EncodeToString(macBytes), paymentRequest)
 	header := r.Header
 	header.Set("WWW-Authenticate", str)
 

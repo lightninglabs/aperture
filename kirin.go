@@ -10,6 +10,7 @@ import (
 
 	"github.com/coreos/etcd/clientv3"
 	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/kirin/mint"
 	"github.com/lightninglabs/kirin/proxy"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
@@ -69,7 +70,10 @@ func start() error {
 			Value: 1,
 		}, nil
 	}
-	servicesProxy, err := createProxy(cfg, genInvoiceReq)
+	servicesProxy, err := createProxy(cfg, genInvoiceReq, etcdClient)
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: http.HandlerFunc(servicesProxy.ServeHTTP),
@@ -150,19 +154,19 @@ func setupLogging(cfg *config) error {
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator) (
-	*proxy.Proxy, error) {
+func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator,
+	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
 
-	challenger, err := NewLndChallenger(
-		cfg.Authenticator, genInvoiceReq,
-	)
+	challenger, err := NewLndChallenger(cfg.Authenticator, genInvoiceReq)
 	if err != nil {
 		return nil, err
 	}
-	authenticator, err := auth.NewLsatAuthenticator(challenger)
-	if err != nil {
-		return nil, err
-	}
+	minter := mint.New(&mint.Config{
+		Challenger:     challenger,
+		Secrets:        newSecretStore(etcdClient),
+		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+	})
+	authenticator := auth.NewLsatAuthenticator(minter)
 	return proxy.New(authenticator, cfg.Services, cfg.StaticRoot)
 }
 

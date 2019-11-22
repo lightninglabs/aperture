@@ -135,11 +135,7 @@ func TestLsatAuthenticator(t *testing.T) {
 		}
 	)
 
-	a, err := auth.NewLsatAuthenticator(&mockChallenger{})
-	if err != nil {
-		t.Fatalf("Could not create authenticator: %v", err)
-	}
-
+	a := auth.NewLsatAuthenticator(&mockMint{})
 	for _, testCase := range headerTests {
 		result := a.Accept(testCase.header, "test")
 		if result != testCase.result {

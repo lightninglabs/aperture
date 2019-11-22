@@ -2,6 +2,12 @@ listenaddr: "localhost:8081"
 staticroot: "./static"
 debuglevel: "debug"
 
+authenticator:
+  lndhost: "localhost:10009"
+  tlspath: "/path/to/lnd/tls.cert"
+  macdir: "/path/to/lnd/data/chain/bitcoin/simnet"
+  network: "simnet"
+
 etcd:
   host: "localhost:2379"
   user: "user"
