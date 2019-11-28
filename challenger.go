@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/kirin/mint"
 	"github.com/lightninglabs/loop/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -22,13 +22,13 @@ type LndChallenger struct {
 }
 
 // A compile time flag to ensure the LndChallenger satisfies the
-// Challenger interface.
-var _ auth.Challenger = (*LndChallenger)(nil)
+// mint.Challenger interface.
+var _ mint.Challenger = (*LndChallenger)(nil)
 
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
 func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
-	auth.Challenger, error) {
+	*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")

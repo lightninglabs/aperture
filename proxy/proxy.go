@@ -93,15 +93,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// accordingly.
 	switch {
 	case target.Auth.IsOn():
-		if !p.authenticator.Accept(&r.Header) {
+		if !p.authenticator.Accept(&r.Header, target.Name) {
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r)
+			p.handlePaymentRequired(w, r, target.Name)
 			return
 		}
 	case target.Auth.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		if !p.authenticator.Accept(&r.Header) {
+		if !p.authenticator.Accept(&r.Header, target.Name) {
 			ok, err := target.freebieDb.CanPass(r, remoteIp)
 			if err != nil {
 				prefixLog.Errorf("Error querying freebie db: "+
@@ -113,7 +113,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !ok {
-				p.handlePaymentRequired(w, r)
+				p.handlePaymentRequired(w, r, target.Name)
 				return
 			}
 			_, err = target.freebieDb.TallyFreebie(r, remoteIp)
@@ -278,10 +278,12 @@ func addCorsHeaders(header http.Header) {
 
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
-func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request) {
+func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
+	serviceName string) {
+
 	addCorsHeaders(r.Header)
 
-	header, err := p.authenticator.FreshChallengeHeader(r)
+	header, err := p.authenticator.FreshChallengeHeader(r, serviceName)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)
 		sendDirectResponse(

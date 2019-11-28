@@ -6,13 +6,26 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/coreos/etcd/clientv3"
 	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/kirin/mint"
 	"github.com/lightninglabs/kirin/proxy"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"gopkg.in/yaml.v2"
+)
+
+const (
+	// topLevelKey is the top level key for an etcd cluster where we'll
+	// store all LSAT proxy related data.
+	topLevelKey = "lsat/proxy"
+
+	// etcdKeyDelimeter is the delimeter we'll use for all etcd keys to
+	// represent a path-like structure.
+	etcdKeyDelimeter = "/"
 )
 
 // Main is the true entrypoint of Kirin.
@@ -39,6 +52,17 @@ func start() error {
 		return fmt.Errorf("unable to set up logging: %v", err)
 	}
 
+	// Initialize our etcd client.
+	etcdClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{cfg.Etcd.Host},
+		DialTimeout: 5 * time.Second,
+		Username:    cfg.Etcd.User,
+		Password:    cfg.Etcd.Password,
+	})
+	if err != nil {
+		return fmt.Errorf("unable to connect to etcd: %v", err)
+	}
+
 	// Create the proxy and connect it to lnd.
 	genInvoiceReq := func() (*lnrpc.Invoice, error) {
 		return &lnrpc.Invoice{
@@ -46,7 +70,10 @@ func start() error {
 			Value: 1,
 		}, nil
 	}
-	servicesProxy, err := createProxy(cfg, genInvoiceReq)
+	servicesProxy, err := createProxy(cfg, genInvoiceReq, etcdClient)
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: http.HandlerFunc(servicesProxy.ServeHTTP),
@@ -70,7 +97,7 @@ func start() error {
 	// The ListenAndServeTLS below will block until shut down or an error
 	// occurs. So we can just defer a cleanup function here that will close
 	// everything on shutdown.
-	defer cleanup(server)
+	defer cleanup(etcdClient, server)
 
 	// Finally start the server.
 	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
@@ -127,24 +154,27 @@ func setupLogging(cfg *config) error {
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator) (
-	*proxy.Proxy, error) {
+func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator,
+	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
 
-	challenger, err := NewLndChallenger(
-		cfg.Authenticator, genInvoiceReq,
-	)
+	challenger, err := NewLndChallenger(cfg.Authenticator, genInvoiceReq)
 	if err != nil {
 		return nil, err
 	}
-	authenticator, err := auth.NewLsatAuthenticator(challenger)
-	if err != nil {
-		return nil, err
-	}
+	minter := mint.New(&mint.Config{
+		Challenger:     challenger,
+		Secrets:        newSecretStore(etcdClient),
+		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+	})
+	authenticator := auth.NewLsatAuthenticator(minter)
 	return proxy.New(authenticator, cfg.Services, cfg.StaticRoot)
 }
 
 // cleanup closes the given server and shuts down the log rotator.
-func cleanup(server *http.Server) {
+func cleanup(etcdClient *clientv3.Client, server *http.Server) {
+	if err := etcdClient.Close(); err != nil {
+		log.Errorf("Error terminating etcd client: %v", err)
+	}
 	err := server.Close()
 	if err != nil {
 		log.Errorf("Error closing server: %v", err)

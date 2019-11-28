@@ -16,6 +16,12 @@ var (
 	defaultMaxLogFileSize  = 10
 )
 
+type etcdConfig struct {
+	Host     string `long:"host" description:"host:port of an active etcd instance"`
+	User     string `long:"user" description:"user authorized to access the etcd host"`
+	Password string `long:"password" description:"password of the etcd user"`
+}
+
 type authConfig struct {
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
@@ -35,6 +41,8 @@ type config struct {
 	// StaticRoot is the folder where the static content served by the proxy
 	// is located.
 	StaticRoot string `long:"staticroot" description:"The folder where the static content is located."`
+
+	Etcd *etcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
 
 	Authenticator *authConfig `long:"authenticator" description:"Configuration for the authenticator."`
 
