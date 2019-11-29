@@ -8,15 +8,8 @@ import (
 
 	"github.com/lightninglabs/kirin/auth"
 	"github.com/lightninglabs/loop/lsat"
-	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
-
-type mockChallenger struct{}
-
-func (c *mockChallenger) NewChallenge() (string, lntypes.Hash, error) {
-	return "lnt1xxxx", lntypes.ZeroHash, nil
-}
 
 // createDummyMacHex creates a valid macaroon with dummy content for our tests.
 func createDummyMacHex(preimage string) string {

@@ -113,7 +113,7 @@ func (m *Mint) MintLSAT(ctx context.Context,
 	if err != nil {
 		return nil, "", err
 	}
-	macaroon, err := macaroon.New(
+	mac, err := macaroon.New(
 		secret[:], id, "lsat", macaroon.LatestVersion,
 	)
 	if err != nil {
@@ -134,13 +134,13 @@ func (m *Mint) MintLSAT(ctx context.Context,
 			return nil, "", err
 		}
 	}
-	if err := lsat.AddFirstPartyCaveats(macaroon, caveats...); err != nil {
+	if err := lsat.AddFirstPartyCaveats(mac, caveats...); err != nil {
 		// Attempt to revoke the secret to save space.
 		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
 		return nil, "", err
 	}
 
-	return macaroon, paymentRequest, nil
+	return mac, paymentRequest, nil
 }
 
 // createUniqueIdentifier creates a new LSAT identifier bound to a payment hash
@@ -240,7 +240,7 @@ func (m *Mint) VerifyLSAT(ctx context.Context, params *VerificationParams) error
 
 	// With the LSAT verified, we'll now inspect its caveats to ensure the
 	// target service is authorized.
-	var caveats []lsat.Caveat
+	caveats := make([]lsat.Caveat, 0, len(rawCaveats))
 	for _, rawCaveat := range rawCaveats {
 		// LSATs can contain third-party caveats that we're not aware
 		// of, so just skip those.

@@ -46,13 +46,13 @@ func NewRemoteIPPrefixLog(logger btclog.Logger, remoteAddr string) (net.IP,
 	if err != nil {
 		remoteHost = "0.0.0.0"
 	}
-	remoteIp := net.ParseIP(remoteHost)
-	if remoteIp == nil {
-		remoteIp = net.IPv4zero
+	remoteIP := net.ParseIP(remoteHost)
+	if remoteIP == nil {
+		remoteIP = net.IPv4zero
 	}
-	return remoteIp, &PrefixLog{
+	return remoteIP, &PrefixLog{
 		logger: logger,
-		prefix: remoteIp.String(),
+		prefix: remoteIP.String(),
 	}
 }
 

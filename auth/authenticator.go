@@ -203,7 +203,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 // SetHeader sets the provided authentication elements as the default/standard
 // HTTP header for the LSAT protocol.
 func SetHeader(header *http.Header, mac *macaroon.Macaroon,
-	preimage lntypes.Preimage) error {
+	preimage fmt.Stringer) error {
 
 	macBytes, err := mac.MarshalBinary()
 	if err != nil {

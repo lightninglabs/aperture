@@ -26,7 +26,7 @@ type authConfig struct {
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
-	TlsPath string `long:"tlspath"`
+	TLSPath string `long:"tlspath"`
 
 	MacDir string `long:"macdir"`
 

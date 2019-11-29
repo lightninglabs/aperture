@@ -33,3 +33,6 @@ linters:
     # We have long functions, especially in tests. Moving or renaming those
     # would trigger funlen problems that we may not want to solve at that time.
     - funlen
+
+    # Gosec is outdated and reports false positives.
+    - gosec
