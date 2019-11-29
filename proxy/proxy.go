@@ -91,14 +91,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Determine auth level required to access service and dispatch request
 	// accordingly.
+	authLevel := target.AuthRequired(r)
 	switch {
-	case target.Auth.IsOn():
+	case authLevel.IsOn():
 		if !p.authenticator.Accept(&r.Header, target.Name) {
 			prefixLog.Infof("Authentication failed. Sending 402.")
 			p.handlePaymentRequired(w, r, target.Name)
 			return
 		}
-	case target.Auth.IsFreebie():
+	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
 		if !p.authenticator.Accept(&r.Header, target.Name) {
@@ -127,7 +128,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	case target.Auth.IsOff():
+	case authLevel.IsOff():
 	}
 
 	// If we got here, it means everything is OK to pass the request to the
