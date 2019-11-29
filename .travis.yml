@@ -13,4 +13,4 @@ env:
     - GOCACHE=$HOME/.go-build
 
 script:
-  - go test -v -race ./...
+  - make travis-race
