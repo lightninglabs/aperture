@@ -17,8 +17,8 @@ require (
 	github.com/gorilla/websocket v1.4.1 // indirect
 	github.com/jonboulle/clockwork v0.1.0 // indirect
 	github.com/json-iterator/go v1.1.8 // indirect
-	github.com/lightninglabs/loop v0.3.0-alpha.0.20191126005026-8b8b87844035
-	github.com/lightningnetwork/lnd v0.8.0-beta-rc3.0.20191115230031-4d7a151b4763
+	github.com/lightninglabs/loop v0.3.0-alpha.0.20191202194040-bb4dbc6207f6
+	github.com/lightningnetwork/lnd v0.8.0-beta-rc3.0.20191127212142-d59aba35a0ad
 	github.com/lightningnetwork/lnd/cert v1.0.0
 	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/soheilhy/cmux v0.1.4 // indirect
