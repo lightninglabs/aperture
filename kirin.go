@@ -2,6 +2,7 @@ package kirin
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -171,7 +172,7 @@ func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator,
 }
 
 // cleanup closes the given server and shuts down the log rotator.
-func cleanup(etcdClient *clientv3.Client, server *http.Server) {
+func cleanup(etcdClient io.Closer, server io.Closer) {
 	if err := etcdClient.Close(); err != nil {
 		log.Errorf("Error terminating etcd client: %v", err)
 	}

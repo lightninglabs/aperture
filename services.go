@@ -48,7 +48,7 @@ func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimit
 func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 	services ...lsat.Service) ([]lsat.Caveat, error) {
 
-	var res []lsat.Caveat
+	res := make([]lsat.Caveat, 0, len(services))
 	for _, service := range services {
 		capabilities, ok := l.capabilities[service]
 		if !ok {
@@ -65,7 +65,7 @@ func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
 	services ...lsat.Service) ([]lsat.Caveat, error) {
 
-	var res []lsat.Caveat
+	res := make([]lsat.Caveat, 0, len(services))
 	for _, service := range services {
 		constraints, ok := l.constraints[service]
 		if !ok {

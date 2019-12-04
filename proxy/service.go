@@ -102,7 +102,7 @@ func prepareServices(services []*Service) error {
 	for _, service := range services {
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
-			service.freebieDb = freebie.NewMemIpMaskStore(
+			service.freebieDb = freebie.NewMemIPMaskStore(
 				service.Auth.FreebieCount(),
 			)
 		}
@@ -149,8 +149,10 @@ func prepareServices(services []*Service) error {
 		// not only when the request happens.
 		for _, entry := range service.AuthWhitelistPaths {
 			_, err := regexp.Compile(entry)
-			return fmt.Errorf("error validating auth whitelist: %v",
-				err)
+			if err != nil {
+				return fmt.Errorf("error validating auth "+
+					"whitelist: %v", err)
+			}
 		}
 	}
 	return nil

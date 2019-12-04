@@ -62,7 +62,7 @@ func New(auth auth.Authenticator, services []*Service, staticRoot string) (
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse and log the remote IP address. We also need the parsed IP
 	// address for the freebie count.
-	remoteIp, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
+	remoteIP, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
 	logRequest := func() {
 		prefixLog.Infof(formatPattern, r.Method, r.RequestURI, r.Proto,
 			r.Referer(), r.UserAgent())
@@ -99,11 +99,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.handlePaymentRequired(w, r, target.Name)
 			return
 		}
+
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
 		if !p.authenticator.Accept(&r.Header, target.Name) {
-			ok, err := target.freebieDb.CanPass(r, remoteIp)
+			ok, err := target.freebieDb.CanPass(r, remoteIP)
 			if err != nil {
 				prefixLog.Errorf("Error querying freebie db: "+
 					"%v", err)
@@ -117,7 +118,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				p.handlePaymentRequired(w, r, target.Name)
 				return
 			}
-			_, err = target.freebieDb.TallyFreebie(r, remoteIp)
+			_, err = target.freebieDb.TallyFreebie(r, remoteIP)
 			if err != nil {
 				prefixLog.Errorf("Error updating freebie db: "+
 					"%v", err)
@@ -128,7 +129,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	case authLevel.IsOff():
 	}
 
 	// If we got here, it means everything is OK to pass the request to the

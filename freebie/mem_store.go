@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	defaultIpMask = net.IPv4Mask(0xff, 0xff, 0xff, 0x00)
+	defaultIPMask = net.IPv4Mask(0xff, 0xff, 0xff, 0x00)
 )
 
 type Count uint16
@@ -17,7 +17,7 @@ type memStore struct {
 }
 
 func (m *memStore) getKey(ip net.IP) string {
-	return ip.Mask(defaultIpMask).String()
+	return ip.Mask(defaultIPMask).String()
 }
 
 func (m *memStore) currentCount(ip net.IP) Count {
@@ -38,11 +38,11 @@ func (m *memStore) TallyFreebie(r *http.Request, ip net.IP) (bool, error) {
 	return true, nil
 }
 
-// NewMemIpMaskStore creates a new in-memory freebie store that masks the last
+// NewMemIPMaskStore creates a new in-memory freebie store that masks the last
 // byte of an IP address to keep track of free requests. The last byte of the
 // address is discarded for the mapping to reduce risk of abuse by users that
 // have a whole range of IPs at their disposal.
-func NewMemIpMaskStore(numFreebies Count) DB {
+func NewMemIPMaskStore(numFreebies Count) DB {
 	return &memStore{
 		numFreebies:    numFreebies,
 		freebieCounter: make(map[string]Count),

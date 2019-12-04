@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -39,7 +40,7 @@ type helloServer struct{}
 
 // SayHello returns a simple string that also contains a string from the
 // request.
-func (s *helloServer) SayHello(ctx context.Context,
+func (s *helloServer) SayHello(_ context.Context,
 	req *proxytest.HelloRequest) (*proxytest.HelloReply, error) {
 
 	return &proxytest.HelloReply{
@@ -80,13 +81,13 @@ func TestProxyHTTP(t *testing.T) {
 		Addr:    testProxyAddr,
 		Handler: http.HandlerFunc(p.ServeHTTP),
 	}
-	go server.ListenAndServe()
-	defer server.Close()
+	go func() { _ = server.ListenAndServe() }()
+	defer closeOrFail(t, server)
 
 	// Start the target backend service.
 	backendService := &http.Server{Addr: testTargetServiceAddress}
-	go startBackendHTTP(backendService)
-	defer backendService.Close()
+	go func() { _ = startBackendHTTP(backendService) }()
+	defer closeOrFail(t, backendService)
 
 	// Wait for servers to start.
 	time.Sleep(100 * time.Millisecond)
@@ -109,6 +110,7 @@ func TestProxyHTTP(t *testing.T) {
 		t.Fatalf("expected partial LSAT in response header, got: %v",
 			authHeader)
 	}
+	_ = resp.Body.Close()
 
 	// Make sure that if the Auth header is set, the client's request is
 	// proxied to the backend service.
@@ -128,7 +130,7 @@ func TestProxyHTTP(t *testing.T) {
 	}
 
 	// Ensure that we got the response body we expect.
-	defer resp.Body.Close()
+	defer closeOrFail(t, resp.Body)
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
@@ -179,8 +181,8 @@ func TestProxyGRPC(t *testing.T) {
 			InsecureSkipVerify: true,
 		},
 	}
-	go server.ListenAndServeTLS(certFile, keyFile)
-	defer server.Close()
+	go func() { _ = server.ListenAndServeTLS(certFile, keyFile) }()
+	defer closeOrFail(t, server)
 
 	// Start the target backend service also on TLS.
 	tlsConf := cert.TLSConfFromCert(certData)
@@ -188,7 +190,7 @@ func TestProxyGRPC(t *testing.T) {
 		grpc.Creds(credentials.NewTLS(tlsConf)),
 	}
 	backendService := grpc.NewServer(serverOpts...)
-	go startBackendGRPC(backendService)
+	go func() { _ = startBackendGRPC(backendService) }()
 	defer backendService.Stop()
 
 	// Dial to the proxy now, without any authentication.
@@ -202,7 +204,7 @@ func TestProxyGRPC(t *testing.T) {
 	// Make request without authentication. We expect an error that can
 	// be parsed by gRPC.
 	req := &proxytest.HelloRequest{Name: "foo"}
-	res, err := client.SayHello(
+	_, err = client.SayHello(
 		context.Background(), req, grpc.WaitForReady(true),
 	)
 	if err == nil {
@@ -225,6 +227,9 @@ func TestProxyGRPC(t *testing.T) {
 	dummyMac, err := macaroon.New(
 		[]byte("key"), []byte("id"), "loc", macaroon.LatestVersion,
 	)
+	if err != nil {
+		t.Fatalf("unable to create dummy macaroon: %v", err)
+	}
 	opts = []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
 		grpc.WithPerRPCCredentials(macaroons.NewMacaroonCredential(
@@ -239,7 +244,7 @@ func TestProxyGRPC(t *testing.T) {
 
 	// Make the request. This time no error should be returned.
 	req = &proxytest.HelloRequest{Name: "foo"}
-	res, err = client.SayHello(context.Background(), req)
+	res, err := client.SayHello(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unable to call service: %v", err)
 	}
@@ -274,13 +279,13 @@ func TestWhitelistHTTP(t *testing.T) {
 		Addr:    testProxyAddr,
 		Handler: http.HandlerFunc(p.ServeHTTP),
 	}
-	go server.ListenAndServe()
-	defer server.Close()
+	go func() { _ = server.ListenAndServe() }()
+	defer closeOrFail(t, server)
 
 	// Start the target backend service.
 	backendService := &http.Server{Addr: testTargetServiceAddress}
-	go startBackendHTTP(backendService)
-	defer backendService.Close()
+	go func() { _ = startBackendHTTP(backendService) }()
+	defer closeOrFail(t, backendService)
 
 	// Wait for servers to start.
 	time.Sleep(100 * time.Millisecond)
@@ -301,6 +306,7 @@ func TestWhitelistHTTP(t *testing.T) {
 		t.Fatalf("expected partial LSAT in response header, got: %v",
 			authHeader)
 	}
+	_ = resp.Body.Close()
 
 	// Make sure that if we query an URL that is on the whitelist, we don't
 	// get the 402 response.
@@ -318,7 +324,7 @@ func TestWhitelistHTTP(t *testing.T) {
 	}
 
 	// Ensure that we got the response body we expect.
-	defer resp.Body.Close()
+	defer closeOrFail(t, resp.Body)
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
@@ -374,8 +380,8 @@ func TestWhitelistGRPC(t *testing.T) {
 			InsecureSkipVerify: true,
 		},
 	}
-	go server.ListenAndServeTLS(certFile, keyFile)
-	defer server.Close()
+	go func() { _ = server.ListenAndServeTLS(certFile, keyFile) }()
+	defer closeOrFail(t, server)
 
 	// Start the target backend service also on TLS.
 	tlsConf := cert.TLSConfFromCert(certData)
@@ -383,7 +389,7 @@ func TestWhitelistGRPC(t *testing.T) {
 		grpc.Creds(credentials.NewTLS(tlsConf)),
 	}
 	backendService := grpc.NewServer(serverOpts...)
-	go startBackendGRPC(backendService)
+	go func() { _ = startBackendGRPC(backendService) }()
 	defer backendService.Stop()
 
 	// Dial to the proxy now, without any authentication.
@@ -396,7 +402,7 @@ func TestWhitelistGRPC(t *testing.T) {
 	// Test making a request to the backend service to an URL where
 	// authentication is enabled.
 	req := &proxytest.HelloRequest{Name: "foo"}
-	res, err := client.SayHello(
+	_, err = client.SayHello(
 		context.Background(), req, grpc.WaitForReady(true),
 	)
 	if err == nil {
@@ -425,7 +431,7 @@ func TestWhitelistGRPC(t *testing.T) {
 
 	// Make the request. This time no error should be returned.
 	req = &proxytest.HelloRequest{Name: "foo"}
-	res, err = client.SayHelloNoAuth(context.Background(), req)
+	res, err := client.SayHelloNoAuth(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unable to call service: %v", err)
 	}
@@ -491,4 +497,11 @@ func genCertPair(certFile, keyFile string) (*x509.CertPool,
 			"%v", err)
 	}
 	return cp, creds, crt, nil
+}
+
+func closeOrFail(t *testing.T, c io.Closer) {
+	err := c.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

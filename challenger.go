@@ -35,7 +35,7 @@ func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
 	}
 
 	client, err := lndclient.NewBasicClient(
-		cfg.LndHost, cfg.TlsPath, cfg.MacDir, cfg.Network,
+		cfg.LndHost, cfg.TLSPath, cfg.MacDir, cfg.Network,
 	)
 	if err != nil {
 		return nil, err
