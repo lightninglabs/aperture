@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
+	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/lightninglabs/kirin/auth"
@@ -67,7 +69,31 @@ type Service struct {
 	// correspond to the caveat's condition.
 	Constraints map[string]string `long:"constraints" description:"The service constraints to enforce at the base tier"`
 
+	// AuthWhitelistPaths is an optional list of regular expressions that
+	// are matched against the path of the URL of a request. If the request
+	// URL matches any of those regular expressions, the call is treated as
+	// if Auth was set to "off". This allows certain RPC methods to not
+	// require an LSAT token. E.g. the path for a gRPC call looks like this:
+	// /package_name.ServiceName/MethodName
+	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
+
 	freebieDb freebie.DB
+}
+
+// AuthRequired determines the auth level required for a given request.
+func (s *Service) AuthRequired(r *http.Request) auth.Level {
+	// Does the request match any whitelist entry?
+	for _, pathRegexp := range s.AuthWhitelistPaths {
+		pathRegexp := regexp.MustCompile(pathRegexp)
+		if pathRegexp.MatchString(r.URL.Path) {
+			log.Tracef("Req path [%s] matches whitelist entry "+
+				"[%s].", r.URL.Path, pathRegexp)
+			return auth.LevelOff
+		}
+	}
+
+	// By default we always return the service level auth setting.
+	return s.Auth
 }
 
 // prepareServices prepares the backend service configurations to be used by the
@@ -116,6 +142,15 @@ func prepareServices(services []*Service) error {
 				return fmt.Errorf("unsupported file prefix "+
 					"format %s", value)
 			}
+		}
+
+		// Make sure all whitelist regular expression entries actually
+		// compile so we run into an eventual panic during startup and
+		// not only when the request happens.
+		for _, entry := range service.AuthWhitelistPaths {
+			_, err := regexp.Compile(entry)
+			return fmt.Errorf("error validating auth whitelist: %v",
+				err)
 		}
 	}
 	return nil

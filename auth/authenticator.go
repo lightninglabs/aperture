@@ -32,7 +32,6 @@ const (
 var (
 	authRegex  = regexp.MustCompile("LSAT (.*?):([a-f0-9]{64})")
 	authFormat = "LSAT %s:%s"
-	opWildcard = "*"
 )
 
 // LsatAuthenticator is an authenticator that uses the LSAT protocol to

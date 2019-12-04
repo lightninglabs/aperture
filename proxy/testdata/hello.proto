@@ -4,6 +4,7 @@ package proxy_test;
 
 service Greeter {
     rpc SayHello (HelloRequest) returns (HelloReply) {}
+    rpc SayHelloNoAuth (HelloRequest) returns (HelloReply) {}
 }
 
 message HelloRequest {

@@ -8,6 +8,11 @@ import (
 	"github.com/lightninglabs/kirin/freebie"
 )
 
+const (
+	// LevelOff is the default level where no authentication is required.
+	LevelOff Level = "off"
+)
+
 type Level string
 
 func (l Level) lower() string {
