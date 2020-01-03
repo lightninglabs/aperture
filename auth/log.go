@@ -5,6 +5,8 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 )
 
+const Subsystem = "AUTH"
+
 // log is a logger that is initialized with no output filters.  This
 // means the package will not perform any logging by default until the caller
 // requests it.
@@ -12,7 +14,7 @@ var log btclog.Logger
 
 // The default amount of logging is none.
 func init() {
-	UseLogger(build.NewSubLogger("AUTH", nil))
+	UseLogger(build.NewSubLogger(Subsystem, nil))
 }
 
 // DisableLog disables all library log output.  Logging output is disabled
