@@ -15,7 +15,7 @@ var (
 
 func init() {
 	setSubLogger("MAIN", log, nil)
-	addSubLogger("AUTH", auth.UseLogger)
+	addSubLogger(auth.Subsystem, auth.UseLogger)
 	addSubLogger("PRXY", proxy.UseLogger)
 }
 
