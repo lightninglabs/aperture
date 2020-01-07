@@ -35,6 +35,13 @@ func (a MockAuthenticator) FreshChallengeHeader(r *http.Request,
 	_ string) (http.Header, error) {
 
 	header := r.Header
-	header.Set("WWW-Authenticate", "LSAT macaroon='AGIAJEemVQUTEyNCR0exk7ek90Cg==' invoice='lnbc1500n1pw5kjhmpp5fu6xhthlt2vucmzkx6c7wtlh2r625r30cyjsfqhu8rsx4xpz5lwqdpa2fjkzep6yptksct5yp5hxgrrv96hx6twvusycn3qv9jx7ur5d9hkugr5dusx6cqzpgxqr23s79ruapxc4j5uskt4htly2salw4drq979d7rcela9wz02elhypmdzmzlnxuknpgfyfm86pntt8vvkvffma5qc9n50h4mvqhngadqy3ngqjcym5a'")
+	header.Set(
+		"WWW-Authenticate", "LSAT macaroon=\"AGIAJEemVQUTEyNCR0exk7ek9"+
+			"0Cg==\", invoice=\"lnbc1500n1pw5kjhmpp5fu6xhthlt2vucm"+
+			"zkx6c7wtlh2r625r30cyjsfqhu8rsx4xpz5lwqdpa2fjkzep6yptk"+
+			"sct5yp5hxgrrv96hx6twvusycn3qv9jx7ur5d9hkugr5dusx6cqzp"+
+			"gxqr23s79ruapxc4j5uskt4htly2salw4drq979d7rcela9wz02el"+
+			"hypmdzmzlnxuknpgfyfm86pntt8vvkvffma5qc9n50h4mvqhngadq"+
+			"y3ngqjcym5a\"")
 	return header, nil
 }
