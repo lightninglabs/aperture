@@ -39,7 +39,7 @@ First, let's request the BOS scores until we hit the freebie limit:
 At some point, we will get an answer 402 with an authorization header:
 
 ```
-www-authenticate: LSAT macaroon='...' invoice='lntb10n1...'
+www-authenticate: LSAT macaroon="...", invoice="lntb10n1..."
 ```
 
 We will need both these values, the `macaroon` and the `invoice` so copy them

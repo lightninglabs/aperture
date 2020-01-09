@@ -53,7 +53,7 @@
   let lastInvoice = null;
 
   function parseInvoice(invoice) {
-    const rex = /LSAT macaroon='(.*?)' invoice='(.*?)'/i;
+    const rex = /LSAT macaroon="(.*?)", invoice="(.*?)"/i;
     parts = invoice.match(rex);
     lastMacaroon = parts[1];
     lastInvoice = parts[2];
