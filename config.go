@@ -36,7 +36,15 @@ type authConfig struct {
 type config struct {
 	// ListenAddr is the listening address that we should use to allow Kirin
 	// to listen for requests.
-	ListenAddr string `long:"listenaddr" description:"The interface we should listen on for client requests"`
+	ListenAddr string `long:"listenaddr" description:"The interface we should listen on for client requests."`
+
+	// ServerName can be set to a fully qualifying domain name that should
+	// be used while creating a certificate through Let's Encrypt.
+	ServerName string `long:"servername" description:"Server name (FQDN) to use for the TLS certificate."`
+
+	// AutoCert can be set to true if kirin should try to create a valid
+	// certificate through Let's Encrypt using ServerName.
+	AutoCert bool `long:"autocert" description:"Automatically create a Let's Encrypt cert using ServerName."`
 
 	// StaticRoot is the folder where the static content served by the proxy
 	// is located.
