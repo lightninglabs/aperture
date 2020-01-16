@@ -1,6 +1,8 @@
 listenaddr: "localhost:8081"
 staticroot: "./static"
 debuglevel: "debug"
+servername: kirin.example.com
+autocert: false
 
 authenticator:
   lndhost: "localhost:10009"
