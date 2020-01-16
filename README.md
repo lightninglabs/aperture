@@ -3,9 +3,29 @@
 Kirin is a HTTP reverse proxy that supports proxying requests for gRPC (HTTP/2)
 and REST (HTTP/1 and HTTP/2) backends.
 
-## Installation
+## Installation / Setup
 
-See [INSTALL.md](install.md).
+**lnd**
+
+* Make sure lnd ports are reachable.
+
+**kirin**
+
+* Compilation requires go `1.13.x` or later.
+* Build `kirin`:  
+  `make build`
+* Copy the binary `./kirin` to the server.
+* Make sure port `8081` is reachable from outside (or whatever port we choose,
+  could also be 443 at some point)
+* Make sure there is a valid `tls.cert` and `tls.key` file located in the
+  `~/.kirin` directory that is valid for the domain that kirin is running on.
+  Kirin doesn't support creating its own certificate through Let's Encrypt yet.
+  If there is no `tls.cert` and `tls.key` found, a self-signed pair will be
+  created.
+* Make sure all required configuration items are set in `~/.kirin/kirin.yaml`,
+  compare with `sample-conf.yaml`.
+* Start kirin without any command line parameters (`./kirin`), all configuration
+  is done in the `~/.kirin/kirin.yaml` file.
 
 ## Demo
 
