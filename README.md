@@ -12,9 +12,11 @@ and REST (HTTP/1 and HTTP/2) backends.
 **kirin**
 
 * Compilation requires go `1.13.x` or later.
-* Build `kirin`:  
-  `make build`
-* Copy the binary `./kirin` to the server.
+* To build `kirin` in the current directory, run `make build` and then copy the
+  file `./kirin` from the local directory to the server.
+* To build and install `kirin` directly on the machine it will be used, run the
+  `make install` command which will place the binary into your `$GOPATH/bin`
+  folder.
 * Make sure port `8081` is reachable from outside (or whatever port we choose,
   could also be 443 at some point)
 * Make sure there is a valid `tls.cert` and `tls.key` file located in the
