@@ -83,8 +83,7 @@ func start() error {
 	}
 
 	// Create TLS certificates.
-	tlsKeyFile := filepath.Join(kirinDataDir, defaultTLSKeyFilename)
-	tlsCertFile := filepath.Join(kirinDataDir, defaultTLSCertFilename)
+	var tlsKeyFile, tlsCertFile string
 	switch {
 	// When using autocert, we set a TLSConfig on the server so the key and
 	// cert file we pass in are ignored and don't need to exist.
@@ -121,6 +120,8 @@ func start() error {
 	// and save them at the specified location (if they don't already
 	// exist).
 	default:
+		tlsKeyFile = filepath.Join(kirinDataDir, defaultTLSKeyFilename)
+		tlsCertFile = filepath.Join(kirinDataDir, defaultTLSCertFilename)
 		if !fileExists(tlsCertFile) && !fileExists(tlsKeyFile) {
 			log.Infof("Generating TLS certificates...")
 			err := cert.GenCertPair(
