@@ -25,6 +25,12 @@ type LndChallenger struct {
 // mint.Challenger interface.
 var _ mint.Challenger = (*LndChallenger)(nil)
 
+const (
+	// readOnlyMacaroonName is the name of the read-only macaroon belonging
+	// to the target lnd node.
+	readOnlyMacaroonName = "invoice.macaroon"
+)
+
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
 func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
@@ -36,6 +42,7 @@ func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
 
 	client, err := lndclient.NewBasicClient(
 		cfg.LndHost, cfg.TLSPath, cfg.MacDir, cfg.Network,
+		lndclient.MacFilename(readOnlyMacaroonName),
 	)
 	if err != nil {
 		return nil, err
