@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/lightninglabs/loop/lsat"
@@ -28,9 +29,23 @@ func (i *ServerInterceptor) UnaryInterceptor(ctx context.Context,
 	// the request to the handler if anything fails. Incoming calls with
 	// invalid metadata will therefore just be treated as non-identified or
 	// non-authenticated.
+	token, err := tokenFromContext(ctx)
+	if err != nil {
+		log.Debugf("No token extracted, error was: %v", err)
+		return handler(ctx, req)
+	}
+
+	// We got a token, create a new context that wraps its value and
+	// continue the call chain by invoking the handler.
+	idCtx := AddToContext(ctx, KeyTokenID, *token)
+	return handler(idCtx, req)
+}
+
+// tokenFromContext tries to extract the LSAT from a context.
+func tokenFromContext(ctx context.Context) (*lsat.TokenID, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return handler(ctx, req)
+		return nil, fmt.Errorf("context contains no metadata")
 	}
 	header := &http.Header{
 		HeaderAuthorization: md.Get(HeaderAuthorization),
@@ -39,20 +54,17 @@ func (i *ServerInterceptor) UnaryInterceptor(ctx context.Context,
 		md.Get(HeaderAuthorization))
 	macaroon, _, err := FromHeader(header)
 	if err != nil {
-		return handler(ctx, req)
+		return nil, fmt.Errorf("auth header extraction failed: %v", err)
 	}
 
 	// If there is an LSAT, decode and add it to the context.
 	identifier, err := lsat.DecodeIdentifier(bytes.NewBuffer(macaroon.Id()))
 	if err != nil {
-		return handler(ctx, req)
+		return nil, fmt.Errorf("token ID decoding failed: %v", err)
 	}
 	var clientID lsat.TokenID
 	copy(clientID[:], identifier.TokenID[:])
-	idCtx := AddToContext(ctx, KeyTokenID, clientID)
 	log.Debugf("Decoded client/token ID %s from auth header",
 		clientID.String())
-
-	// Continue the call chain by invoking the handler.
-	return handler(idCtx, req)
+	return &clientID, nil
 }
