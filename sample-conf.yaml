@@ -10,6 +10,13 @@ authenticator:
   macdir: "/path/to/lnd/data/chain/bitcoin/simnet"
   network: "simnet"
 
+tor:
+  control: "localhost:9051"
+  listenport: 8082
+  virtualport: 8082
+  v2: false
+  v3: false
+
 etcd:
   host: "localhost:2379"
   user: "user"

@@ -18,7 +18,7 @@ require (
 	github.com/jonboulle/clockwork v0.1.0 // indirect
 	github.com/json-iterator/go v1.1.8 // indirect
 	github.com/lightninglabs/loop v0.3.0-alpha.0.20200103135410-5e00ce62677a
-	github.com/lightningnetwork/lnd v0.8.0-beta-rc3.0.20200103000305-22e1f006b194
+	github.com/lightningnetwork/lnd v0.9.0-beta-rc4.0.20200313014957-4cb518c17498
 	github.com/lightningnetwork/lnd/cert v1.0.0
 	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/soheilhy/cmux v0.1.4 // indirect
@@ -26,7 +26,7 @@ require (
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
 	go.uber.org/zap v1.13.0 // indirect
 	golang.org/x/crypto v0.0.0-20200109152110-61a87790db17
-	golang.org/x/net v0.0.0-20191112182307-2180aed22343 // indirect
+	golang.org/x/net v0.0.0-20191112182307-2180aed22343
 	golang.org/x/sys v0.0.0-20191112214154-59a1497f0cea // indirect
 	google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a // indirect
 	google.golang.org/grpc v1.25.1

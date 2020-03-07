@@ -17,7 +17,10 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/tor"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"gopkg.in/yaml.v2"
 )
 
@@ -77,9 +80,10 @@ func start() error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
+	handler := http.HandlerFunc(servicesProxy.ServeHTTP)
+	httpsServer := &http.Server{
 		Addr:    cfg.ListenAddr,
-		Handler: http.HandlerFunc(servicesProxy.ServeHTTP),
+		Handler: handler,
 	}
 
 	// Create TLS certificates.
@@ -112,7 +116,7 @@ func start() error {
 				log.Errorf("autocert http: %v", err)
 			}
 		}()
-		server.TLSConfig = &tls.Config{
+		httpsServer.TLSConfig = &tls.Config{
 			GetCertificate: manager.GetCertificate,
 		}
 
@@ -139,11 +143,43 @@ func start() error {
 	// The ListenAndServeTLS below will block until shut down or an error
 	// occurs. So we can just defer a cleanup function here that will close
 	// everything on shutdown.
-	defer cleanup(etcdClient, server)
+	defer cleanup(etcdClient, httpsServer)
 
 	// Finally start the server.
 	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
-	return server.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+
+	errChan := make(chan error)
+	go func() {
+		errChan <- httpsServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+	}()
+
+	// If we need to listen over Tor as well, we'll set up the onion
+	// services now. We're not able to use TLS for onion services since they
+	// can't be verified, so we'll spin up an additional HTTP/2 server
+	// _without_ TLS that is not exposed to the outside world. This server
+	// will only be reached through the onion services, which already
+	// provide encryption, so running this additional HTTP server should be
+	// relatively safe.
+	if cfg.Tor.V2 || cfg.Tor.V3 {
+		torController, err := initTorListener(cfg, etcdClient)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = torController.Stop()
+		}()
+
+		httpServer := &http.Server{
+			Addr:    fmt.Sprintf("localhost:%d", cfg.Tor.ListenPort),
+			Handler: h2c.NewHandler(handler, &http2.Server{}),
+		}
+		go func() {
+			errChan <- httpServer.ListenAndServe()
+		}()
+		defer httpServer.Close()
+	}
+
+	return <-errChan
 }
 
 // fileExists reports whether the named file or directory exists.
@@ -193,6 +229,45 @@ func setupLogging(cfg *config) error {
 		return err
 	}
 	return build.ParseAndSetDebugLevels(cfg.DebugLevel, logWriter)
+}
+
+// initTorListener initiates a Tor controller instance with the Tor server
+// specified in the config. Onion services will be created over which the proxy
+// can be reached at.
+func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error) {
+	// Establish a controller connection with the backing Tor server and
+	// proceed to create the requested onion services.
+	onionCfg := tor.AddOnionConfig{
+		VirtualPort: int(cfg.Tor.VirtualPort),
+		TargetPorts: []int{int(cfg.Tor.ListenPort)},
+		Store:       newOnionStore(etcd),
+	}
+	torController := tor.NewController(cfg.Tor.Control, "", "")
+	if err := torController.Start(); err != nil {
+		return nil, err
+	}
+
+	if cfg.Tor.V2 {
+		onionCfg.Type = tor.V2
+		addr, err := torController.AddOnion(onionCfg)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Infof("Listening over Tor on %v", addr)
+	}
+
+	if cfg.Tor.V3 {
+		onionCfg.Type = tor.V3
+		addr, err := torController.AddOnion(onionCfg)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Infof("Listening over Tor on %v", addr)
+	}
+
+	return torController, nil
 }
 
 // createProxy creates the proxy with all the services it needs.
