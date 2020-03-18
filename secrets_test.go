@@ -1,4 +1,4 @@
-package kirin
+package aperture
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 
 	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/embed"
-	"github.com/lightninglabs/kirin/mint"
+	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/loop/lsat"
 )
 

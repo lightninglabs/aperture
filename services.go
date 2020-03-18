@@ -1,10 +1,10 @@
-package kirin
+package aperture
 
 import (
 	"context"
 
-	"github.com/lightninglabs/kirin/mint"
-	"github.com/lightninglabs/kirin/proxy"
+	"github.com/lightninglabs/aperture/mint"
+	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/loop/lsat"
 )
 

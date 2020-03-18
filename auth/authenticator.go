@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/lightninglabs/kirin/mint"
+	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/loop/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"

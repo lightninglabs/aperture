@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/aperture/auth"
 	"google.golang.org/grpc/codes"
 )
 

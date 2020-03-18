@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lightninglabs/kirin/freebie"
+	"github.com/lightninglabs/aperture/freebie"
 )
 
 const (

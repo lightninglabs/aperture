@@ -1,5 +1,5 @@
-PKG := github.com/lightninglabs/kirin
-ESCPKG := github.com\/lightninglabs\/kirin
+PKG := github.com/lightninglabs/aperture
+ESCPKG := github.com\/lightninglabs\/aperture
 
 LINT_PKG := github.com/golangci/golangci-lint/cmd/golangci-lint
 GOVERALLS_PKG := github.com/mattn/goveralls
@@ -56,12 +56,12 @@ $(GOACC_BIN):
 # ============
 
 build:
-	@$(call print, "Building kirin.")
-	$(GOBUILD) $(PKG)/cmd/kirin
+	@$(call print, "Building aperture.")
+	$(GOBUILD) $(PKG)/cmd/aperture
 
 install:
-	@$(call print, "Installing kirin.")
-	$(GOINSTALL) $(PKG)/cmd/kirin
+	@$(call print, "Installing aperture.")
+	$(GOINSTALL) $(PKG)/cmd/aperture
 
 # =======
 # TESTING
@@ -114,5 +114,5 @@ list:
 
 clean:
 	@$(call print, "Cleaning source.$(NC)")
-	$(RM) ./kirin
+	$(RM) ./aperture
 	$(RM) coverage.txt

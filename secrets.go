@@ -1,4 +1,4 @@
-package kirin
+package aperture
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/coreos/etcd/clientv3"
-	"github.com/lightninglabs/kirin/mint"
+	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/loop/lsat"
 )
 
