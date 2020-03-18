@@ -1,10 +1,10 @@
-package kirin
+package aperture
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/lightninglabs/kirin/mint"
+	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/loop/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"

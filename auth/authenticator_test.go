@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/lightninglabs/kirin/auth"
+	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/loop/lsat"
 	"gopkg.in/macaroon.v2"
 )
@@ -15,7 +15,7 @@ import (
 func createDummyMacHex(preimage string) string {
 	dummyMac, err := macaroon.New(
 		[]byte("aabbccddeeff00112233445566778899"), []byte("AA=="),
-		"kirin", macaroon.LatestVersion,
+		"aperture", macaroon.LatestVersion,
 	)
 	if err != nil {
 		panic(err)

@@ -1,7 +1,7 @@
 listenaddr: "localhost:8081"
 staticroot: "./static"
 debuglevel: "debug"
-servername: kirin.example.com
+servername: aperture.example.com
 autocert: false
 
 authenticator:

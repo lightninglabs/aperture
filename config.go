@@ -1,17 +1,17 @@
-package kirin
+package aperture
 
 import (
 	"github.com/btcsuite/btcutil"
-	"github.com/lightninglabs/kirin/proxy"
+	"github.com/lightninglabs/aperture/proxy"
 )
 
 var (
-	kirinDataDir           = btcutil.AppDataDir("kirin", false)
-	defaultConfigFilename  = "kirin.yaml"
+	apertureDataDir        = btcutil.AppDataDir("aperture", false)
+	defaultConfigFilename  = "aperture.yaml"
 	defaultTLSKeyFilename  = "tls.key"
 	defaultTLSCertFilename = "tls.cert"
 	defaultLogLevel        = "info"
-	defaultLogFilename     = "kirin.log"
+	defaultLogFilename     = "aperture.log"
 	defaultMaxLogFiles     = 3
 	defaultMaxLogFileSize  = 10
 )
@@ -50,7 +50,7 @@ type config struct {
 	// be used while creating a certificate through Let's Encrypt.
 	ServerName string `long:"servername" description:"Server name (FQDN) to use for the TLS certificate."`
 
-	// AutoCert can be set to true if kirin should try to create a valid
+	// AutoCert can be set to true if aperture should try to create a valid
 	// certificate through Let's Encrypt using ServerName.
 	AutoCert bool `long:"autocert" description:"Automatically create a Let's Encrypt cert using ServerName."`
 

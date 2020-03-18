@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/lightninglabs/kirin/auth"
-	"github.com/lightninglabs/kirin/freebie"
+	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/freebie"
 )
 
 var (

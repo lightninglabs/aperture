@@ -1,9 +1,9 @@
-package kirin
+package aperture
 
 import (
 	"github.com/btcsuite/btclog"
-	"github.com/lightninglabs/kirin/auth"
-	"github.com/lightninglabs/kirin/proxy"
+	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightningnetwork/lnd/build"
 )
 
