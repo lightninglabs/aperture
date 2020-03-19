@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/coreos/etcd/clientv3"
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/loop/lsat"
 )
 
 var (

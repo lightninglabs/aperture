@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/loop/lsat"
 	"gopkg.in/macaroon.v2"
 )
 

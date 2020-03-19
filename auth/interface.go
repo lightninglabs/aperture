@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/loop/lsat"
 	"gopkg.in/macaroon.v2"
 )
 

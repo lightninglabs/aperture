@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"math/rand"
 
-	"github.com/lightninglabs/loop/lsat"
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
