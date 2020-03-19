@@ -3,9 +3,9 @@ package aperture
 import (
 	"context"
 
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
-	"github.com/lightninglabs/loop/lsat"
 )
 
 // staticServiceLimiter provides static restrictions for services.

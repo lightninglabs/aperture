@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/loop/lsat"
+	"github.com/lightninglabs/aperture/lsat"
 	"gopkg.in/macaroon.v2"
 )
 

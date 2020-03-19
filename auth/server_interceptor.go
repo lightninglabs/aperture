@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/lightninglabs/loop/lsat"
+	"github.com/lightninglabs/aperture/lsat"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
