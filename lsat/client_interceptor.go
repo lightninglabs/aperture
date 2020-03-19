@@ -60,10 +60,10 @@ var (
 	)
 )
 
-// Interceptor is a gRPC client interceptor that can handle LSAT authentication
-// challenges with embedded payment requests. It uses a connection to lnd to
-// automatically pay for an authentication token.
-type Interceptor struct {
+// ClientInterceptor is a gRPC client interceptor that can handle LSAT
+// authentication challenges with embedded payment requests. It uses a
+// connection to lnd to automatically pay for an authentication token.
+type ClientInterceptor struct {
 	lnd           *lndclient.LndServices
 	store         Store
 	callTimeout   time.Duration
@@ -78,9 +78,9 @@ type Interceptor struct {
 // indicated store already contains a usable token.
 func NewInterceptor(lnd *lndclient.LndServices, store Store,
 	rpcCallTimeout time.Duration, maxCost,
-	maxFee btcutil.Amount, allowInsecure bool) *Interceptor {
+	maxFee btcutil.Amount, allowInsecure bool) *ClientInterceptor {
 
-	return &Interceptor{
+	return &ClientInterceptor{
 		lnd:           lnd,
 		store:         store,
 		callTimeout:   rpcCallTimeout,
@@ -106,7 +106,7 @@ type interceptContext struct {
 // indicating a payment challenge, a token is acquired and paid for
 // automatically. The original request is then repeated back to the server, now
 // with the new token attached.
-func (i *Interceptor) UnaryInterceptor(ctx context.Context, method string,
+func (i *ClientInterceptor) UnaryInterceptor(ctx context.Context, method string,
 	req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker,
 	opts ...grpc.CallOption) error {
 
@@ -153,7 +153,7 @@ func (i *Interceptor) UnaryInterceptor(ctx context.Context, method string,
 // If there is an error returned and it is indicating a payment challenge, a
 // token is acquired and paid for automatically. The original request is then
 // repeated back to the server, now with the new token attached.
-func (i *Interceptor) StreamInterceptor(ctx context.Context,
+func (i *ClientInterceptor) StreamInterceptor(ctx context.Context,
 	desc *grpc.StreamDesc, cc *grpc.ClientConn, method string,
 	streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream,
 	error) {
@@ -195,7 +195,7 @@ func (i *Interceptor) StreamInterceptor(ctx context.Context,
 // newInterceptContext creates the initial intercept context that can capture
 // metadata from the server and sends the local token to the server if one
 // already exists.
-func (i *Interceptor) newInterceptContext(ctx context.Context,
+func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	opts []grpc.CallOption) (*interceptContext, error) {
 
 	iCtx := &interceptContext{
@@ -242,7 +242,7 @@ func (i *Interceptor) newInterceptContext(ctx context.Context,
 
 // handlePayment tries to obtain a valid token by either tracking the payment
 // status of a pending token or paying for a new one.
-func (i *Interceptor) handlePayment(iCtx *interceptContext) error {
+func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 	switch {
 	// Resume/track a pending payment if it was interrupted for some reason.
 	case iCtx.token != nil && iCtx.token.isPending():
@@ -276,7 +276,7 @@ func (i *Interceptor) handlePayment(iCtx *interceptContext) error {
 }
 
 // addLsatCredentials adds an LSAT token to the given intercept context.
-func (i *Interceptor) addLsatCredentials(iCtx *interceptContext) error {
+func (i *ClientInterceptor) addLsatCredentials(iCtx *interceptContext) error {
 	if iCtx.token == nil {
 		return fmt.Errorf("cannot add nil token to context")
 	}
@@ -294,7 +294,7 @@ func (i *Interceptor) addLsatCredentials(iCtx *interceptContext) error {
 // payLsatToken reads the payment challenge from the response metadata and tries
 // to pay the invoice encoded in them, returning a paid LSAT token if
 // successful.
-func (i *Interceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
+func (i *ClientInterceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
 	*Token, error) {
 
 	// First parse the authentication header that was stored in the
@@ -372,7 +372,7 @@ func (i *Interceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
 
 // trackPayment tries to resume a pending payment by tracking its state and
 // waiting for a conclusive result.
-func (i *Interceptor) trackPayment(ctx context.Context, token *Token) error {
+func (i *ClientInterceptor) trackPayment(ctx context.Context, token *Token) error {
 	// Lookup state of the payment.
 	paymentStateCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

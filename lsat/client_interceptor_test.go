@@ -22,7 +22,7 @@ import (
 type interceptTestCase struct {
 	name                string
 	initialPreimage     *lntypes.Preimage
-	interceptor         *Interceptor
+	interceptor         *ClientInterceptor
 	resetCb             func()
 	expectLndCall       bool
 	sendPaymentCb       func(*testing.T, test.PaymentChannelMessage)
