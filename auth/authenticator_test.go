@@ -63,21 +63,21 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "empty auth header",
 				header: &http.Header{
-					auth.HeaderAuthorization: []string{},
+					lsat.HeaderAuthorization: []string{},
 				},
 				result: false,
 			},
 			{
 				id: "zero length auth header",
 				header: &http.Header{
-					auth.HeaderAuthorization: []string{""},
+					lsat.HeaderAuthorization: []string{""},
 				},
 				result: false,
 			},
 			{
 				id: "invalid auth header",
 				header: &http.Header{
-					auth.HeaderAuthorization: []string{
+					lsat.HeaderAuthorization: []string{
 						"foo",
 					},
 				},
@@ -86,21 +86,21 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "invalid macaroon metadata header",
 				header: &http.Header{
-					auth.HeaderMacaroonMD: []string{"foo"},
+					lsat.HeaderMacaroonMD: []string{"foo"},
 				},
 				result: false,
 			},
 			{
 				id: "invalid macaroon header",
 				header: &http.Header{
-					auth.HeaderMacaroon: []string{"foo"},
+					lsat.HeaderMacaroon: []string{"foo"},
 				},
 				result: false,
 			},
 			{
 				id: "valid auth header",
 				header: &http.Header{
-					auth.HeaderAuthorization: []string{
+					lsat.HeaderAuthorization: []string{
 						"LSAT " + testMacBase64 + ":" +
 							testPreimage,
 					},
@@ -110,7 +110,7 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "valid macaroon metadata header",
 				header: &http.Header{
-					auth.HeaderMacaroonMD: []string{
+					lsat.HeaderMacaroonMD: []string{
 						testMacHex,
 					}},
 				result: true,
@@ -118,7 +118,7 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "valid macaroon header",
 				header: &http.Header{
-					auth.HeaderMacaroon: []string{
+					lsat.HeaderMacaroon: []string{
 						testMacHex,
 					},
 				},

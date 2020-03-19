@@ -1,4 +1,4 @@
-package auth
+package lsat
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/lightninglabs/aperture/lsat"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -83,7 +82,7 @@ func (i *ServerInterceptor) StreamInterceptor(srv interface{},
 }
 
 // tokenFromContext tries to extract the LSAT from a context.
-func tokenFromContext(ctx context.Context) (*lsat.TokenID, error) {
+func tokenFromContext(ctx context.Context) (*TokenID, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, fmt.Errorf("context contains no metadata")
@@ -99,11 +98,11 @@ func tokenFromContext(ctx context.Context) (*lsat.TokenID, error) {
 	}
 
 	// If there is an LSAT, decode and add it to the context.
-	identifier, err := lsat.DecodeIdentifier(bytes.NewBuffer(macaroon.Id()))
+	identifier, err := DecodeIdentifier(bytes.NewBuffer(macaroon.Id()))
 	if err != nil {
 		return nil, fmt.Errorf("token ID decoding failed: %v", err)
 	}
-	var clientID lsat.TokenID
+	var clientID TokenID
 	copy(clientID[:], identifier.TokenID[:])
 	log.Debugf("Decoded client/token ID %s from auth header",
 		clientID.String())
