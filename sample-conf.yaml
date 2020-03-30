@@ -1,42 +1,82 @@
+# The address which the proxy can be reached at.
 listenaddr: "localhost:8081"
-staticroot: "./static"
-debuglevel: "debug"
-servername: aperture.example.com
-autocert: false
 
+# The root path of static content to serve upon receiving a request the proxy
+# cannot handle.
+staticroot: "./static"
+
+# The log level that should be used for the proxy.
+#
+# Valid options include: trace, debug, info, warn, error, critical, off.
+debuglevel: "debug"
+
+# Whether the proxy should create a valid certificate through Let's Encrypt for
+# the fully qualifying domain name.
+autocert: false
+servername: aperture.example.com
+
+# Settings for the lnd node used to generate payment requests. All of these
+# options are required.
 authenticator:
+  # The host:port which lnd's RPC can be reached at.
   lndhost: "localhost:10009"
+
+  # The path to lnd's TLS certificate.
   tlspath: "/path/to/lnd/tls.cert"
+
+  # The path to lnd's macaroon directory.
   macdir: "/path/to/lnd/data/chain/bitcoin/simnet"
+
+  # The chain network the lnd is active on.
   network: "simnet"
 
-tor:
-  control: "localhost:9051"
-  listenport: 8082
-  virtualport: 8082
-  v2: false
-  v3: false
-
+# Settings for the etcd instance which the proxy will use to reliably store and
+# retrieve token information.
 etcd:
+  # The client host:port which the etcd instance can be reached at.
   host: "localhost:2379"
+
+  # If authentication is enabled, the user and password required to access the
+  # etcd instance.
   user: "user"
   password: "password"
 
+# List of services that should be reachable behind the proxy.  Requests will be
+# matched to the services in order, picking the first that satisfies hostregexp
+# and (if set) pathregexp. So order is important!
+#
+# Use single quotes for regular expressions with special characters in them to
+# avoid YAML parsing errors!
 services:
-  # List of services that should be reachable behind the proxy.
-  # Requests will be matched to the services in order, picking the first
-  # that satisfies hostregexp and (if set) pathregexp.
-  # So order is important!
-  #
-  # Use single quotes for regular expressions with special characters in them to
-  # avoid YAML parsing errors!
+    # The identifying name of the service. This will also be used to identify
+    # which capabilities caveat (if any) corresponds to the service.
   - name: "service1"
-   hostregexp: '^service1.com$'
+
+    # The regular expression used to match the service host.
+    hostregexp: '^service1.com$'
+
+    # The regular expression used to match the path of the URL.
     pathregexp: '^/.*$'
+
+    # The host:port which the service can be reached at.
     address: "127.0.0.1:10009"
+
+    # The HTTP protocol that should be used to connect to the service. Valid
+    # options include: http, https.
     protocol: https
+
+    # If required, a path to the service's TLS certificate to successfully
+    # establish a secure connection.
     tlscertpath: "path-to-optional-tls-cert/tls.cert"
+
+    # A comma-delimited list of capabilities that will be granted for tokens of
+    # the service at the base tier.
     capabilities: "add,subtract"
+
+    # The set of constraints that are applied to tokens of the service at the
+    # base tier.
+    constraints:
+        "valid_until": "2020-01-01"
 
   - name: "service2"
     hostregexp: "service2.com:8083"
@@ -45,3 +85,23 @@ services:
     protocol: https
     constraints:
         "valid_until": "2020-01-01"
+
+# Settings for a Tor instance to allow requests over Tor as onion services.
+# Configuring Tor is optional.
+tor:
+  # The host:port which Tor's control can be reached at.
+  control: "localhost:9051"
+
+  # The internal port we should listen on for client requests over Tor. Note
+  # that this port should not be exposed to the outside world, it is only
+  # intended to be reached by clients through the onion service.
+  listenport: 8082
+
+  # The port through which the onion services to be created can be reached at.
+  virtualport: 8082
+
+  # Whether a v2 onion service should be created to handle requests.
+  v2: false
+
+  # Whether a v3 onion service should be created to handle requests.
+  v3: false
