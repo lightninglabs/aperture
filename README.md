@@ -53,7 +53,7 @@ services and APIs.
 ## Demo
 
 There is a demo installation available at
-[test-staging.swap.lightning.today:8081](https://test-staging.swap.lightning.today:8081).
+[test.swap.lightning.today:11010](https://test.swap.lightning.today:11010/).
 
 ### Use Case 1: Web GUI
 
@@ -77,7 +77,7 @@ You have two options to pay for the invoice:
 
 First, let's request the BOS scores until we hit the freebie limit:
  
-`curl -k -v https://test-staging.swap.lightning.today:8081/availability/v1/btc.json`
+`curl -k -v https://test.swap.lightning.today:11010/availability/v1/btc.json`
  
 At some point, we will get an answer 402 with an authorization header:
 
@@ -96,5 +96,5 @@ Finally, you can issue the authenticated request with the following command:
 ```
 curl -k -v \
 --header "Authorization: LSAT <macaroon>:<preimage>" \
-https://test-staging.swap.lightning.today:8081/availability/v1/btc.json
+https://test.swap.lightning.today:11010/availability/v1/btc.json
 ```
