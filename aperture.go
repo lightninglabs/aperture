@@ -100,7 +100,6 @@ func start() error {
 	}
 
 	// Create TLS certificates.
-	var tlsKeyFile, tlsCertFile string
 	switch {
 	// When using autocert, we set a TLSConfig on the server so the key and
 	// cert file we pass in are ignored and don't need to exist.
@@ -139,8 +138,8 @@ func start() error {
 	// and save them at the specified location (if they don't already
 	// exist).
 	default:
-		tlsKeyFile = filepath.Join(apertureDataDir, defaultTLSKeyFilename)
-		tlsCertFile = filepath.Join(apertureDataDir, defaultTLSCertFilename)
+		tlsKeyFile := filepath.Join(apertureDataDir, defaultTLSKeyFilename)
+		tlsCertFile := filepath.Join(apertureDataDir, defaultTLSCertFilename)
 		if !fileExists(tlsCertFile) && !fileExists(tlsKeyFile) {
 			log.Infof("Generating TLS certificates...")
 			err := cert.GenCertPair(
@@ -176,7 +175,9 @@ func start() error {
 
 	errChan := make(chan error)
 	go func() {
-		errChan <- httpsServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+		// The httpsServer.TLSConfig contains certificates at this point
+		// so we don't need to pass in certificate and key file names.
+		errChan <- httpsServer.ListenAndServeTLS("", "")
 	}()
 
 	// If we need to listen over Tor as well, we'll set up the onion
