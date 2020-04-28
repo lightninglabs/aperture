@@ -34,6 +34,19 @@ const (
 	etcdKeyDelimeter = "/"
 )
 
+var (
+	// http2TLSCipherSuites is the list of cipher suites we allow the server
+	// to use. This list removes a CBC cipher from the list used in lnd's
+	// cert package because the underlying HTTP/2 library treats it as a bad
+	// cipher, according to https://tools.ietf.org/html/rfc7540#appendix-A
+	// (also see golang.org/x/net/http2/ciphers.go).
+	http2TLSCipherSuites = []uint16{
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+	}
+)
+
 // Main is the true entrypoint of Kirin.
 func Main() {
 	// TODO: Prevent from running twice.
@@ -118,6 +131,8 @@ func start() error {
 		}()
 		httpsServer.TLSConfig = &tls.Config{
 			GetCertificate: manager.GetCertificate,
+			CipherSuites:   http2TLSCipherSuites,
+			MinVersion:     tls.VersionTLS12,
 		}
 
 	// If we're not using autocert, we want to create self-signed TLS certs
@@ -137,6 +152,17 @@ func start() error {
 				return err
 			}
 			log.Infof("Done generating TLS certificates")
+		}
+
+		// Load the certs now so we can create a complete TLS config.
+		certData, _, err := cert.LoadCert(tlsCertFile, tlsKeyFile)
+		if err != nil {
+			return err
+		}
+		httpsServer.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{certData},
+			CipherSuites: http2TLSCipherSuites,
+			MinVersion:   tls.VersionTLS12,
 		}
 	}
 
