@@ -54,6 +54,9 @@ type config struct {
 	// certificate through Let's Encrypt using ServerName.
 	AutoCert bool `long:"autocert" description:"Automatically create a Let's Encrypt cert using ServerName."`
 
+	// Insecure can be set to disable TLS on incoming connections.
+	Insecure bool `long:"insecure" description:"Listen on an insecure connection, disabling TLS for incoming connections."`
+
 	// StaticRoot is the folder where the static content served by the proxy
 	// is located.
 	StaticRoot string `long:"staticroot" description:"The folder where the static content is located."`

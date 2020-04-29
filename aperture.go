@@ -114,9 +114,28 @@ func start() error {
 
 	// Create TLS configuration by either creating new self-signed certs or
 	// trying to obtain one through Let's Encrypt.
-	httpsServer.TLSConfig, err = getTLSConfig(cfg.ServerName, cfg.AutoCert)
-	if err != nil {
-		return err
+	var serveFn func() error
+	if cfg.Insecure {
+		// Normally, HTTP/2 only works with TLS. But there is a special
+		// version called HTTP/2 Cleartext (h2c) that some clients
+		// support and that gRPC uses when the grpc.WithInsecure()
+		// option is used. The default HTTP handler doesn't support it
+		// though so we need to add a special h2c handler here.
+		serveFn = httpsServer.ListenAndServe
+		httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
+	} else {
+		httpsServer.TLSConfig, err = getTLSConfig(
+			cfg.ServerName, cfg.AutoCert,
+		)
+		if err != nil {
+			return err
+		}
+		serveFn = func() error {
+			// The httpsServer.TLSConfig contains certificates at
+			// this point so we don't need to pass in certificate
+			// and key file names.
+			return httpsServer.ListenAndServeTLS("", "")
+		}
 	}
 
 	// The ListenAndServeTLS below will block until shut down or an error
@@ -129,9 +148,7 @@ func start() error {
 
 	errChan := make(chan error)
 	go func() {
-		// The httpsServer.TLSConfig contains certificates at this point
-		// so we don't need to pass in certificate and key file names.
-		errChan <- httpsServer.ListenAndServeTLS("", "")
+		errChan <- serveFn()
 	}()
 
 	// If we need to listen over Tor as well, we'll set up the onion
