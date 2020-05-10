@@ -96,10 +96,10 @@ func start() error {
 	}
 
 	// Create the proxy and connect it to lnd.
-	genInvoiceReq := func() (*lnrpc.Invoice, error) {
+	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
 		return &lnrpc.Invoice{
 			Memo:  "LSAT",
-			Value: 1,
+			Value: price,
 		}, nil
 	}
 	servicesProxy, err := createProxy(cfg, genInvoiceReq, etcdClient)

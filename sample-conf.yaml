@@ -78,6 +78,9 @@ services:
     constraints:
         "valid_until": "2020-01-01"
 
+    # The LSAT value in satoshis for the service.
+    price: 1     
+
   - name: "service2"
     hostregexp: "service2.com:8083"
     pathregexp: '^/.*$'
@@ -85,6 +88,7 @@ services:
     protocol: https
     constraints:
         "valid_until": "2020-01-01"
+    price: 1
 
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.

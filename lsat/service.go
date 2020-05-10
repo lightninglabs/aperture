@@ -46,6 +46,9 @@ type Service struct {
 
 	// Tier is the tier of the LSAT-enabled service.
 	Tier ServiceTier
+
+	// Price of service LSAT in satoshis.
+	Price int64
 }
 
 // NewServicesCaveat creates a new services caveat with the provided caveats.

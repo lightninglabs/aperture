@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/btcsuite/btcutil"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/freebie"
 )
@@ -17,6 +18,16 @@ var (
 	filePrefix       = "!file"
 	filePrefixHex    = filePrefix + "+hex"
 	filePrefixBase64 = filePrefix + "+base64"
+)
+
+const (
+	// defaultServicePrice is price in satoshis to be used as the default
+	// service price.
+	defaultServicePrice = 1
+
+	// maxServicePrice is the maximum price in satoshis that can be used
+	// to create an invoice through lnd.
+	maxServicePrice = btcutil.SatoshiPerBitcoin * 100000
 )
 
 // Service generically specifies configuration data for backend services to the
@@ -68,6 +79,10 @@ type Service struct {
 	// They'll be enforced for a service at the base tier. The key should
 	// correspond to the caveat's condition.
 	Constraints map[string]string `long:"constraints" description:"The service constraints to enforce at the base tier"`
+
+	// Price is the custom LSAT value in satoshis to be used for the
+	// service's endpoint.
+	Price int64 `long:"price" description:"Static LSAT value in satoshis to be used for this service"`
 
 	// AuthWhitelistPaths is an optional list of regular expressions that
 	// are matched against the path of the URL of a request. If the request
@@ -153,6 +168,23 @@ func prepareServices(services []*Service) error {
 				return fmt.Errorf("error validating auth "+
 					"whitelist: %v", err)
 			}
+		}
+
+		// Check that the price for the service is not negative and not
+		// more than the maximum amount allowed by lnd. If no price, or
+		// a price of zero satoshis, is set the then default price of 1
+		// satoshi is to be used.
+		switch {
+		case service.Price == 0:
+			log.Debugf("Using default LSAT price of %v satoshis for "+
+				"service %s.", defaultServicePrice, service.Name)
+			service.Price = defaultServicePrice
+		case service.Price < 0:
+			return fmt.Errorf("negative price set for "+
+				"service %s", service.Name)
+		case service.Price > maxServicePrice:
+			return fmt.Errorf("maximum price exceeded for "+
+				"service %s", service.Name)
 		}
 	}
 	return nil

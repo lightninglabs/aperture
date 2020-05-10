@@ -12,7 +12,7 @@ import (
 
 // InvoiceRequestGenerator is a function type that returns a new request for the
 // lnrpc.AddInvoice call.
-type InvoiceRequestGenerator func() (*lnrpc.Invoice, error)
+type InvoiceRequestGenerator func(price int64) (*lnrpc.Invoice, error)
 
 // LndChallenger is a challenger that uses an lnd backend to create new LSAT
 // payment challenges.
@@ -57,10 +57,10 @@ func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
 // request (invoice) and the corresponding payment hash.
 //
 // NOTE: This is part of the Challenger interface.
-func (l *LndChallenger) NewChallenge() (string, lntypes.Hash, error) {
+func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) {
 	// Obtain a new invoice from lnd first. We need to know the payment hash
 	// so we can add it as a caveat to the macaroon.
-	invoice, err := l.genInvoiceReq()
+	invoice, err := l.genInvoiceReq(price)
 	if err != nil {
 		log.Errorf("Error generating invoice request: %v", err)
 		return "", lntypes.ZeroHash, err
