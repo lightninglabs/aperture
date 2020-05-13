@@ -97,7 +97,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case authLevel.IsOn():
 		if !p.authenticator.Accept(&r.Header, target.Name) {
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r, target.Name)
+			p.handlePaymentRequired(w, r, target.Name, target.Price)
 			return
 		}
 
@@ -116,7 +116,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !ok {
-				p.handlePaymentRequired(w, r, target.Name)
+				p.handlePaymentRequired(w, r, target.Name, target.Price)
 				return
 			}
 			_, err = target.freebieDb.TallyFreebie(r, remoteIP)
@@ -281,11 +281,11 @@ func addCorsHeaders(header http.Header) {
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
-	serviceName string) {
+	serviceName string, servicePrice int64) {
 
 	addCorsHeaders(r.Header)
 
-	header, err := p.authenticator.FreshChallengeHeader(r, serviceName)
+	header, err := p.authenticator.FreshChallengeHeader(r, serviceName, servicePrice)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)
 		sendDirectResponse(

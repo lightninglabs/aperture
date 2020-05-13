@@ -27,7 +27,7 @@ type Challenger interface {
 	// payment request. The payment hash is also returned as a convenience
 	// to avoid having to decode the payment request in order to retrieve
 	// its payment hash.
-	NewChallenge() (string, lntypes.Hash, error)
+	NewChallenge(price int64) (string, lntypes.Hash, error)
 }
 
 // SecretStore is the store responsible for storing LSAT secrets. These secrets
@@ -93,9 +93,13 @@ func New(cfg *Config) *Mint {
 func (m *Mint) MintLSAT(ctx context.Context,
 	services ...lsat.Service) (*macaroon.Macaroon, string, error) {
 
+	// Let the LSAT value as the price of the most expensive of the
+	// services.
+	price := maximumPrice(services)
+
 	// We'll start by retrieving a new challenge in the form of a Lightning
 	// payment request to present the requester of the LSAT with.
-	paymentRequest, paymentHash, err := m.cfg.Challenger.NewChallenge()
+	paymentRequest, paymentHash, err := m.cfg.Challenger.NewChallenge(price)
 	if err != nil {
 		return nil, "", err
 	}
@@ -141,6 +145,20 @@ func (m *Mint) MintLSAT(ctx context.Context,
 	}
 
 	return mac, paymentRequest, nil
+}
+
+// maximumPrice determines the necessary price to use for a collection
+// of services.
+func maximumPrice(services []lsat.Service) int64 {
+	var max int64
+
+	for _, service := range services {
+		if service.Price > max {
+			max = service.Price
+		}
+	}
+
+	return max
 }
 
 // createUniqueIdentifier creates a new LSAT identifier bound to a payment hash

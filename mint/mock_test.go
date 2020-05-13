@@ -26,7 +26,7 @@ func newMockChallenger() *mockChallenger {
 	return &mockChallenger{}
 }
 
-func (d *mockChallenger) NewChallenge() (string, lntypes.Hash, error) {
+func (d *mockChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) {
 	return testPayReq, testHash, nil
 }
 

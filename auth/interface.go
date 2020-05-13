@@ -18,7 +18,7 @@ type Authenticator interface {
 
 	// FreshChallengeHeader returns a header containing a challenge for the
 	// user to complete.
-	FreshChallengeHeader(*http.Request, string) (http.Header, error)
+	FreshChallengeHeader(*http.Request, string, int64) (http.Header, error)
 }
 
 // Minter is an entity that is able to mint and verify LSATs for a set of

@@ -27,7 +27,11 @@ func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimit
 	constraints := make(map[lsat.Service][]lsat.Caveat)
 
 	for _, proxyService := range proxyServices {
-		s := lsat.Service{Name: proxyService.Name, Tier: lsat.BaseTier}
+		s := lsat.Service{
+			Name:  proxyService.Name,
+			Tier:  lsat.BaseTier,
+			Price: proxyService.Price,
+		}
 		capabilities[s] = lsat.NewCapabilitiesCaveat(
 			proxyService.Name, proxyService.Capabilities,
 		)
