@@ -158,7 +158,7 @@ func start() error {
 	// will only be reached through the onion services, which already
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
-	if cfg.Tor.V2 || cfg.Tor.V3 {
+	if cfg.Tor != nil && (cfg.Tor.V2 || cfg.Tor.V3) {
 		torController, err := initTorListener(cfg, etcdClient)
 		if err != nil {
 			return err
