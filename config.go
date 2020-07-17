@@ -61,6 +61,10 @@ type config struct {
 	// is located.
 	StaticRoot string `long:"staticroot" description:"The folder where the static content is located."`
 
+	// ServeStatic defines if static content should be served from the
+	// directory defined by StaticRoot.
+	ServeStatic bool `long:"servestatic" description:"Flag to enable or disable static content serving."`
+
 	Etcd *etcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
 
 	Authenticator *authConfig `long:"authenticator" description:"Configuration for the authenticator."`

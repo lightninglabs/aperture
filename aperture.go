@@ -391,7 +391,9 @@ func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator,
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 	})
 	authenticator := auth.NewLsatAuthenticator(minter)
-	return proxy.New(authenticator, cfg.Services, cfg.StaticRoot)
+	return proxy.New(
+		authenticator, cfg.Services, cfg.ServeStatic, cfg.StaticRoot,
+	)
 }
 
 // cleanup closes the given server and shuts down the log rotator.

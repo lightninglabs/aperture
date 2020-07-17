@@ -5,6 +5,10 @@ listenaddr: "localhost:8081"
 # cannot handle.
 staticroot: "./static"
 
+# Should the static file server be enabled that serves files from the directory
+# specified in `staticroot`?
+servestatic: false
+
 # The log level that should be used for the proxy.
 #
 # Valid options include: trace, debug, info, warn, error, critical, off.

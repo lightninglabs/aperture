@@ -41,10 +41,22 @@ type Proxy struct {
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
-func New(auth auth.Authenticator, services []*Service, staticRoot string) (
-	*Proxy, error) {
+func New(auth auth.Authenticator, services []*Service, serveStatic bool,
+	staticRoot string) (*Proxy, error) {
 
-	staticServer := http.FileServer(http.Dir(staticRoot))
+	// By default the static file server only returns 404 answers for
+	// security reasons. Serving files from the staticRoot directory has to
+	// be enabled intentionally.
+	staticServer := http.NotFoundHandler()
+	if serveStatic {
+		if len(strings.TrimSpace(staticRoot)) == 0 {
+			return nil, fmt.Errorf("staticroot cannot be empty, " +
+				"must contain path to directory that " +
+				"contains index.html")
+		}
+		staticServer = http.FileServer(http.Dir(staticRoot))
+	}
+
 	proxy := &Proxy{
 		staticServer:  staticServer,
 		authenticator: auth,

@@ -71,7 +71,7 @@ func TestProxyHTTP(t *testing.T) {
 	}}
 
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, "static")
+	p, err := proxy.New(mockAuth, services, true, "static")
 	if err != nil {
 		t.Fatalf("failed to create new proxy: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestProxyGRPC(t *testing.T) {
 
 	// Create the proxy server and start serving on TLS.
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, "static")
+	p, err := proxy.New(mockAuth, services, true, "static")
 	if err != nil {
 		t.Fatalf("failed to create new proxy: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestWhitelistHTTP(t *testing.T) {
 	}}
 
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, "static")
+	p, err := proxy.New(mockAuth, services, true, "static")
 	if err != nil {
 		t.Fatalf("failed to create new proxy: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestWhitelistGRPC(t *testing.T) {
 
 	// Create the proxy server and start serving on TLS.
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, "static")
+	p, err := proxy.New(mockAuth, services, true, "static")
 	if err != nil {
 		t.Fatalf("failed to create new proxy: %v", err)
 	}
