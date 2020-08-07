@@ -390,7 +390,7 @@ func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator,
 		Secrets:        newSecretStore(etcdClient),
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 	})
-	authenticator := auth.NewLsatAuthenticator(minter)
+	authenticator := auth.NewLsatAuthenticator(minter, challenger)
 	return proxy.New(
 		authenticator, cfg.Services, cfg.ServeStatic, cfg.StaticRoot,
 	)
