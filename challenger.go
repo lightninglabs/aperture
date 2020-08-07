@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/loop/lndclient"
+	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 )
