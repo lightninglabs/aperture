@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lightninglabs/aperture/internal/test"
 	"github.com/lightninglabs/lndclient"
-	"github.com/lightninglabs/loop/test"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"google.golang.org/grpc"
