@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/coreos/etcd/clientv3"
@@ -17,6 +18,7 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
@@ -63,16 +65,16 @@ var (
 // Main is the true entrypoint of Kirin.
 func Main() {
 	// TODO: Prevent from running twice.
-	err := start()
+	err := run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-// start sets up the proxy server and runs it. This function blocks until a
+// run sets up the proxy server and runs it. This function blocks until a
 // shutdown signal is received.
-func start() error {
+func run() error {
 	// First, parse configuration file and set up logging.
 	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
 	cfg, err := getConfig(configFile)
@@ -150,17 +152,22 @@ func start() error {
 		}
 	}
 
-	// The ListenAndServeTLS below will block until shut down or an error
-	// occurs. So we can just defer a cleanup function here that will close
-	// everything on shutdown.
-	defer cleanup(etcdClient, httpsServer)
-
-	// Finally start the server.
+	// Finally run the server.
+	var (
+		wg   sync.WaitGroup
+		quit = make(chan struct{})
+	)
 	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
 
 	errChan := make(chan error)
+	wg.Add(1)
 	go func() {
-		errChan <- serveFn()
+		defer wg.Done()
+
+		select {
+		case errChan <- serveFn():
+		case <-quit:
+		}
 	}()
 
 	// If we need to listen over Tor as well, we'll set up the onion
@@ -170,6 +177,7 @@ func start() error {
 	// will only be reached through the onion services, which already
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
+	var torHTTPServer *http.Server
 	if cfg.Tor != nil && (cfg.Tor.V2 || cfg.Tor.V3) {
 		torController, err := initTorListener(cfg, etcdClient)
 		if err != nil {
@@ -179,17 +187,51 @@ func start() error {
 			_ = torController.Stop()
 		}()
 
-		httpServer := &http.Server{
+		torHTTPServer = &http.Server{
 			Addr:    fmt.Sprintf("localhost:%d", cfg.Tor.ListenPort),
 			Handler: h2c.NewHandler(handler, &http2.Server{}),
 		}
+		wg.Add(1)
 		go func() {
-			errChan <- httpServer.ListenAndServe()
+			defer wg.Done()
+
+			select {
+			case errChan <- torHTTPServer.ListenAndServe():
+			case <-quit:
+			}
 		}()
-		defer httpServer.Close()
 	}
 
-	return <-errChan
+	// Now that we've started everything, intercept any interrupt signals
+	// and wait for any of them to arrive.
+	signal.Intercept()
+
+	var returnErr error
+	select {
+	case <-signal.ShutdownChannel():
+		log.Infof("Received interrupt signal, shutting down aperture.")
+
+	case err := <-errChan:
+		log.Errorf("Error while running aperture: %v", err)
+		returnErr = err
+	}
+
+	// Shut down our client and server connections now. This should cause
+	// the first goroutine to quit.
+	cleanup(etcdClient, httpsServer)
+
+	// If we started a tor server as well, shut it down now too to cause the
+	// second goroutine to quit.
+	if torHTTPServer != nil {
+		_ = torHTTPServer.Close()
+	}
+
+	// Now we wait for the goroutines to exit before we return. The defers
+	// will take care of the rest of our started resources.
+	close(quit)
+	wg.Wait()
+
+	return returnErr
 }
 
 // fileExists reports whether the named file or directory exists.
