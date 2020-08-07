@@ -95,14 +95,26 @@ func start() error {
 		return fmt.Errorf("unable to connect to etcd: %v", err)
 	}
 
-	// Create the proxy and connect it to lnd.
+	// Create our challenger that uses our backing lnd node to create
+	// invoices and check their settlement status.
 	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
 		return &lnrpc.Invoice{
 			Memo:  "LSAT",
 			Value: price,
 		}, nil
 	}
-	servicesProxy, err := createProxy(cfg, genInvoiceReq, etcdClient)
+	challenger, err := NewLndChallenger(cfg.Authenticator, genInvoiceReq)
+	if err != nil {
+		return err
+	}
+	err = challenger.Start()
+	if err != nil {
+		return err
+	}
+	defer challenger.Stop()
+
+	// Create the proxy and connect it to lnd.
+	servicesProxy, err := createProxy(cfg, challenger, etcdClient)
 	if err != nil {
 		return err
 	}
@@ -378,13 +390,9 @@ func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *config, genInvoiceReq InvoiceRequestGenerator,
+func createProxy(cfg *config, challenger *LndChallenger,
 	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
 
-	challenger, err := NewLndChallenger(cfg.Authenticator, genInvoiceReq)
-	if err != nil {
-		return nil, err
-	}
 	minter := mint.New(&mint.Config{
 		Challenger:     challenger,
 		Secrets:        newSecretStore(etcdClient),
