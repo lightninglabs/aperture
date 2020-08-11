@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcutil"
-	"github.com/lightninglabs/loop/lndclient"
-	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
+	"github.com/lightninglabs/lndclient"
+	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/zpay32"
 	"google.golang.org/grpc"
@@ -400,13 +400,13 @@ func (i *ClientInterceptor) trackPayment(ctx context.Context, token *Token) erro
 			// If the payment was successful, we have all the
 			// information we need and we can return the fully paid
 			// token.
-			case routerrpc.PaymentState_SUCCEEDED:
+			case lnrpc.Payment_SUCCEEDED:
 				extractPaymentDetails(token, result)
 				return i.store.StoreToken(token)
 
 			// The payment is still in transit, we'll give it more
 			// time to complete.
-			case routerrpc.PaymentState_IN_FLIGHT:
+			case lnrpc.Payment_IN_FLIGHT:
 
 			// Any other state means either error or timeout.
 			default:
@@ -441,8 +441,6 @@ func isPaymentRequired(err error) bool {
 // from the payment status and stores them in the token.
 func extractPaymentDetails(token *Token, status lndclient.PaymentStatus) {
 	token.Preimage = status.Preimage
-	total := status.Route.TotalAmount
-	fees := status.Route.TotalFees()
-	token.AmountPaid = total - fees
-	token.RoutingFeePaid = fees
+	token.AmountPaid = status.Value
+	token.RoutingFeePaid = status.Fee
 }

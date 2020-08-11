@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/lightninglabs/loop/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
@@ -111,7 +110,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
 			"unmarshal macaroon: %v", err)
 	}
-	preimageHex, ok := lsat.HasCaveat(mac, lsat.PreimageKey)
+	preimageHex, ok := HasCaveat(mac, PreimageKey)
 	if !ok {
 		return nil, lntypes.Preimage{}, errors.New("preimage caveat " +
 			"not found")

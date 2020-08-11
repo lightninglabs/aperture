@@ -8,12 +8,14 @@ import (
 
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
+	"github.com/lightningnetwork/lnd/lnrpc"
 )
 
 // LsatAuthenticator is an authenticator that uses the LSAT protocol to
 // authenticate requests.
 type LsatAuthenticator struct {
-	minter Minter
+	minter  Minter
+	checker InvoiceChecker
 }
 
 // A compile time flag to ensure the LsatAuthenticator satisfies the
@@ -22,8 +24,13 @@ var _ Authenticator = (*LsatAuthenticator)(nil)
 
 // NewLsatAuthenticator creates a new authenticator that authenticates requests
 // based on LSAT tokens.
-func NewLsatAuthenticator(minter Minter) *LsatAuthenticator {
-	return &LsatAuthenticator{minter: minter}
+func NewLsatAuthenticator(minter Minter,
+	checker InvoiceChecker) *LsatAuthenticator {
+
+	return &LsatAuthenticator{
+		minter:  minter,
+		checker: checker,
+	}
 }
 
 // Accept returns whether or not the header successfully authenticates the user
@@ -48,6 +55,16 @@ func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool
 	err = l.minter.VerifyLSAT(context.Background(), verificationParams)
 	if err != nil {
 		log.Debugf("Deny: LSAT validation failed: %v", err)
+		return false
+	}
+
+	// Make sure the backend has the invoice recorded as settled.
+	err = l.checker.VerifyInvoiceStatus(
+		preimage.Hash(), lnrpc.Invoice_SETTLED,
+		DefaultInvoiceLookupTimeout,
+	)
+	if err != nil {
+		log.Debugf("Deny: Invoice status mismatch: %v", err)
 		return false
 	}
 

@@ -3,6 +3,7 @@ package auth_test
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -44,9 +45,10 @@ func TestLsatAuthenticator(t *testing.T) {
 			testMacBytes,
 		)
 		headerTests = []struct {
-			id     string
-			header *http.Header
-			result bool
+			id       string
+			header   *http.Header
+			checkErr error
+			result   bool
 		}{
 			{
 				id:     "empty header",
@@ -124,11 +126,23 @@ func TestLsatAuthenticator(t *testing.T) {
 				},
 				result: true,
 			},
+			{
+				id: "valid macaroon header, wrong invoice state",
+				header: &http.Header{
+					lsat.HeaderMacaroon: []string{
+						testMacHex,
+					},
+				},
+				checkErr: fmt.Errorf("nope"),
+				result:   false,
+			},
 		}
 	)
 
-	a := auth.NewLsatAuthenticator(&mockMint{})
+	c := &mockChecker{}
+	a := auth.NewLsatAuthenticator(&mockMint{}, c)
 	for _, testCase := range headerTests {
+		c.err = testCase.checkErr
 		result := a.Accept(testCase.header, "test")
 		if result != testCase.result {
 			t.Fatalf("test case %s failed. got %v expected %v",
