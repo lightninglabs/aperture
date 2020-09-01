@@ -63,6 +63,7 @@ var (
 		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
 	}
 )
 
@@ -323,7 +324,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 		return &tls.Config{
 			GetCertificate: manager.GetCertificate,
 			CipherSuites:   http2TLSCipherSuites,
-			MinVersion:     tls.VersionTLS12,
+			MinVersion:     tls.VersionTLS10,
 		}, nil
 	}
 
@@ -399,7 +400,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{certData},
 		CipherSuites: http2TLSCipherSuites,
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS10,
 	}, nil
 }
 
