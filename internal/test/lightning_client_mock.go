@@ -14,6 +14,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/routing/route"
 	"github.com/lightningnetwork/lnd/zpay32"
 	"golang.org/x/net/context"
 )
@@ -160,7 +161,7 @@ func (h *mockLightningClient) LookupInvoice(_ context.Context,
 
 // ListTransactions returns all known transactions of the backing lnd node.
 func (h *mockLightningClient) ListTransactions(
-	_ context.Context) ([]lndclient.Transaction, error) {
+	_ context.Context, _, _ int32) ([]lndclient.Transaction, error) {
 
 	h.lnd.lock.Lock()
 	txs := h.lnd.Transactions
@@ -181,6 +182,13 @@ func (h *mockLightningClient) ClosedChannels(_ context.Context) ([]lndclient.Clo
 	error) {
 
 	return h.lnd.ClosedChannels, nil
+}
+
+// PendingChannels returns a list of lnd's pending channels.
+func (h *mockLightningClient) PendingChannels(_ context.Context) (
+	*lndclient.PendingChannels, error) {
+
+	return nil, nil
 }
 
 // ForwardingHistory returns the mock's set of forwarding events.
@@ -237,4 +245,26 @@ func (h *mockLightningClient) DecodePaymentRequest(_ context.Context,
 	_ string) (*lndclient.PaymentRequest, error) {
 
 	return nil, nil
+}
+
+// OpenChannel opens a channel to the peer provided with the amounts
+// specified.
+func (h *mockLightningClient) OpenChannel(_ context.Context, _ route.Vertex,
+	_, _ btcutil.Amount) (*wire.OutPoint, error) {
+
+	return nil, nil
+}
+
+// CloseChannel closes the channel provided.
+func (h *mockLightningClient) CloseChannel(_ context.Context, _ *wire.OutPoint,
+	_ bool) (chan lndclient.CloseChannelUpdate, chan error, error) {
+
+	return nil, nil, nil
+}
+
+// Connect attempts to connect to a peer at the host specified.
+func (h *mockLightningClient) Connect(_ context.Context, _ route.Vertex,
+	_ string) error {
+
+	return nil
 }
