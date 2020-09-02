@@ -3,20 +3,26 @@ package aperture
 import (
 	"github.com/btcsuite/btclog"
 	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/build"
 )
+
+const Subsystem = "APER"
 
 var (
 	logWriter = build.NewRotatingLogWriter()
 
-	log = build.NewSubLogger("MAIN", logWriter.GenSubLogger)
+	log = build.NewSubLogger(Subsystem, logWriter.GenSubLogger)
 )
 
 func init() {
-	setSubLogger("MAIN", log, nil)
+	setSubLogger(Subsystem, log, nil)
 	addSubLogger(auth.Subsystem, auth.UseLogger)
-	addSubLogger("PRXY", proxy.UseLogger)
+	addSubLogger(lsat.Subsystem, lsat.UseLogger)
+	addSubLogger(proxy.Subsystem, proxy.UseLogger)
+	addSubLogger("LNDC", lndclient.UseLogger)
 }
 
 // addSubLogger is a helper method to conveniently create and register the
