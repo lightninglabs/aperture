@@ -191,17 +191,39 @@ func (l *LndChallenger) readInvoiceStream(
 		switch {
 
 		case err == io.EOF:
+			// The connection is shutting down, we can't continue
+			// to function properly. Signal the error to the main
+			// goroutine to force a shutdown/restart.
+			select {
+			case l.errChan <- err:
+			case <-l.quit:
+			default:
+			}
+
 			return
 
 		case err != nil && strings.Contains(
 			err.Error(), context.Canceled.Error(),
 		):
 
+			// The context has been canceled, we are shutting down.
+			// So no need to forward the error to the main
+			// goroutine.
 			return
 
 		case err != nil:
 			log.Errorf("Received error from invoice subscription: "+
 				"%v", err)
+
+			// The connection is faulty, we can't continue to
+			// function properly. Signal the error to the main
+			// goroutine to force a shutdown/restart.
+			select {
+			case l.errChan <- err:
+			case <-l.quit:
+			default:
+			}
+
 			return
 
 		default:

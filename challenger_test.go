@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 var (
-	defaultTimeout = 20 * time.Millisecond
+	defaultTimeout = 100 * time.Millisecond
 )
 
 type invoiceStreamMock struct {
@@ -134,7 +135,7 @@ func TestLndChallenger(t *testing.T) {
 
 	// Now mock the lnd backend and create a challenger instance that we can
 	// test.
-	c, invoiceMock, _ := newChallenger()
+	c, invoiceMock, mainErrChan := newChallenger()
 
 	// Creating a new challenge should add an invoice to the lnd backend.
 	req, hash, err := c.NewChallenge(1337)
@@ -218,6 +219,33 @@ func TestLndChallenger(t *testing.T) {
 				"invoice status not correct before timeout",
 			)
 		}
+	}
+
+	// Finally test that if an error occurs in the invoice subscription the
+	// challenger reports it on the main error channel to cause a shutdown
+	// of aperture. The mock's error channel is buffered so we can send
+	// directly.
+	invoiceMock.errChan <- fmt.Errorf("an expected error")
+	select {
+	case err := <-mainErrChan:
+		require.Error(t, err)
+
+		// Make sure that the goroutine exited.
+		done := make(chan struct{})
+		go func() {
+			c.wg.Wait()
+			done <- struct{}{}
+		}()
+
+		select {
+		case <-done:
+
+		case <-time.After(defaultTimeout):
+			t.Fatalf("wait group didn't finish before timeout")
+		}
+
+	case <-time.After(defaultTimeout):
+		t.Fatalf("error not received on main chan before the timeout")
 	}
 
 	invoiceMock.stop()
