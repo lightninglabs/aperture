@@ -110,7 +110,10 @@ func run() error {
 			Value: price,
 		}, nil
 	}
-	challenger, err := NewLndChallenger(cfg.Authenticator, genInvoiceReq)
+	errChan := make(chan error)
+	challenger, err := NewLndChallenger(
+		cfg.Authenticator, genInvoiceReq, errChan,
+	)
 	if err != nil {
 		return err
 	}
@@ -164,7 +167,6 @@ func run() error {
 	)
 	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
 
-	errChan := make(chan error)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

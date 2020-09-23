@@ -49,6 +49,8 @@ type LndChallenger struct {
 	invoicesCancel func()
 	invoicesCond   *sync.Cond
 
+	errChan chan<- error
+
 	quit chan struct{}
 	wg   sync.WaitGroup
 }
@@ -66,8 +68,8 @@ const (
 
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
-func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
-	*LndChallenger, error) {
+func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator,
+	errChan chan<- error) (*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
@@ -89,6 +91,7 @@ func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		quit:          make(chan struct{}),
+		errChan:       errChan,
 	}, nil
 }
 

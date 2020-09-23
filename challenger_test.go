@@ -20,6 +20,7 @@ type invoiceStreamMock struct {
 	lnrpc.Lightning_SubscribeInvoicesClient
 
 	updateChan chan *lnrpc.Invoice
+	errChan    chan error
 	quit       chan struct{}
 }
 
@@ -27,6 +28,9 @@ func (i *invoiceStreamMock) Recv() (*lnrpc.Invoice, error) {
 	select {
 	case msg := <-i.updateChan:
 		return msg, nil
+
+	case err := <-i.errChan:
+		return nil, err
 
 	case <-i.quit:
 		return nil, context.Canceled
@@ -36,6 +40,7 @@ func (i *invoiceStreamMock) Recv() (*lnrpc.Invoice, error) {
 type mockInvoiceClient struct {
 	invoices   []*lnrpc.Invoice
 	updateChan chan *lnrpc.Invoice
+	errChan    chan error
 	quit       chan struct{}
 
 	lastAddIndex uint64
@@ -60,6 +65,7 @@ func (m *mockInvoiceClient) SubscribeInvoices(_ context.Context,
 
 	return &invoiceStreamMock{
 		updateChan: m.updateChan,
+		errChan:    m.errChan,
 		quit:       m.quit,
 	}, nil
 }
@@ -81,9 +87,10 @@ func (m *mockInvoiceClient) stop() {
 	close(m.quit)
 }
 
-func newChallenger() (*LndChallenger, *mockInvoiceClient) {
+func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 	mockClient := &mockInvoiceClient{
 		updateChan: make(chan *lnrpc.Invoice),
+		errChan:    make(chan error, 1),
 		quit:       make(chan struct{}),
 	}
 	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
@@ -91,6 +98,7 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient) {
 			nil
 	}
 	invoicesMtx := &sync.Mutex{}
+	mainErrChan := make(chan error)
 	return &LndChallenger{
 		client:        mockClient,
 		genInvoiceReq: genInvoiceReq,
@@ -98,7 +106,8 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient) {
 		quit:          make(chan struct{}),
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
-	}, mockClient
+		errChan:       mainErrChan,
+	}, mockClient, mainErrChan
 }
 
 func newInvoice(hash lntypes.Hash, addIndex uint64,
@@ -119,12 +128,13 @@ func TestLndChallenger(t *testing.T) {
 
 	// First of all, test that the NewLndChallenger doesn't allow a nil
 	// invoice generator function.
-	_, err := NewLndChallenger(nil, nil)
+	errChan := make(chan error)
+	_, err := NewLndChallenger(nil, nil, errChan)
 	require.Error(t, err)
 
 	// Now mock the lnd backend and create a challenger instance that we can
 	// test.
-	c, invoiceMock := newChallenger()
+	c, invoiceMock, _ := newChallenger()
 
 	// Creating a new challenge should add an invoice to the lnd backend.
 	req, hash, err := c.NewChallenge(1337)
