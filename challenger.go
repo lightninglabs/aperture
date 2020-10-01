@@ -49,6 +49,8 @@ type LndChallenger struct {
 	invoicesCancel func()
 	invoicesCond   *sync.Cond
 
+	errChan chan<- error
+
 	quit chan struct{}
 	wg   sync.WaitGroup
 }
@@ -66,8 +68,8 @@ const (
 
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
-func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
-	*LndChallenger, error) {
+func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator,
+	errChan chan<- error) (*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
@@ -89,6 +91,7 @@ func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator) (
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		quit:          make(chan struct{}),
+		errChan:       errChan,
 	}, nil
 }
 
@@ -188,17 +191,39 @@ func (l *LndChallenger) readInvoiceStream(
 		switch {
 
 		case err == io.EOF:
+			// The connection is shutting down, we can't continue
+			// to function properly. Signal the error to the main
+			// goroutine to force a shutdown/restart.
+			select {
+			case l.errChan <- err:
+			case <-l.quit:
+			default:
+			}
+
 			return
 
 		case err != nil && strings.Contains(
 			err.Error(), context.Canceled.Error(),
 		):
 
+			// The context has been canceled, we are shutting down.
+			// So no need to forward the error to the main
+			// goroutine.
 			return
 
 		case err != nil:
 			log.Errorf("Received error from invoice subscription: "+
 				"%v", err)
+
+			// The connection is faulty, we can't continue to
+			// function properly. Signal the error to the main
+			// goroutine to force a shutdown/restart.
+			select {
+			case l.errChan <- err:
+			case <-l.quit:
+			default:
+			}
+
 			return
 
 		default:

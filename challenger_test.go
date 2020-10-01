@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -13,13 +14,14 @@ import (
 )
 
 var (
-	defaultTimeout = 20 * time.Millisecond
+	defaultTimeout = 100 * time.Millisecond
 )
 
 type invoiceStreamMock struct {
 	lnrpc.Lightning_SubscribeInvoicesClient
 
 	updateChan chan *lnrpc.Invoice
+	errChan    chan error
 	quit       chan struct{}
 }
 
@@ -27,6 +29,9 @@ func (i *invoiceStreamMock) Recv() (*lnrpc.Invoice, error) {
 	select {
 	case msg := <-i.updateChan:
 		return msg, nil
+
+	case err := <-i.errChan:
+		return nil, err
 
 	case <-i.quit:
 		return nil, context.Canceled
@@ -36,6 +41,7 @@ func (i *invoiceStreamMock) Recv() (*lnrpc.Invoice, error) {
 type mockInvoiceClient struct {
 	invoices   []*lnrpc.Invoice
 	updateChan chan *lnrpc.Invoice
+	errChan    chan error
 	quit       chan struct{}
 
 	lastAddIndex uint64
@@ -60,6 +66,7 @@ func (m *mockInvoiceClient) SubscribeInvoices(_ context.Context,
 
 	return &invoiceStreamMock{
 		updateChan: m.updateChan,
+		errChan:    m.errChan,
 		quit:       m.quit,
 	}, nil
 }
@@ -81,9 +88,10 @@ func (m *mockInvoiceClient) stop() {
 	close(m.quit)
 }
 
-func newChallenger() (*LndChallenger, *mockInvoiceClient) {
+func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 	mockClient := &mockInvoiceClient{
 		updateChan: make(chan *lnrpc.Invoice),
+		errChan:    make(chan error, 1),
 		quit:       make(chan struct{}),
 	}
 	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
@@ -91,6 +99,7 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient) {
 			nil
 	}
 	invoicesMtx := &sync.Mutex{}
+	mainErrChan := make(chan error)
 	return &LndChallenger{
 		client:        mockClient,
 		genInvoiceReq: genInvoiceReq,
@@ -98,7 +107,8 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient) {
 		quit:          make(chan struct{}),
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
-	}, mockClient
+		errChan:       mainErrChan,
+	}, mockClient, mainErrChan
 }
 
 func newInvoice(hash lntypes.Hash, addIndex uint64,
@@ -119,12 +129,13 @@ func TestLndChallenger(t *testing.T) {
 
 	// First of all, test that the NewLndChallenger doesn't allow a nil
 	// invoice generator function.
-	_, err := NewLndChallenger(nil, nil)
+	errChan := make(chan error)
+	_, err := NewLndChallenger(nil, nil, errChan)
 	require.Error(t, err)
 
 	// Now mock the lnd backend and create a challenger instance that we can
 	// test.
-	c, invoiceMock := newChallenger()
+	c, invoiceMock, mainErrChan := newChallenger()
 
 	// Creating a new challenge should add an invoice to the lnd backend.
 	req, hash, err := c.NewChallenge(1337)
@@ -208,6 +219,33 @@ func TestLndChallenger(t *testing.T) {
 				"invoice status not correct before timeout",
 			)
 		}
+	}
+
+	// Finally test that if an error occurs in the invoice subscription the
+	// challenger reports it on the main error channel to cause a shutdown
+	// of aperture. The mock's error channel is buffered so we can send
+	// directly.
+	invoiceMock.errChan <- fmt.Errorf("an expected error")
+	select {
+	case err := <-mainErrChan:
+		require.Error(t, err)
+
+		// Make sure that the goroutine exited.
+		done := make(chan struct{})
+		go func() {
+			c.wg.Wait()
+			done <- struct{}{}
+		}()
+
+		select {
+		case <-done:
+
+		case <-time.After(defaultTimeout):
+			t.Fatalf("wait group didn't finish before timeout")
+		}
+
+	case <-time.After(defaultTimeout):
+		t.Fatalf("error not received on main chan before the timeout")
 	}
 
 	invoiceMock.stop()
