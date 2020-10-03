@@ -112,7 +112,7 @@ func run() error {
 	}
 	errChan := make(chan error)
 	challenger, err := NewLndChallenger(
-		cfg.Authenticator, genInvoiceReq, errChan,
+		cfg.Authenticator, genInvoiceReq, nil, errChan,
 	)
 	if err != nil {
 		return err
