@@ -101,8 +101,8 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 	invoicesMtx := &sync.Mutex{}
 	mainErrChan := make(chan error)
 	return &LndChallenger{
-		client:        mockClient,
-		genInvoiceReq: genInvoiceReq,
+		Client:        mockClient,
+		GenInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
 		quit:          make(chan struct{}),
 		invoicesMtx:   invoicesMtx,
