@@ -452,7 +452,7 @@ func createProxy(cfg *config, challenger *LndChallenger,
 	minter := mint.New(&mint.Config{
 		Challenger:     challenger,
 		Secrets:        newSecretStore(etcdClient),
-		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+		ServiceLimiter: NewStaticServiceLimiter(cfg.Services),
 	})
 	authenticator := auth.NewLsatAuthenticator(minter, challenger)
 	return proxy.New(
