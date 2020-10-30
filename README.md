@@ -8,14 +8,14 @@ Aperture is a HTTP 402 reverse proxy that supports proxying requests for gRPC
 (HTTP/2) and REST (HTTP/1 and HTTP/2) backends using the [LSAT Protocol
 Standard](https://lsat.tech/). LSAT stands for: Lightning Service
 Authentication Token. They combine HTTP 402, macaroons, and the Lightning
-Network to create a new standard for authentication and paid servies on the
+Network to create a new standard for authentication and paid services on the
 web.
 
 LSATs are a new standard protocol for authentication and paid APIs developed by
 Lightning Labs. LSATs can serve both as authentication, as well as a payment
 mechanism (one can view it as a ticket) for paid APIs. In order to obtain a
 token, we require the user to pay us over Lightning in order to obtain a
-pre-image, which itself is a cryptographic component of the final LSAT token
+preimage, which itself is a cryptographic component of the final LSAT token
 
 The implementation of the authentication token is chosen to be macaroons, as
 they allow us to package attributes and capabilities along with the token. This
@@ -28,7 +28,7 @@ services and APIs.
 
 **lnd**
 
-* Make sure lnd ports are reachable.
+* Make sure `lnd` ports are reachable.
 
 **aperture**
 
