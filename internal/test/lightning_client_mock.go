@@ -20,6 +20,7 @@ import (
 )
 
 type mockLightningClient struct {
+	lndclient.LightningClient
 	lnd *LndMockServices
 	wg  sync.WaitGroup
 }
@@ -250,21 +251,22 @@ func (h *mockLightningClient) DecodePaymentRequest(_ context.Context,
 // OpenChannel opens a channel to the peer provided with the amounts
 // specified.
 func (h *mockLightningClient) OpenChannel(_ context.Context, _ route.Vertex,
-	_, _ btcutil.Amount) (*wire.OutPoint, error) {
+	_, _ btcutil.Amount, _ bool) (*wire.OutPoint, error) {
 
 	return nil, nil
 }
 
 // CloseChannel closes the channel provided.
 func (h *mockLightningClient) CloseChannel(_ context.Context, _ *wire.OutPoint,
-	_ bool) (chan lndclient.CloseChannelUpdate, chan error, error) {
+	_ bool, _ int32, _ btcutil.Address) (chan lndclient.CloseChannelUpdate,
+	chan error, error) {
 
 	return nil, nil, nil
 }
 
 // Connect attempts to connect to a peer at the host specified.
 func (h *mockLightningClient) Connect(_ context.Context, _ route.Vertex,
-	_ string) error {
+	_ string, _ bool) error {
 
 	return nil
 }

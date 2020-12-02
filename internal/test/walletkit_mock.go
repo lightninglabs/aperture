@@ -17,6 +17,7 @@ import (
 )
 
 type mockWalletKit struct {
+	lndclient.WalletKitClient
 	lnd          *LndMockServices
 	keyIndex     int32
 	feeEstimates map[int32]chainfee.SatPerKWeight
@@ -80,14 +81,16 @@ func (m *mockWalletKit) NextAddr(ctx context.Context) (btcutil.Address, error) {
 	return addr, nil
 }
 
-func (m *mockWalletKit) PublishTransaction(ctx context.Context, tx *wire.MsgTx) error {
+func (m *mockWalletKit) PublishTransaction(_ context.Context, tx *wire.MsgTx,
+	_ string) error {
+
 	m.lnd.AddTx(tx)
 	m.lnd.TxPublishChannel <- tx
 	return nil
 }
 
 func (m *mockWalletKit) SendOutputs(ctx context.Context, outputs []*wire.TxOut,
-	feeRate chainfee.SatPerKWeight) (*wire.MsgTx, error) {
+	feeRate chainfee.SatPerKWeight, _ string) (*wire.MsgTx, error) {
 
 	var inputTxHash chainhash.Hash
 

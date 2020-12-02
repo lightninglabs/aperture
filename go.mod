@@ -12,8 +12,8 @@ require (
 	github.com/golang/protobuf v1.3.2
 	github.com/jonboulle/clockwork v0.2.0 // indirect
 	github.com/json-iterator/go v1.1.10 // indirect
-	github.com/lightninglabs/lndclient v0.11.0-0
-	github.com/lightningnetwork/lnd v0.11.0-beta
+	github.com/lightninglabs/lndclient v0.11.0-4
+	github.com/lightningnetwork/lnd v0.11.1-beta
 	github.com/lightningnetwork/lnd/cert v1.0.2
 	github.com/stretchr/testify v1.5.1
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20200122045848-3419fae592fc // indirect
