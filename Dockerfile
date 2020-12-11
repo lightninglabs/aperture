@@ -1,21 +1,22 @@
-FROM golang:1.13-alpine as builder
-
-# Copy in the local repository to build from.
-COPY . /go/src/github.com/lightninglabs/aperture
+FROM golang:1.15.5-alpine as builder
 
 # Force Go to use the cgo based DNS resolver. This is required to ensure DNS
 # queries required to connect to linked containers succeed.
 ENV GODEBUG netdns=cgo
 
-# Explicitly turn on the use of modules (until this becomes the default).
-ENV GO111MODULE on
+# Pass a tag, branch or a commit using build-arg. This allows a docker image to
+# be built from a specified Git state. The default image will use the Git tip of
+# master by default.
+ARG checkout="master"
 
 # Install dependencies and install/build aperture
 RUN apk add --no-cache --update alpine-sdk \
     git \
     make \
-&&  cd /go/src/github.com/lightninglabs/aperture/cmd \
-&&  go install ./...
+&& git clone https://github.com/lightninglabs/aperture /go/src/github.com/lightninglabs/aperture \
+&& cd /go/src/github.com/lightninglabs/aperture \
+&& git checkout $checkout \
+&& make install
 
 # Start a new, final image to reduce size.
 FROM alpine as final

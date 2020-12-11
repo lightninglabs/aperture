@@ -91,6 +91,13 @@ func run() error {
 		return fmt.Errorf("unable to set up logging: %v", err)
 	}
 
+	// Before starting everything, make sure we can intercept any interrupt
+	// signals so we can block on waiting for them later.
+	err = signal.Intercept()
+	if err != nil {
+		return err
+	}
+
 	// Initialize our etcd client.
 	etcdClient, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{cfg.Etcd.Host},
@@ -208,10 +215,6 @@ func run() error {
 			}
 		}()
 	}
-
-	// Now that we've started everything, intercept any interrupt signals
-	// and wait for any of them to arrive.
-	signal.Intercept()
 
 	var returnErr error
 	select {
