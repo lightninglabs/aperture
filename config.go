@@ -42,7 +42,7 @@ type torConfig struct {
 }
 
 type config struct {
-	// ListenAddr is the listening address that we should use to allow Kirin
+	// ListenAddr is the listening address that we should use to allow Aperture
 	// to listen for requests.
 	ListenAddr string `long:"listenaddr" description:"The interface we should listen on for client requests."`
 
@@ -72,10 +72,10 @@ type config struct {
 	Tor *torConfig `long:"tor" description:"Configuration for the Tor instance backing the proxy."`
 
 	// Services is a list of JSON objects in string format, which specify
-	// each backend service to Kirin.
-	Services []*proxy.Service `long:"service" description:"Configurations for each Kirin backend service."`
+	// each backend service to Aperture.
+	Services []*proxy.Service `long:"service" description:"Configurations for each Aperture backend service."`
 
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
-	DebugLevel string `long:"debuglevel" description:"Debug level for the Kirin application and its subsystems."`
+	DebugLevel string `long:"debuglevel" description:"Debug level for the Aperture application and its subsystems."`
 }

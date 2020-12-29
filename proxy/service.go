@@ -31,7 +31,7 @@ const (
 )
 
 // Service generically specifies configuration data for backend services to the
-// Kirin proxy.
+// Aperture proxy.
 type Service struct {
 	// Name is the name of the LSAT-enabled service.
 	Name string `long:"name" description:"Name of the LSAT-enabled service"`
