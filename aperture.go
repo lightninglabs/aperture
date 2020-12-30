@@ -67,7 +67,7 @@ var (
 	}
 )
 
-// Main is the true entrypoint of Kirin.
+// Main is the true entrypoint of Aperture.
 func Main() {
 	// TODO: Prevent from running twice.
 	err := run()
