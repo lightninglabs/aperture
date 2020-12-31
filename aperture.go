@@ -2,12 +2,14 @@ package aperture
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/crypto/scrypt"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"gopkg.in/yaml.v2"
@@ -51,6 +54,12 @@ const (
 	// the certificate validity length to make the chances bigger for it to
 	// be refreshed on a routine server restart.
 	selfSignedCertExpiryMargin = selfSignedCertValidity / 2
+
+	// minUserSeedLength is how long user specified seed should at least be
+	minUserSeedLength = 16
+
+	// keySize is how long the key derived from user provided seed will be
+	keySize = 32
 )
 
 var (
@@ -98,15 +107,19 @@ func run() error {
 		return err
 	}
 
+	var etcdClient *clientv3.Client
 	// Initialize our etcd client.
-	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.Etcd.Host},
-		DialTimeout: 5 * time.Second,
-		Username:    cfg.Etcd.User,
-		Password:    cfg.Etcd.Password,
-	})
-	if err != nil {
-		return fmt.Errorf("unable to connect to etcd: %v", err)
+	if cfg.Etcd != nil && cfg.Etcd.Host != "" {
+		etcdClient, err = clientv3.New(clientv3.Config{
+			Endpoints:   []string{cfg.Etcd.Host},
+			DialTimeout: 5 * time.Second,
+			Username:    cfg.Etcd.User,
+			Password:    cfg.Etcd.Password,
+		})
+		if err != nil {
+			log.Warnf("unable to connect to etcd: %v", err)
+			etcdClient = nil
+		}
 	}
 
 	// Create our challenger that uses our backing lnd node to create
@@ -193,6 +206,7 @@ func run() error {
 	// relatively safe.
 	var torHTTPServer *http.Server
 	if cfg.Tor != nil && (cfg.Tor.V2 || cfg.Tor.V3) {
+
 		torController, err := initTorListener(cfg, etcdClient)
 		if err != nil {
 			return err
@@ -415,10 +429,21 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error) {
 	// Establish a controller connection with the backing Tor server and
 	// proceed to create the requested onion services.
+
+	var store tor.OnionStore
+	if cfg.Tor.FileStorage {
+		store = newOnionStoreFile(apertureDataDir)
+	} else {
+		if etcd == nil {
+			return nil, errors.New("tor requires etcd")
+		}
+		store = newOnionStore(etcd)
+	}
+
 	onionCfg := tor.AddOnionConfig{
 		VirtualPort: int(cfg.Tor.VirtualPort),
 		TargetPorts: []int{int(cfg.Tor.ListenPort)},
-		Store:       newOnionStore(etcd),
+		Store:       store,
 	}
 	torController := tor.NewController(cfg.Tor.Control, "", "")
 	if err := torController.Start(); err != nil {
@@ -448,14 +473,55 @@ func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error
 	return torController, nil
 }
 
+// verifyAndStretchKey makes sure a passphrase from user is stretched to proper
+// length (keySize) by using a memory-hard password derivation function.
+// Completely weak userKeys are rejected as well.
+func verifyAndStretchKey(userKey string) ([keySize]byte, error) {
+	var result [keySize]byte
+
+	// Make sure to catch if key is too short or when somebody did not bother to change provided samples
+	// (something_very_unpredictable is quite predictable)
+	if len(userKey) < minUserSeedLength || strings.HasPrefix(userKey, "something_very_unpredictable") {
+		return result, errors.New("weak user provided key")
+	}
+
+	ret, err := scrypt.Key([]byte(userKey[4:]), []byte(userKey[0:4]), 8192, 8, 1, keySize)
+	if err != nil {
+		return result, err
+	}
+
+	copy(result[:], ret)
+
+	return result, nil
+}
+
 // createProxy creates the proxy with all the services it needs.
 func createProxy(cfg *config, challenger *LndChallenger,
 	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
 
+	var (
+		key [keySize]byte
+		err error
+	)
+
+	usePseudoRandomness := cfg.StaticSecret != nil && cfg.StaticSecret.Enabled && cfg.StaticSecret.Seed != ""
+
+	if usePseudoRandomness {
+		key, err = verifyAndStretchKey(cfg.StaticSecret.Seed)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if !usePseudoRandomness && etcdClient == nil {
+		return nil, errors.New("pseudo-random secrets need to be enabled to work without etcd")
+	}
+
 	minter := mint.New(&mint.Config{
-		Challenger:     challenger,
-		Secrets:        newSecretStore(etcdClient),
-		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+		Challenger:             challenger,
+		Secrets:                newSecretStore(etcdClient),
+		ServiceLimiter:         newStaticServiceLimiter(cfg.Services),
+		KeyForPseudoRandomness: key[:],
 	})
 	authenticator := auth.NewLsatAuthenticator(minter, challenger)
 	return proxy.New(
@@ -465,9 +531,13 @@ func createProxy(cfg *config, challenger *LndChallenger,
 
 // cleanup closes the given server and shuts down the log rotator.
 func cleanup(etcdClient io.Closer, server io.Closer) {
-	if err := etcdClient.Close(); err != nil {
-		log.Errorf("Error terminating etcd client: %v", err)
+	etcd, ok := etcdClient.(*clientv3.Client)
+	if ok && etcd != nil {
+		if err := etcdClient.Close(); err != nil {
+			log.Errorf("Error terminating etcd client: %v", err)
+		}
 	}
+
 	err := server.Close()
 	if err != nil {
 		log.Errorf("Error closing server: %v", err)

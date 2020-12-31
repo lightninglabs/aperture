@@ -34,11 +34,17 @@ type authConfig struct {
 }
 
 type torConfig struct {
+	FileStorage bool   `long:"filestorage" description:"Use file based storage for private keys."`
 	Control     string `long:"control" description:"The host:port of the Tor instance."`
 	ListenPort  uint16 `long:"listenport" description:"The port we should listen on for client requests over Tor. Note that this port should not be exposed to the outside world, it is only intended to be reached by clients through the onion service."`
 	VirtualPort uint16 `long:"virtualport" description:"The port through which the onion services created can be reached at."`
 	V2          bool   `long:"v2" description:"Whether we should listen for client requests through a v2 onion service."`
 	V3          bool   `long:"v3" description:"Whether we should listen for client requests through a v3 onion service."`
+}
+
+type staticSecret struct {
+	Seed    string `long:"seed" description:"A seed for generating pseudo-random values (should be as unpredictable as possible)."`
+	Enabled bool   `long:"enabled" description:"When true use pseudo-random secrets derived from seed."`
 }
 
 type config struct {
@@ -66,6 +72,9 @@ type config struct {
 	ServeStatic bool `long:"servestatic" description:"Flag to enable or disable static content serving."`
 
 	Etcd *etcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
+
+	// Static secrets to enable pseudo-randomness (optional).
+	StaticSecret *staticSecret `long:"staticsecret" description:"Configuration for pseudo-random secrets."`
 
 	Authenticator *authConfig `long:"authenticator" description:"Configuration for the authenticator."`
 

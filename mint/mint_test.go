@@ -1,12 +1,14 @@
 package mint
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"strings"
 	"testing"
 
 	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
 
@@ -223,5 +225,100 @@ func TestDemotedServicesLSAT(t *testing.T) {
 	err = mint.VerifyLSAT(ctx, &unauthorizedParams)
 	if !strings.Contains(err.Error(), "not authorized") {
 		t.Fatal("expected macaroon to be invalid")
+	}
+}
+
+func allZero(s []byte) bool {
+	for _, v := range s {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestDeterministicSecretGeneration(t *testing.T) {
+	t.Parallel()
+
+	key := []byte("could be a strong key")
+
+	id := lsat.Identifier{
+		Version: lsat.LatestVersion,
+	}
+
+	tokenID, err := lsat.MakeIDFromString(strings.Repeat("ff", 32))
+	if err != nil {
+		t.Fatalf("unable to call MakeIDFromString %v", err)
+	}
+
+	id.TokenID = tokenID
+
+	type Tuple struct {
+		tokenID   string
+		expected  bool
+		generated []byte
+	}
+
+	tokens := []Tuple{
+		{tokenID: strings.Repeat("aa", 32), expected: false},
+		{tokenID: strings.Repeat("bb", 32), expected: false},
+		{tokenID: strings.Repeat("cc", 32), expected: false},
+		{tokenID: strings.Repeat("ff", 32), expected: true},
+	}
+
+	mint := New(&Config{
+		Secrets:                newMockSecretStore(),
+		Challenger:             newMockChallenger(),
+		ServiceLimiter:         newMockServiceLimiter(),
+		KeyForPseudoRandomness: key,
+	})
+
+	original, err := mint.getDeterministicSecret(&id)
+	if err != nil {
+		t.Fatalf("unable to call getDeterministicSecret %v", err)
+	}
+
+	for i := range tokens {
+		id := lsat.Identifier{
+			Version:     lsat.LatestVersion,
+			PaymentHash: lntypes.Hash([lntypes.HashSize]byte{1, 3, 3, 7}),
+		}
+
+		tokenID, err := lsat.MakeIDFromString(tokens[i].tokenID)
+		if err != nil {
+			t.Fatalf("unable to call MakeIDFromString %v", err)
+		}
+
+		id.TokenID = tokenID
+		generated, err := mint.getDeterministicSecret(&id)
+		if err != nil {
+			t.Fatalf("unable to call getDeterministicSecret %v", err)
+		}
+
+		res := bytes.Compare(generated[:], original[:])
+
+		if res == 0 && !tokens[i].expected {
+			t.Fatal("deterministic secret should not be the same")
+		}
+		if res != 0 && tokens[i].expected {
+			t.Fatal("deterministic secret should be the same")
+		}
+
+		tokens[i].generated = make([]byte, len(generated))
+		copy(tokens[i].generated, generated[:])
+	}
+
+	for i := range tokens {
+		if allZero(tokens[i].generated) {
+			t.Fatal("silly result generated")
+		}
+
+		for j := range tokens {
+			if i != j {
+				if bytes.Equal(tokens[i].generated, tokens[j].generated) {
+					t.Fatalf("tokens are not distinct %d vs. %d", i, j)
+				}
+			}
+		}
 	}
 }

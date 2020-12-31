@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,4 +113,37 @@ func TestSecretStore(t *testing.T) {
 		t.Fatalf("unable to revoke secret: %v", err)
 	}
 	assertSecretExists(t, store, id, nil)
+}
+
+func TestKeyStretch(t *testing.T) {
+	_, err := verifyAndStretchKey("short")
+	if err == nil {
+		t.Fatal("short key accepted")
+	}
+	_, err = verifyAndStretchKey("something_very_unpredictable")
+	if err == nil {
+		t.Fatal("predictable key accepted")
+	}
+	_, err = verifyAndStretchKey(strings.Repeat("x", minUserSeedLength))
+	if err != nil {
+		t.Fatal("min length was not accepted as advertised")
+	}
+
+	// Now actually look at the reesults
+	a, err := verifyAndStretchKey("an_acceptable_key1")
+	if err != nil {
+		t.Fatal("unable to call verifyAndStretchKey")
+	}
+	b, err := verifyAndStretchKey("an_acceptable_key2")
+	if err != nil {
+		t.Fatal("unable to call verifyAndStretchKey")
+	}
+
+	if len(a) != keySize || len(b) != keySize {
+		t.Fatal("invalid length")
+	}
+
+	if bytes.Equal(a[:], b[:]) {
+		t.Fatal("predictable stretching")
+	}
 }

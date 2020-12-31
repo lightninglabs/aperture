@@ -97,6 +97,9 @@ services:
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.
 tor:
+  # By default etcd is used for storing private keys, if you want to use the simple file-backed storage, turn this on.
+  filestorage: false
+
   # The host:port which Tor's control can be reached at.
   control: "localhost:9051"
 
@@ -113,3 +116,13 @@ tor:
 
   # Whether a v3 onion service should be created to handle requests.
   v3: false
+
+# Experimental: use this for generating pseudo-random values.
+# Currently used only for LSAT macaroons.
+# Pros:
+#   - no need for etcd
+# Cons:
+#   - potentially unsafe and buggy
+staticsecret:
+    seed: "something_very_unpredictable_comes_here!@#"
+    enabled: false
