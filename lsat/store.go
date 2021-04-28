@@ -42,6 +42,10 @@ type Store interface {
 	// StoreToken saves a token to the store. Old tokens should be kept for
 	// accounting purposes but marked as invalid somehow.
 	StoreToken(*Token) error
+
+	// RemovePendingToken removes a pending token from the store or returns
+	// ErrNoToken if there is no pending token.
+	RemovePendingToken() error
 }
 
 // FileStore is an implementation of the Store interface that files to save the
@@ -188,6 +192,16 @@ func (f *FileStore) StoreToken(newToken *Token) error {
 	default:
 		return errNoReplace
 	}
+}
+
+// RemovePendingToken removes a pending token from the store or returns
+// ErrNoToken if there is no pending token.
+func (f *FileStore) RemovePendingToken() error {
+	if !fileExists(f.fileNamePending) {
+		return ErrNoToken
+	}
+
+	return os.Remove(f.fileNamePending)
 }
 
 // readTokenFile reads a single token from a file and returns it deserialized.

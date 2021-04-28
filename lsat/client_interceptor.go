@@ -3,6 +3,7 @@ package lsat
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync"
@@ -58,6 +59,12 @@ var (
 	authHeaderRegex = regexp.MustCompile(
 		"LSAT macaroon=\"(.*?)\", invoice=\"(.*?)\"",
 	)
+
+	// errPaymentFailedTerminally is signaled by the payment tracking method
+	// to indicate a payment failed for good and will never change to a
+	// success state.
+	errPaymentFailedTerminally = errors.New("payment is in terminal " +
+		"failure state")
 )
 
 // ClientInterceptor is a gRPC client interceptor that can handle LSAT
@@ -249,6 +256,29 @@ func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 		log.Infof("Payment of LSAT token is required, resuming/" +
 			"tracking previous payment from pending LSAT token")
 		err := i.trackPayment(iCtx.mainCtx, iCtx.token)
+
+		// If the payment failed for good, it will never come back to a
+		// success state. We need to remove the pending token and try
+		// again.
+		if err == errPaymentFailedTerminally {
+			iCtx.token = nil
+			if err := i.store.RemovePendingToken(); err != nil {
+				return fmt.Errorf("error removing pending "+
+					"token, cannot retry payment: %v", err)
+			}
+
+			// Let's try again by paying for the new token.
+			log.Infof("Retrying payment of LSAT token invoice")
+			var err error
+			iCtx.token, err = i.payLsatToken(
+				iCtx.mainCtx, iCtx.metadata,
+			)
+			if err != nil {
+				return err
+			}
+
+			break
+		}
 		if err != nil {
 			return err
 		}
@@ -407,6 +437,13 @@ func (i *ClientInterceptor) trackPayment(ctx context.Context, token *Token) erro
 			// The payment is still in transit, we'll give it more
 			// time to complete.
 			case lnrpc.Payment_IN_FLIGHT:
+
+			// The payment is in a terminal failed state, it will
+			// never recover. There is no use keeping the pending
+			// token around. So we signal the caller to remove it
+			// and try again.
+			case lnrpc.Payment_FAILED:
+				return errPaymentFailedTerminally
 
 			// Any other state means either error or timeout.
 			default:

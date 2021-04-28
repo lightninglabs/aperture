@@ -25,6 +25,7 @@ type interceptTestCase struct {
 	interceptor         *ClientInterceptor
 	resetCb             func()
 	expectLndCall       bool
+	expectSecondLndCall bool
 	sendPaymentCb       func(*testing.T, test.PaymentChannelMessage)
 	trackPaymentCb      func(*testing.T, test.TrackPaymentMessage)
 	expectToken         bool
@@ -51,6 +52,11 @@ func (s *mockStore) AllTokens() (map[string]*Token, error) {
 
 func (s *mockStore) StoreToken(token *Token) error {
 	s.token = token
+	return nil
+}
+
+func (s *mockStore) RemovePendingToken() error {
+	s.token = nil
 	return nil
 }
 
@@ -152,6 +158,46 @@ var (
 			msg.Updates <- lndclient.PaymentStatus{
 				State:    lnrpc.Payment_SUCCEEDED,
 				Preimage: paidPreimage,
+			}
+		},
+		expectToken:         true,
+		expectBackendCalls:  2,
+		expectMacaroonCall1: false,
+		expectMacaroonCall2: true,
+	}, {
+		name:            "auth required, has pending but expired token",
+		initialPreimage: &zeroPreimage,
+		interceptor:     interceptor,
+		resetCb: func() {
+			resetBackend(
+				status.New(GRPCErrCode, GRPCErrMessage).Err(),
+				makeAuthHeader(testMacBytes),
+			)
+		},
+		expectLndCall:       true,
+		expectSecondLndCall: true,
+		sendPaymentCb: func(t *testing.T,
+			msg test.PaymentChannelMessage) {
+
+			require.Len(t, callMD, 0)
+
+			// The next call to the "backend" shouldn't return an
+			// error.
+			resetBackend(nil, "")
+			msg.Done <- lndclient.PaymentResult{
+				Preimage: paidPreimage,
+				PaidAmt:  123,
+				PaidFee:  345,
+			}
+		},
+		trackPaymentCb: func(t *testing.T,
+			msg test.TrackPaymentMessage) {
+
+			// The next call to the "backend" shouldn't return an
+			// error.
+			resetBackend(nil, "")
+			msg.Updates <- lndclient.PaymentStatus{
+				State: lnrpc.Payment_FAILED,
 			}
 		},
 		expectToken:         true,
@@ -317,6 +363,18 @@ func testInterceptor(t *testing.T, tc interceptTestCase,
 			t.Fatalf("[%s]: no payment request received", tc.name)
 		}
 	}
+	if tc.expectSecondLndCall {
+		select {
+		case payment := <-lnd.SendPaymentChannel:
+			tc.sendPaymentCb(t, payment)
+
+		case track := <-lnd.TrackPaymentChannel:
+			tc.trackPaymentCb(t, track)
+
+		case <-time.After(testTimeout):
+			t.Fatalf("[%s]: no payment request received", tc.name)
+		}
+	}
 	backendWg.Wait()
 	overallWg.Wait()
 
@@ -334,6 +392,8 @@ func testInterceptor(t *testing.T, tc interceptTestCase,
 	if tc.expectToken {
 		require.NoError(t, err)
 		require.Equal(t, paidPreimage, storeToken.Preimage)
+	} else {
+		require.Equal(t, ErrNoToken, err)
 	}
 	if tc.expectMacaroonCall2 {
 		require.Len(t, callMD, 1)
