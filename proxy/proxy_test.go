@@ -81,7 +81,11 @@ func TestProxyHTTP(t *testing.T) {
 		Addr:    testProxyAddr,
 		Handler: http.HandlerFunc(p.ServeHTTP),
 	}
-	go func() { _ = server.ListenAndServe() }()
+	go func() {
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			t.Errorf("Error serving on %s: %v", testProxyAddr, err)
+		}
+	}()
 	defer closeOrFail(t, server)
 
 	// Start the target backend service.

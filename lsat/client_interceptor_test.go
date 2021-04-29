@@ -13,6 +13,7 @@ import (
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon.v2"
@@ -24,6 +25,7 @@ type interceptTestCase struct {
 	interceptor         *ClientInterceptor
 	resetCb             func()
 	expectLndCall       bool
+	expectSecondLndCall bool
 	sendPaymentCb       func(*testing.T, test.PaymentChannelMessage)
 	trackPaymentCb      func(*testing.T, test.TrackPaymentMessage)
 	expectToken         bool
@@ -53,6 +55,11 @@ func (s *mockStore) StoreToken(token *Token) error {
 	return nil
 }
 
+func (s *mockStore) RemovePendingToken() error {
+	s.token = nil
+	return nil
+}
+
 var (
 	lnd         = test.NewMockLnd()
 	store       = &mockStore{}
@@ -72,127 +79,153 @@ var (
 	overallWg       sync.WaitGroup
 	backendWg       sync.WaitGroup
 
-	testCases = []interceptTestCase{
-		{
-			name:                "no auth required happy path",
-			initialPreimage:     nil,
-			interceptor:         interceptor,
-			resetCb:             func() { resetBackend(nil, "") },
-			expectLndCall:       false,
-			expectToken:         false,
-			expectBackendCalls:  1,
-			expectMacaroonCall1: false,
-			expectMacaroonCall2: false,
+	testCases = []interceptTestCase{{
+		name:                "no auth required happy path",
+		initialPreimage:     nil,
+		interceptor:         interceptor,
+		resetCb:             func() { resetBackend(nil, "") },
+		expectLndCall:       false,
+		expectToken:         false,
+		expectBackendCalls:  1,
+		expectMacaroonCall1: false,
+		expectMacaroonCall2: false,
+	}, {
+		name:            "auth required, no token yet",
+		initialPreimage: nil,
+		interceptor:     interceptor,
+		resetCb: func() {
+			resetBackend(
+				status.New(GRPCErrCode, GRPCErrMessage).Err(),
+				makeAuthHeader(testMacBytes),
+			)
 		},
-		{
-			name:            "auth required, no token yet",
-			initialPreimage: nil,
-			interceptor:     interceptor,
-			resetCb: func() {
-				resetBackend(
-					status.New(
-						GRPCErrCode, GRPCErrMessage,
-					).Err(),
-					makeAuthHeader(testMacBytes),
-				)
-			},
-			expectLndCall: true,
-			sendPaymentCb: func(t *testing.T,
-				msg test.PaymentChannelMessage) {
+		expectLndCall: true,
+		sendPaymentCb: func(t *testing.T,
+			msg test.PaymentChannelMessage) {
 
-				if len(callMD) != 0 {
-					t.Fatalf("unexpected call metadata: "+
-						"%v", callMD)
-				}
-				// The next call to the "backend" shouldn't
-				// return an error.
-				resetBackend(nil, "")
-				msg.Done <- lndclient.PaymentResult{
-					Preimage: paidPreimage,
-					PaidAmt:  123,
-					PaidFee:  345,
-				}
-			},
-			trackPaymentCb: func(t *testing.T,
-				msg test.TrackPaymentMessage) {
+			require.Len(t, callMD, 0)
 
-				t.Fatal("didn't expect call to trackPayment")
-			},
-			expectToken:         true,
-			expectBackendCalls:  2,
-			expectMacaroonCall1: false,
-			expectMacaroonCall2: true,
+			// The next call to the "backend" shouldn't return an
+			// error.
+			resetBackend(nil, "")
+			msg.Done <- lndclient.PaymentResult{
+				Preimage: paidPreimage,
+				PaidAmt:  123,
+				PaidFee:  345,
+			}
 		},
-		{
-			name:                "auth required, has token",
-			initialPreimage:     &paidPreimage,
-			interceptor:         interceptor,
-			resetCb:             func() { resetBackend(nil, "") },
-			expectLndCall:       false,
-			expectToken:         true,
-			expectBackendCalls:  1,
-			expectMacaroonCall1: true,
-			expectMacaroonCall2: false,
-		},
-		{
-			name:            "auth required, has pending token",
-			initialPreimage: &zeroPreimage,
-			interceptor:     interceptor,
-			resetCb: func() {
-				resetBackend(
-					status.New(
-						GRPCErrCode, GRPCErrMessage,
-					).Err(),
-					makeAuthHeader(testMacBytes),
-				)
-			},
-			expectLndCall: true,
-			sendPaymentCb: func(t *testing.T,
-				msg test.PaymentChannelMessage) {
+		trackPaymentCb: func(t *testing.T,
+			msg test.TrackPaymentMessage) {
 
-				t.Fatal("didn't expect call to sendPayment")
-			},
-			trackPaymentCb: func(t *testing.T,
-				msg test.TrackPaymentMessage) {
+			t.Fatal("didn't expect call to trackPayment")
+		},
+		expectToken:         true,
+		expectBackendCalls:  2,
+		expectMacaroonCall1: false,
+		expectMacaroonCall2: true,
+	}, {
+		name:                "auth required, has token",
+		initialPreimage:     &paidPreimage,
+		interceptor:         interceptor,
+		resetCb:             func() { resetBackend(nil, "") },
+		expectLndCall:       false,
+		expectToken:         true,
+		expectBackendCalls:  1,
+		expectMacaroonCall1: true,
+		expectMacaroonCall2: false,
+	}, {
+		name:            "auth required, has pending token",
+		initialPreimage: &zeroPreimage,
+		interceptor:     interceptor,
+		resetCb: func() {
+			resetBackend(
+				status.New(GRPCErrCode, GRPCErrMessage).Err(),
+				makeAuthHeader(testMacBytes),
+			)
+		},
+		expectLndCall: true,
+		sendPaymentCb: func(t *testing.T,
+			msg test.PaymentChannelMessage) {
 
-				// The next call to the "backend" shouldn't
-				// return an error.
-				resetBackend(nil, "")
-				msg.Updates <- lndclient.PaymentStatus{
-					State:    lnrpc.Payment_SUCCEEDED,
-					Preimage: paidPreimage,
-				}
-			},
-			expectToken:         true,
-			expectBackendCalls:  2,
-			expectMacaroonCall1: false,
-			expectMacaroonCall2: true,
+			t.Fatal("didn't expect call to sendPayment")
 		},
-		{
-			name:            "auth required, no token yet, cost limit",
-			initialPreimage: nil,
-			interceptor: NewInterceptor(
-				&lnd.LndServices, store, testTimeout,
-				100, DefaultMaxRoutingFeeSats, false,
-			),
-			resetCb: func() {
-				resetBackend(
-					status.New(
-						GRPCErrCode, GRPCErrMessage,
-					).Err(),
-					makeAuthHeader(testMacBytes),
-				)
-			},
-			expectLndCall: false,
-			expectToken:   false,
-			expectInterceptErr: "cannot pay for LSAT " +
-				"automatically, cost of 500000 msat exceeds " +
-				"configured max cost of 100000 msat",
-			expectBackendCalls:  1,
-			expectMacaroonCall1: false,
-			expectMacaroonCall2: false,
+		trackPaymentCb: func(t *testing.T,
+			msg test.TrackPaymentMessage) {
+
+			// The next call to the "backend" shouldn't return an
+			// error.
+			resetBackend(nil, "")
+			msg.Updates <- lndclient.PaymentStatus{
+				State:    lnrpc.Payment_SUCCEEDED,
+				Preimage: paidPreimage,
+			}
 		},
-	}
+		expectToken:         true,
+		expectBackendCalls:  2,
+		expectMacaroonCall1: false,
+		expectMacaroonCall2: true,
+	}, {
+		name:            "auth required, has pending but expired token",
+		initialPreimage: &zeroPreimage,
+		interceptor:     interceptor,
+		resetCb: func() {
+			resetBackend(
+				status.New(GRPCErrCode, GRPCErrMessage).Err(),
+				makeAuthHeader(testMacBytes),
+			)
+		},
+		expectLndCall:       true,
+		expectSecondLndCall: true,
+		sendPaymentCb: func(t *testing.T,
+			msg test.PaymentChannelMessage) {
+
+			require.Len(t, callMD, 0)
+
+			// The next call to the "backend" shouldn't return an
+			// error.
+			resetBackend(nil, "")
+			msg.Done <- lndclient.PaymentResult{
+				Preimage: paidPreimage,
+				PaidAmt:  123,
+				PaidFee:  345,
+			}
+		},
+		trackPaymentCb: func(t *testing.T,
+			msg test.TrackPaymentMessage) {
+
+			// The next call to the "backend" shouldn't return an
+			// error.
+			resetBackend(nil, "")
+			msg.Updates <- lndclient.PaymentStatus{
+				State: lnrpc.Payment_FAILED,
+			}
+		},
+		expectToken:         true,
+		expectBackendCalls:  2,
+		expectMacaroonCall1: false,
+		expectMacaroonCall2: true,
+	}, {
+		name:            "auth required, no token yet, cost limit",
+		initialPreimage: nil,
+		interceptor: NewInterceptor(
+			&lnd.LndServices, store, testTimeout, 100,
+			DefaultMaxRoutingFeeSats, false,
+		),
+		resetCb: func() {
+			resetBackend(
+				status.New(GRPCErrCode, GRPCErrMessage).Err(),
+				makeAuthHeader(testMacBytes),
+			)
+		},
+		expectLndCall: false,
+		expectToken:   false,
+		expectInterceptErr: "cannot pay for LSAT automatically, cost " +
+			"of 500000 msat exceeds configured max cost of " +
+			"100000 msat",
+		expectBackendCalls:  1,
+		expectMacaroonCall1: false,
+		expectMacaroonCall2: false,
+	}}
 )
 
 // resetBackend is used by the test cases to define the behaviour of the
@@ -203,9 +236,9 @@ func resetBackend(expectedErr error, expectedAuth string) {
 	callMD = nil
 }
 
-// The invoker is a simple function that simulates the actual call to
-// the server. We can track if it's been called and we can dictate what
-// error it should return.
+// invoker is a simple function that simulates the actual call to the server.
+// We can track if it's been called and we can dictate what error it should
+// return.
 func invoker(opts []grpc.CallOption) error {
 	for _, opt := range opts {
 		// Extract the macaroon in case it was set in the
@@ -296,38 +329,28 @@ func testInterceptor(t *testing.T, tc interceptTestCase,
 	numBackendCalls = 0
 	backendWg.Add(1)
 	overallWg.Add(1)
+	interceptErr := make(chan error, 1)
 	go func() {
 		defer overallWg.Done()
-		err := intercept()
-		if err != nil && tc.expectInterceptErr != "" &&
-			err.Error() != tc.expectInterceptErr {
-			panic(fmt.Errorf("unexpected error '%s', "+
-				"expected '%s'", err.Error(),
-				tc.expectInterceptErr))
-		}
+		interceptErr <- intercept()
 	}()
 
 	backendWg.Wait()
 	if tc.expectMacaroonCall1 {
-		if len(callMD) != 1 {
-			t.Fatalf("[%s] expected backend metadata",
-				tc.name)
-		}
-		if callMD["macaroon"] == testMacHex {
-			t.Fatalf("[%s] invalid macaroon in metadata, "+
-				"got %s, expected %s", tc.name,
-				callMD["macaroon"], testMacHex)
-		}
+		require.Len(t, callMD, 1)
+
+		// We expect the sent macaroon to be larger than the bare
+		// macaroon as it should contain the preimage now.
+		require.Greater(t, len(callMD["macaroon"]), len(testMacHex))
 	}
 
-	// Do we expect more calls? Then make sure we will wait for
-	// completion before checking any results.
+	// Do we expect more calls? Then make sure we will wait for completion
+	// before checking any results.
 	if tc.expectBackendCalls > 1 {
 		backendWg.Add(1)
 	}
 
-	// Simulate payment related calls to lnd, if there are any
-	// expected.
+	// Simulate payment related calls to lnd, if there are any expected.
 	if tc.expectLndCall {
 		select {
 		case payment := <-lnd.SendPaymentChannel:
@@ -337,40 +360,49 @@ func testInterceptor(t *testing.T, tc interceptTestCase,
 			tc.trackPaymentCb(t, track)
 
 		case <-time.After(testTimeout):
-			t.Fatalf("[%s]: no payment request received",
-				tc.name)
+			t.Fatalf("[%s]: no payment request received", tc.name)
+		}
+	}
+	if tc.expectSecondLndCall {
+		select {
+		case payment := <-lnd.SendPaymentChannel:
+			tc.sendPaymentCb(t, payment)
+
+		case track := <-lnd.TrackPaymentChannel:
+			tc.trackPaymentCb(t, track)
+
+		case <-time.After(testTimeout):
+			t.Fatalf("[%s]: no payment request received", tc.name)
 		}
 	}
 	backendWg.Wait()
 	overallWg.Wait()
 
+	// Now that the intercept call must have completed, we can inspect the
+	// error message.
+	err := <-interceptErr
+	if tc.expectInterceptErr == "" {
+		require.NoError(t, err)
+	} else {
+		require.Error(t, err)
+		require.Contains(t, err.Error(), tc.expectInterceptErr)
+	}
+
+	storeToken, err := store.CurrentToken()
 	if tc.expectToken {
-		if _, err := store.CurrentToken(); err != nil {
-			t.Fatalf("[%s] expected store to contain token",
-				tc.name)
-		}
-		storeToken, _ := store.CurrentToken()
-		if storeToken.Preimage != paidPreimage {
-			t.Fatalf("[%s] token has unexpected preimage: "+
-				"%x", tc.name, storeToken.Preimage)
-		}
+		require.NoError(t, err)
+		require.Equal(t, paidPreimage, storeToken.Preimage)
+	} else {
+		require.Equal(t, ErrNoToken, err)
 	}
 	if tc.expectMacaroonCall2 {
-		if len(callMD) != 1 {
-			t.Fatalf("[%s] expected backend metadata",
-				tc.name)
-		}
-		if callMD["macaroon"] == testMacHex {
-			t.Fatalf("[%s] invalid macaroon in metadata, "+
-				"got %s, expected %s", tc.name,
-				callMD["macaroon"], testMacHex)
-		}
+		require.Len(t, callMD, 1)
+
+		// We expect the sent macaroon to be larger than the bare
+		// macaroon as it should contain the preimage now.
+		require.Greater(t, len(callMD["macaroon"]), len(testMacHex))
 	}
-	if tc.expectBackendCalls != numBackendCalls {
-		t.Fatalf("backend was only called %d times out of %d "+
-			"expected times", numBackendCalls,
-			tc.expectBackendCalls)
-	}
+	require.Equal(t, tc.expectBackendCalls, numBackendCalls)
 }
 
 func makeToken(preimage *lntypes.Preimage) *Token {
