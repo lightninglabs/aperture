@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
@@ -20,6 +19,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
+	"go.etcd.io/etcd/clientv3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -342,7 +342,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 		log.Infof("Generating TLS certificates...")
 		err := cert.GenCertPair(
 			selfSignedCertOrganization, tlsCertFile, tlsKeyFile,
-			nil, nil, selfSignedCertValidity,
+			nil, nil, false, selfSignedCertValidity,
 		)
 		if err != nil {
 			return nil, err
@@ -389,7 +389,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 		log.Infof("Renewing TLS certificates...")
 		err = cert.GenCertPair(
 			selfSignedCertOrganization, tlsCertFile, tlsKeyFile,
-			nil, nil, selfSignedCertValidity,
+			nil, nil, false, selfSignedCertValidity,
 		)
 		if err != nil {
 			return nil, err
