@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,10 +36,15 @@ const (
 	testHTTPResponseBody     = "HTTP Hello"
 )
 
+var (
+	errBackend = fmt.Errorf("this is the error you wanted")
+)
+
 type testCase struct {
-	name          string
-	auth          auth.Level
-	authWhitelist []string
+	name           string
+	auth           auth.Level
+	authWhitelist  []string
+	wantBackendErr bool
 }
 
 // helloServer is a simple server that implements the GreeterServer interface.
@@ -48,6 +54,10 @@ type helloServer struct{}
 // request.
 func (s *helloServer) SayHello(_ context.Context,
 	req *proxytest.HelloRequest) (*proxytest.HelloReply, error) {
+
+	if req.ReturnError {
+		return nil, errBackend
+	}
 
 	return &proxytest.HelloReply{
 		Message: fmt.Sprintf("Hello %s", req.Name),
@@ -59,6 +69,10 @@ func (s *helloServer) SayHello(_ context.Context,
 // authentication required.
 func (s *helloServer) SayHelloNoAuth(_ context.Context,
 	req *proxytest.HelloRequest) (*proxytest.HelloReply, error) {
+
+	if req.ReturnError {
+		return nil, errBackend
+	}
 
 	return &proxytest.HelloReply{
 		Message: fmt.Sprintf("Hello %s", req.Name),
@@ -181,6 +195,10 @@ func TestProxyGRPC(t *testing.T) {
 		name: "no whitelist",
 		auth: "on",
 	}, {
+		name:           "no whitelist expect err",
+		auth:           "on",
+		wantBackendErr: true,
+	}, {
 		name: "with whitelist",
 		auth: "on",
 		authWhitelist: []string{
@@ -193,6 +211,17 @@ func TestProxyGRPC(t *testing.T) {
 
 		t.Run(tc.name, func(t *testing.T) {
 			runGRPCTest(t, tc)
+		})
+	}
+
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("stream closed w/o trailers repro %d", i)
+		t.Run(name, func(t *testing.T) {
+			runGRPCTest(t, &testCase{
+				name:           name,
+				auth:           "on",
+				wantBackendErr: true,
+			})
 		})
 	}
 }
@@ -208,7 +237,18 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	keyFile := path.Join(tempDirName, "proxy.key")
 	certPool, creds, certData, err := genCertPair(certFile, keyFile)
 	require.NoError(t, err)
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(creds),
+	}
+
+	httpListener, err := net.Listen("tcp", testProxyAddr)
+	if err != nil {
+		t.Errorf("Error listening on %s: %v", testProxyAddr, err)
+	}
+	tlsListener := tls.NewListener(
+		httpListener, configFromCert(&certData, certPool),
+	)
+	defer closeOrFail(t, tlsListener)
 
 	// Create a list of services to proxy between.
 	services := []*proxy.Service{{
@@ -226,20 +266,22 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	p, err := proxy.New(mockAuth, services, true, "static")
 	require.NoError(t, err)
 	server := &http.Server{
-		Addr:    testProxyAddr,
-		Handler: http.HandlerFunc(p.ServeHTTP),
-		TLSConfig: &tls.Config{
-			RootCAs:            certPool,
-			InsecureSkipVerify: true,
-		},
+		Addr:      testProxyAddr,
+		Handler:   http.HandlerFunc(p.ServeHTTP),
+		TLSConfig: configFromCert(&certData, certPool),
 	}
-	go func() { _ = server.ListenAndServeTLS(certFile, keyFile) }()
-	defer closeOrFail(t, server)
+	go func() {
+		err := server.Serve(tlsListener)
+		if !isClosedErr(err) {
+			t.Errorf("Error serving on %s: %v", testProxyAddr, err)
+		}
+	}()
 
 	// Start the target backend service also on TLS.
-	tlsConf := cert.TLSConfFromCert(certData)
 	serverOpts := []grpc.ServerOption{
-		grpc.Creds(credentials.NewTLS(tlsConf)),
+		grpc.Creds(credentials.NewTLS(configFromCert(
+			&certData, certPool,
+		))),
 	}
 	backendService := grpc.NewServer(serverOpts...)
 	go func() { _ = startBackendGRPC(backendService) }()
@@ -259,8 +301,8 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	require.Error(t, err)
 	statusErr, ok := status.FromError(err)
 	require.True(t, ok)
-	require.Equal(t, codes.Internal, statusErr.Code())
 	require.Equal(t, "payment required", statusErr.Message())
+	require.Equal(t, codes.Internal, statusErr.Code())
 
 	// Make sure that if we query an URL that is on the whitelist, we don't
 	// get the 402 response.
@@ -292,10 +334,21 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	client = proxytest.NewGreeterClient(conn)
 
 	// Make the request. This time no error should be returned.
-	req = &proxytest.HelloRequest{Name: "foo"}
+	req = &proxytest.HelloRequest{
+		Name: "foo", ReturnError: tc.wantBackendErr,
+	}
 	res, err := client.SayHello(context.Background(), req)
-	require.NoError(t, err)
-	require.Equal(t, "Hello foo", res.Message)
+
+	if tc.wantBackendErr {
+		require.Error(t, err)
+		statusErr, ok := status.FromError(err)
+		require.True(t, ok)
+		require.Equal(t, errBackend.Error(), statusErr.Message())
+		require.Equal(t, codes.Unknown, statusErr.Code())
+	} else {
+		require.NoError(t, err)
+		require.Equal(t, "Hello foo", res.Message)
+	}
 }
 
 // startBackendHTTP starts the given HTTP server and blocks until the server
@@ -333,7 +386,7 @@ func genCertPair(certFile, keyFile string) (*x509.CertPool,
 	crt := tls.Certificate{}
 	err := cert.GenCertPair(
 		"aperture autogenerated cert", certFile, keyFile, nil, nil,
-		cert.DefaultAutogenValidity,
+		false, cert.DefaultAutogenValidity,
 	)
 	if err != nil {
 		return nil, nil, crt, fmt.Errorf("unable to generate cert "+
@@ -356,9 +409,54 @@ func genCertPair(certFile, keyFile string) (*x509.CertPool,
 	return cp, creds, crt, nil
 }
 
+// configFromCert creates a new TLS configuration from a certificate and a cert
+// pool. These configs shouldn't be shared among different server instances to
+// avoid data races.
+func configFromCert(crt *tls.Certificate, certPool *x509.CertPool) *tls.Config {
+	tlsConf := cert.TLSConfFromCert(*crt)
+	tlsConf.CipherSuites = []uint16{
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	}
+	tlsConf.PreferServerCipherSuites = true
+	tlsConf.RootCAs = certPool
+	tlsConf.InsecureSkipVerify = true
+
+	haveNPN := false
+	for _, p := range tlsConf.NextProtos {
+		if p == "h2" {
+			haveNPN = true
+			break
+		}
+	}
+	if !haveNPN {
+		tlsConf.NextProtos = append(tlsConf.NextProtos, "h2")
+	}
+	tlsConf.NextProtos = append(tlsConf.NextProtos, "h2-14")
+	// make sure http 1.1 is *after* all of the other ones.
+	tlsConf.NextProtos = append(tlsConf.NextProtos, "http/1.1")
+
+	return tlsConf
+}
+
 func closeOrFail(t *testing.T, c io.Closer) {
 	err := c.Close()
-	if err != nil {
+	if !isClosedErr(err) {
 		t.Fatal(err)
 	}
+}
+
+func isClosedErr(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	if err == http.ErrServerClosed {
+		return true
+	}
+
+	if strings.Contains(err.Error(), "use of closed network connection") {
+		return true
+	}
+
+	return false
 }
