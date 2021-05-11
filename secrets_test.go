@@ -29,6 +29,7 @@ func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
 
 	cfg := embed.NewConfig()
 	cfg.Dir = tempDir
+	cfg.Logger = "zap"
 	cfg.LCUrls = []url.URL{{Host: "127.0.0.1:9125"}}
 	cfg.LPUrls = []url.URL{{Host: "127.0.0.1:9126"}}
 
