@@ -1,6 +1,6 @@
 module github.com/lightninglabs/aperture
 
-go 1.13
+go 1.15
 
 require (
 	github.com/btcsuite/btcd v0.21.0-beta.0.20201208033208-6bd4c64a54fa
