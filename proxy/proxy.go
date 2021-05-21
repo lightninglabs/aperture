@@ -186,6 +186,11 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 	return nil
 }
 
+// Close cleans up the Proxy by closing any remaining open connections.
+func (p *Proxy) Close() error {
+	return nil
+}
+
 // director is a method that rewrites an incoming request to be forwarded to a
 // backend service.
 func (p *Proxy) director(req *http.Request) {

@@ -276,7 +276,7 @@ func (a *Aperture) Stop() error {
 
 	// Shut down our client and server connections now. This should cause
 	// the first goroutine to quit.
-	cleanup(a.etcdClient, a.httpsServer)
+	cleanup(a.etcdClient, a.httpsServer, a.proxy)
 
 	// If we started a tor server as well, shut it down now too to cause the
 	// second goroutine to quit.
@@ -514,7 +514,10 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 }
 
 // cleanup closes the given server and shuts down the log rotator.
-func cleanup(etcdClient io.Closer, server io.Closer) {
+func cleanup(etcdClient io.Closer, server io.Closer, proxy io.Closer) {
+	if err := proxy.Close(); err != nil {
+		log.Errorf("Error terminating proxy: %v", err)
+	}
 	if err := etcdClient.Close(); err != nil {
 		log.Errorf("Error terminating etcd client: %v", err)
 	}
