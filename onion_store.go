@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coreos/etcd/clientv3"
 	"github.com/lightningnetwork/lnd/tor"
+	"go.etcd.io/etcd/clientv3"
 )
 
 const (

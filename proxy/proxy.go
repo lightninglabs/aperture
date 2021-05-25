@@ -24,6 +24,8 @@ const (
 	// "GET /availability/v1/btc.json HTTP/1.1" "" "Mozilla/5.0 ..."
 	formatPattern  = "- - \"%s %s %s\" \"%s\" \"%s\""
 	hdrContentType = "Content-Type"
+	hdrGrpcStatus  = "Grpc-Status"
+	hdrGrpcMessage = "Grpc-Message"
 	hdrTypeGrpc    = "application/grpc"
 )
 
@@ -170,7 +172,7 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 
 	p.proxyBackend = &httputil.ReverseProxy{
 		Director:  p.director,
-		Transport: transport,
+		Transport: &trailerFixingTransport{next: transport},
 		ModifyResponse: func(res *http.Response) error {
 			addCorsHeaders(res.Header)
 			return nil
@@ -329,11 +331,42 @@ func sendDirectResponse(w http.ResponseWriter, r *http.Request,
 	// so we can use that.
 	switch {
 	case strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc):
-		w.Header().Set("Grpc-Status", strconv.Itoa(int(codes.Internal)))
-		w.Header().Set("Grpc-Message", errInfo)
+		w.Header().Set(hdrGrpcStatus, strconv.Itoa(int(codes.Internal)))
+		w.Header().Set(hdrGrpcMessage, errInfo)
+		w.Header().Set("Content-Length", "0")
+		w.Header().Set(":status", strconv.Itoa(statusCode))
+		w.Header().Add("Trailer", hdrGrpcStatus)
+		w.Header().Add("Trailer", hdrGrpcMessage)
+
 		w.WriteHeader(statusCode)
 
 	default:
 		http.Error(w, errInfo, statusCode)
 	}
+}
+
+type trailerFixingTransport struct {
+	next http.RoundTripper
+}
+
+// RoundTrip is a transport round tripper implementation that fixes an issue
+// in the official httputil.ReverseProxy implementation. Apparently the HTTP/2
+// trailers aren't properly forwarded in some cases. We fix this by always
+// copying the Grpc-Status and Grpc-Message fields to the trailers, as those are
+// usually expected to be in the trailer fields.
+// Inspired by https://github.com/elazarl/goproxy/issues/408.
+func (l *trailerFixingTransport) RoundTrip(req *http.Request) (*http.Response,
+	error) {
+
+	resp, err := l.next.RoundTrip(req)
+	if resp != nil && len(resp.Trailer) == 0 {
+		if len(resp.Header.Values(hdrGrpcStatus)) > 0 {
+			resp.Trailer = make(http.Header)
+			grpcStatus := resp.Header.Get(hdrGrpcStatus)
+			grpcMessage := resp.Header.Get(hdrGrpcMessage)
+			resp.Trailer.Add(hdrGrpcStatus, grpcStatus)
+			resp.Trailer.Add(hdrGrpcMessage, grpcMessage)
+		}
+	}
+	return resp, err
 }

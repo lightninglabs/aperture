@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/embed"
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
+	"go.etcd.io/etcd/clientv3"
+	"go.etcd.io/etcd/embed"
 )
 
 // etcdSetup is a helper that instantiates a new etcd cluster along with a
@@ -29,6 +29,7 @@ func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
 
 	cfg := embed.NewConfig()
 	cfg.Dir = tempDir
+	cfg.Logger = "zap"
 	cfg.LCUrls = []url.URL{{Host: "127.0.0.1:9125"}}
 	cfg.LPUrls = []url.URL{{Host: "127.0.0.1:9126"}}
 
