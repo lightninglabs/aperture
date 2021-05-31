@@ -333,10 +333,6 @@ func sendDirectResponse(w http.ResponseWriter, r *http.Request,
 	case strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc):
 		w.Header().Set(hdrGrpcStatus, strconv.Itoa(int(codes.Internal)))
 		w.Header().Set(hdrGrpcMessage, errInfo)
-		w.Header().Set("Content-Length", "0")
-		w.Header().Set(":status", strconv.Itoa(statusCode))
-		w.Header().Add("Trailer", hdrGrpcStatus)
-		w.Header().Add("Trailer", hdrGrpcMessage)
 
 		w.WriteHeader(statusCode)
 
