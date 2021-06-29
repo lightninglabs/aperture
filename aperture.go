@@ -257,8 +257,8 @@ func fileExists(name string) bool {
 
 // getConfig loads and parses the configuration file then checks it for valid
 // content.
-func getConfig(configFile string) (*config, error) {
-	cfg := &config{}
+func getConfig(configFile string) (*Config, error) {
+	cfg := &Config{}
 	b, err := ioutil.ReadFile(configFile)
 	if err != nil {
 		return nil, err
@@ -277,7 +277,7 @@ func getConfig(configFile string) (*config, error) {
 }
 
 // setupLogging parses the debug level and initializes the log file rotator.
-func setupLogging(cfg *config, interceptor signal.Interceptor) error {
+func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	if cfg.DebugLevel == "" {
 		cfg.DebugLevel = defaultLogLevel
 	}
@@ -413,7 +413,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 // initTorListener initiates a Tor controller instance with the Tor server
 // specified in the config. Onion services will be created over which the proxy
 // can be reached at.
-func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error) {
+func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error) {
 	// Establish a controller connection with the backing Tor server and
 	// proceed to create the requested onion services.
 	onionCfg := tor.AddOnionConfig{
@@ -450,7 +450,7 @@ func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *config, challenger *LndChallenger,
+func createProxy(cfg *Config, challenger *LndChallenger,
 	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
 
 	minter := mint.New(&mint.Config{
