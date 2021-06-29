@@ -98,12 +98,55 @@ func run() error {
 		return fmt.Errorf("unable to set up logging: %v", err)
 	}
 
+	errChan := make(chan error)
+	a := NewAperture(cfg)
+	if err := a.Start(errChan); err != nil {
+		return fmt.Errorf("unable to start aperture: %v", err)
+	}
+
+	select {
+	case <-interceptor.ShutdownChannel():
+		log.Infof("Received interrupt signal, shutting down aperture.")
+
+	case err := <-errChan:
+		log.Errorf("Error while running aperture: %v", err)
+	}
+
+	return a.Stop()
+}
+
+// Aperture is the main type of the aperture service. It holds all components
+// that are required for the authenticating reverse proxy to do its job.
+type Aperture struct {
+	cfg *Config
+
+	etcdClient    *clientv3.Client
+	challenger    *LndChallenger
+	httpsServer   *http.Server
+	torHTTPServer *http.Server
+
+	wg   sync.WaitGroup
+	quit chan struct{}
+}
+
+// NewAperture creates a new instance of the Aperture service.
+func NewAperture(cfg *Config) *Aperture {
+	return &Aperture{
+		cfg:  cfg,
+		quit: make(chan struct{}),
+	}
+}
+
+// Start sets up the proxy server and starts it.
+func (a *Aperture) Start(errChan chan error) error {
+	var err error
+
 	// Initialize our etcd client.
-	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.Etcd.Host},
+	a.etcdClient, err = clientv3.New(clientv3.Config{
+		Endpoints:   []string{a.cfg.Etcd.Host},
 		DialTimeout: 5 * time.Second,
-		Username:    cfg.Etcd.User,
-		Password:    cfg.Etcd.Password,
+		Username:    a.cfg.Etcd.User,
+		Password:    a.cfg.Etcd.Password,
 	})
 	if err != nil {
 		return fmt.Errorf("unable to connect to etcd: %v", err)
@@ -117,44 +160,42 @@ func run() error {
 			Value: price,
 		}, nil
 	}
-	errChan := make(chan error)
-	challenger, err := NewLndChallenger(
-		cfg.Authenticator, genInvoiceReq, errChan,
+	a.challenger, err = NewLndChallenger(
+		a.cfg.Authenticator, genInvoiceReq, errChan,
 	)
 	if err != nil {
 		return err
 	}
-	err = challenger.Start()
+	err = a.challenger.Start()
 	if err != nil {
 		return err
 	}
-	defer challenger.Stop()
 
 	// Create the proxy and connect it to lnd.
-	servicesProxy, err := createProxy(cfg, challenger, etcdClient)
+	servicesProxy, err := createProxy(a.cfg, a.challenger, a.etcdClient)
 	if err != nil {
 		return err
 	}
 	handler := http.HandlerFunc(servicesProxy.ServeHTTP)
-	httpsServer := &http.Server{
-		Addr:    cfg.ListenAddr,
+	a.httpsServer = &http.Server{
+		Addr:    a.cfg.ListenAddr,
 		Handler: handler,
 	}
 
 	// Create TLS configuration by either creating new self-signed certs or
 	// trying to obtain one through Let's Encrypt.
 	var serveFn func() error
-	if cfg.Insecure {
+	if a.cfg.Insecure {
 		// Normally, HTTP/2 only works with TLS. But there is a special
 		// version called HTTP/2 Cleartext (h2c) that some clients
 		// support and that gRPC uses when the grpc.WithInsecure()
 		// option is used. The default HTTP handler doesn't support it
 		// though so we need to add a special h2c handler here.
-		serveFn = httpsServer.ListenAndServe
-		httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
+		serveFn = a.httpsServer.ListenAndServe
+		a.httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
 	} else {
-		httpsServer.TLSConfig, err = getTLSConfig(
-			cfg.ServerName, cfg.AutoCert,
+		a.httpsServer.TLSConfig, err = getTLSConfig(
+			a.cfg.ServerName, a.cfg.AutoCert,
 		)
 		if err != nil {
 			return err
@@ -163,24 +204,20 @@ func run() error {
 			// The httpsServer.TLSConfig contains certificates at
 			// this point so we don't need to pass in certificate
 			// and key file names.
-			return httpsServer.ListenAndServeTLS("", "")
+			return a.httpsServer.ListenAndServeTLS("", "")
 		}
 	}
 
 	// Finally run the server.
-	var (
-		wg   sync.WaitGroup
-		quit = make(chan struct{})
-	)
-	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
+	log.Infof("Starting the server, listening on %s.", a.cfg.ListenAddr)
 
-	wg.Add(1)
+	a.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer a.wg.Done()
 
 		select {
 		case errChan <- serveFn():
-		case <-quit:
+		case <-a.quit:
 		}
 	}()
 
@@ -191,9 +228,8 @@ func run() error {
 	// will only be reached through the onion services, which already
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
-	var torHTTPServer *http.Server
-	if cfg.Tor != nil && (cfg.Tor.V2 || cfg.Tor.V3) {
-		torController, err := initTorListener(cfg, etcdClient)
+	if a.cfg.Tor != nil && (a.cfg.Tor.V2 || a.cfg.Tor.V3) {
+		torController, err := initTorListener(a.cfg, a.etcdClient)
 		if err != nil {
 			return err
 		}
@@ -201,45 +237,44 @@ func run() error {
 			_ = torController.Stop()
 		}()
 
-		torHTTPServer = &http.Server{
-			Addr:    fmt.Sprintf("localhost:%d", cfg.Tor.ListenPort),
+		a.torHTTPServer = &http.Server{
+			Addr:    fmt.Sprintf("localhost:%d", a.cfg.Tor.ListenPort),
 			Handler: h2c.NewHandler(handler, &http2.Server{}),
 		}
-		wg.Add(1)
+		a.wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer a.wg.Done()
 
 			select {
-			case errChan <- torHTTPServer.ListenAndServe():
-			case <-quit:
+			case errChan <- a.torHTTPServer.ListenAndServe():
+			case <-a.quit:
 			}
 		}()
 	}
 
-	var returnErr error
-	select {
-	case <-interceptor.ShutdownChannel():
-		log.Infof("Received interrupt signal, shutting down aperture.")
+	return nil
+}
 
-	case err := <-errChan:
-		log.Errorf("Error while running aperture: %v", err)
-		returnErr = err
-	}
+// Stop gracefully shuts down the Aperture service.
+func (a *Aperture) Stop() error {
+	var returnErr error
+
+	a.challenger.Stop()
 
 	// Shut down our client and server connections now. This should cause
 	// the first goroutine to quit.
-	cleanup(etcdClient, httpsServer)
+	cleanup(a.etcdClient, a.httpsServer)
 
 	// If we started a tor server as well, shut it down now too to cause the
 	// second goroutine to quit.
-	if torHTTPServer != nil {
-		_ = torHTTPServer.Close()
+	if a.torHTTPServer != nil {
+		returnErr = a.torHTTPServer.Close()
 	}
 
 	// Now we wait for the goroutines to exit before we return. The defers
 	// will take care of the rest of our started resources.
-	close(quit)
-	wg.Wait()
+	close(a.quit)
+	a.wg.Wait()
 
 	return returnErr
 }
