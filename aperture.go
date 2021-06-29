@@ -124,6 +124,7 @@ type Aperture struct {
 	challenger    *LndChallenger
 	httpsServer   *http.Server
 	torHTTPServer *http.Server
+	proxy         *proxy.Proxy
 
 	wg   sync.WaitGroup
 	quit chan struct{}
@@ -172,11 +173,11 @@ func (a *Aperture) Start(errChan chan error) error {
 	}
 
 	// Create the proxy and connect it to lnd.
-	servicesProxy, err := createProxy(a.cfg, a.challenger, a.etcdClient)
+	a.proxy, err = createProxy(a.cfg, a.challenger, a.etcdClient)
 	if err != nil {
 		return err
 	}
-	handler := http.HandlerFunc(servicesProxy.ServeHTTP)
+	handler := http.HandlerFunc(a.proxy.ServeHTTP)
 	a.httpsServer = &http.Server{
 		Addr:    a.cfg.ListenAddr,
 		Handler: handler,
@@ -253,6 +254,13 @@ func (a *Aperture) Start(errChan chan error) error {
 	}
 
 	return nil
+}
+
+// UpdateServices instructs the proxy to re-initialize its internal
+// configuration of backend services. This can be used to add or remove backends
+// at run time or enable/disable authentication on the fly.
+func (a *Aperture) UpdateServices(services []*proxy.Service) error {
+	return a.proxy.UpdateServices(services)
 }
 
 // Stop gracefully shuts down the Aperture service.
