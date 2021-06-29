@@ -72,7 +72,7 @@ func Main() {
 	// TODO: Prevent from running twice.
 	err := run()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -80,22 +80,22 @@ func Main() {
 // run sets up the proxy server and runs it. This function blocks until a
 // shutdown signal is received.
 func run() error {
-	// First, parse configuration file and set up logging.
+	// Before starting everything, make sure we can intercept any interrupt
+	// signals so we can block on waiting for them later.
+	interceptor, err := signal.Intercept()
+	if err != nil {
+		return err
+	}
+
+	// Next, parse configuration file and set up logging.
 	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
 	cfg, err := getConfig(configFile)
 	if err != nil {
 		return fmt.Errorf("unable to parse config file: %v", err)
 	}
-	err = setupLogging(cfg)
+	err = setupLogging(cfg, interceptor)
 	if err != nil {
 		return fmt.Errorf("unable to set up logging: %v", err)
-	}
-
-	// Before starting everything, make sure we can intercept any interrupt
-	// signals so we can block on waiting for them later.
-	err = signal.Intercept()
-	if err != nil {
-		return err
 	}
 
 	// Initialize our etcd client.
@@ -218,7 +218,7 @@ func run() error {
 
 	var returnErr error
 	select {
-	case <-signal.ShutdownChannel():
+	case <-interceptor.ShutdownChannel():
 		log.Infof("Received interrupt signal, shutting down aperture.")
 
 	case err := <-errChan:
@@ -277,12 +277,13 @@ func getConfig(configFile string) (*config, error) {
 }
 
 // setupLogging parses the debug level and initializes the log file rotator.
-func setupLogging(cfg *config) error {
+func setupLogging(cfg *config, interceptor signal.Interceptor) error {
 	if cfg.DebugLevel == "" {
 		cfg.DebugLevel = defaultLogLevel
 	}
 
 	// Now initialize the logger and set the log level.
+	SetupLoggers(logWriter, interceptor)
 	logFile := filepath.Join(apertureDataDir, defaultLogFilename)
 	err := logWriter.InitLogRotator(
 		logFile, defaultMaxLogFileSize, defaultMaxLogFiles,
