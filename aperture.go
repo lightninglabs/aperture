@@ -161,15 +161,18 @@ func (a *Aperture) Start(errChan chan error) error {
 			Value: price,
 		}, nil
 	}
-	a.challenger, err = NewLndChallenger(
-		a.cfg.Authenticator, genInvoiceReq, errChan,
-	)
-	if err != nil {
-		return err
-	}
-	err = a.challenger.Start()
-	if err != nil {
-		return err
+
+	if !a.cfg.Authenticator.Disable {
+		a.challenger, err = NewLndChallenger(
+			a.cfg.Authenticator, genInvoiceReq, errChan,
+		)
+		if err != nil {
+			return err
+		}
+		err = a.challenger.Start()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Create the proxy and connect it to lnd.
@@ -267,7 +270,9 @@ func (a *Aperture) UpdateServices(services []*proxy.Service) error {
 func (a *Aperture) Stop() error {
 	var returnErr error
 
-	a.challenger.Stop()
+	if a.challenger != nil {
+		a.challenger.Stop()
+	}
 
 	// Shut down our client and server connections now. This should cause
 	// the first goroutine to quit.

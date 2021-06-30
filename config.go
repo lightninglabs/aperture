@@ -31,6 +31,8 @@ type AuthConfig struct {
 	MacDir string `long:"macdir"`
 
 	Network string `long:"network"`
+
+	Disable bool `long:"disable"`
 }
 
 type TorConfig struct {
