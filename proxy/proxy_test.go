@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon.v2"
 )
@@ -293,16 +294,31 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	client := proxytest.NewGreeterClient(conn)
 
 	// Make request without authentication. We expect an error that can
-	// be parsed by gRPC.
+	// be parsed by gRPC. We also need to extract any metadata that are
+	// sent in the trailer to make sure the challenge is returned properly.
 	req := &proxytest.HelloRequest{Name: "foo"}
+	captureMetadata := metadata.MD{}
 	_, err = client.SayHello(
 		context.Background(), req, grpc.WaitForReady(true),
+		grpc.Trailer(&captureMetadata),
 	)
 	require.Error(t, err)
 	statusErr, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, "payment required", statusErr.Message())
 	require.Equal(t, codes.Internal, statusErr.Code())
+
+	// We expect the WWW-Authenticate header field to be set to an LSAT
+	// auth response.
+	expectedHeaderContent, _ := mockAuth.FreshChallengeHeader(&http.Request{
+		Header: map[string][]string{},
+	}, "", 0)
+	capturedHeader := captureMetadata.Get("WWW-Authenticate")
+	require.Len(t, capturedHeader, 1)
+	require.Equal(
+		t, expectedHeaderContent.Get("WWW-Authenticate"),
+		capturedHeader[0],
+	)
 
 	// Make sure that if we query an URL that is on the whitelist, we don't
 	// get the 402 response.
