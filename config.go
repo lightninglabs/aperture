@@ -16,13 +16,13 @@ var (
 	defaultMaxLogFileSize  = 10
 )
 
-type etcdConfig struct {
+type EtcdConfig struct {
 	Host     string `long:"host" description:"host:port of an active etcd instance"`
 	User     string `long:"user" description:"user authorized to access the etcd host"`
 	Password string `long:"password" description:"password of the etcd user"`
 }
 
-type authConfig struct {
+type AuthConfig struct {
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
@@ -33,7 +33,7 @@ type authConfig struct {
 	Network string `long:"network"`
 }
 
-type torConfig struct {
+type TorConfig struct {
 	Control     string `long:"control" description:"The host:port of the Tor instance."`
 	ListenPort  uint16 `long:"listenport" description:"The port we should listen on for client requests over Tor. Note that this port should not be exposed to the outside world, it is only intended to be reached by clients through the onion service."`
 	VirtualPort uint16 `long:"virtualport" description:"The port through which the onion services created can be reached at."`
@@ -41,7 +41,7 @@ type torConfig struct {
 	V3          bool   `long:"v3" description:"Whether we should listen for client requests through a v3 onion service."`
 }
 
-type config struct {
+type Config struct {
 	// ListenAddr is the listening address that we should use to allow Aperture
 	// to listen for requests.
 	ListenAddr string `long:"listenaddr" description:"The interface we should listen on for client requests."`
@@ -65,11 +65,11 @@ type config struct {
 	// directory defined by StaticRoot.
 	ServeStatic bool `long:"servestatic" description:"Flag to enable or disable static content serving."`
 
-	Etcd *etcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
+	Etcd *EtcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
 
-	Authenticator *authConfig `long:"authenticator" description:"Configuration for the authenticator."`
+	Authenticator *AuthConfig `long:"authenticator" description:"Configuration for the authenticator."`
 
-	Tor *torConfig `long:"tor" description:"Configuration for the Tor instance backing the proxy."`
+	Tor *TorConfig `long:"tor" description:"Configuration for the Tor instance backing the proxy."`
 
 	// Services is a list of JSON objects in string format, which specify
 	// each backend service to Aperture.

@@ -68,7 +68,7 @@ const (
 
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
-func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator,
+func NewLndChallenger(cfg *AuthConfig, genInvoiceReq InvoiceRequestGenerator,
 	errChan chan<- error) (*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
