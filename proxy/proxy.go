@@ -104,21 +104,50 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resourceName := target.ResourceName(r.URL.Path)
+
 	// Determine auth level required to access service and dispatch request
 	// accordingly.
 	authLevel := target.AuthRequired(r)
 	switch {
 	case authLevel.IsOn():
-		if !p.authenticator.Accept(&r.Header, target.Name) {
+		// Determine if the header contains the authentication
+		// required for the given resource. The call to Accept is
+		// called in each case body rather than outside the switch so
+		// as to avoid calling this possibly expensive call for static
+		// resources.
+		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		if !acceptAuth {
+			price, err := target.pricer.GetPrice(
+				r.Context(), r.URL.Path,
+			)
+			if err != nil {
+				prefixLog.Errorf("error getting "+
+					"resource price: %v", err)
+				sendDirectResponse(
+					w, r, http.StatusInternalServerError,
+					"failure fetching "+
+						"resource price",
+				)
+				return
+			}
+
+			// If the price returned is zero, then break out of the
+			// switch statement and allow access to the service.
+			if price == 0 {
+				break
+			}
+
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r, target.Name, target.Price)
+			p.handlePaymentRequired(w, r, resourceName, price)
 			return
 		}
 
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		if !p.authenticator.Accept(&r.Header, target.Name) {
+		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		if !acceptAuth {
 			ok, err := target.freebieDb.CanPass(r, remoteIP)
 			if err != nil {
 				prefixLog.Errorf("Error querying freebie db: "+
@@ -130,7 +159,30 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !ok {
-				p.handlePaymentRequired(w, r, target.Name, target.Price)
+				price, err := target.pricer.GetPrice(
+					r.Context(), r.URL.Path,
+				)
+				if err != nil {
+					prefixLog.Errorf("error getting "+
+						"resource price: %v", err)
+					sendDirectResponse(
+						w, r, http.StatusInternalServerError,
+						"failure fetching "+
+							"resource price",
+					)
+					return
+				}
+
+				// If the price returned is zero, then break
+				// out of the switch statement and allow access
+				// to the service.
+				if price == 0 {
+					break
+				}
+
+				p.handlePaymentRequired(
+					w, r, resourceName, target.Price,
+				)
 				return
 			}
 			_, err = target.freebieDb.TallyFreebie(r, remoteIP)
@@ -184,6 +236,20 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 	}
 
 	return nil
+}
+
+// Close cleans up the Proxy by closing any remaining open connections.
+func (p *Proxy) Close() error {
+	var returnErr error
+	for _, s := range p.services {
+		if err := s.pricer.Close(); err != nil {
+			log.Errorf("error while closing the pricer of "+
+				"service %s: %v", s.Name, err)
+			returnErr = err
+		}
+	}
+
+	return returnErr
 }
 
 // director is a method that rewrites an incoming request to be forwarded to a

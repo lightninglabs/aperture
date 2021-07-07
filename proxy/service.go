@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcutil"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/freebie"
+	"github.com/lightninglabs/aperture/pricer"
 )
 
 var (
@@ -84,6 +85,10 @@ type Service struct {
 	// service's endpoint.
 	Price int64 `long:"price" description:"Static LSAT value in satoshis to be used for this service"`
 
+	// DynamicPrice holds the config options needed for initialising
+	// the pricer if a gPRC server is to be used for price data.
+	DynamicPrice pricer.Config `long:"dynamicprice" description:"Configuration for connecting to the gRPC server to use for the pricer backend"`
+
 	// AuthWhitelistPaths is an optional list of regular expressions that
 	// are matched against the path of the URL of a request. If the request
 	// URL matches any of those regular expressions, the call is treated as
@@ -93,6 +98,20 @@ type Service struct {
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
 
 	freebieDb freebie.DB
+	pricer    pricer.Pricer
+}
+
+// ResourceName returns the string to be used to identify which resource a
+// macaroon has access to. If DynamicPrice Enabled option is set to true then
+// the service has further restrictions per resource and so the name will
+// include both the service name and the specific resource name. Otherwise
+// authorisation is only restricted by service name.
+func (s *Service) ResourceName(resourcePath string) string {
+	if s.DynamicPrice.Enabled {
+		return fmt.Sprintf("%s%s", s.Name, resourcePath)
+	}
+
+	return s.Name
 }
 
 // AuthRequired determines the auth level required for a given request.
@@ -170,6 +189,22 @@ func prepareServices(services []*Service) error {
 			}
 		}
 
+		// If dynamic prices are enabled then use the provided
+		// DynamicPrice options to initialise a gRPC backed
+		// pricer client.
+		if service.DynamicPrice.Enabled {
+			priceClient, err := pricer.NewGRPCPricer(
+				&service.DynamicPrice,
+			)
+			if err != nil {
+				return fmt.Errorf("error initializing "+
+					"pricer: %v", err)
+			}
+
+			service.pricer = priceClient
+			continue
+		}
+
 		// Check that the price for the service is not negative and not
 		// more than the maximum amount allowed by lnd. If no price, or
 		// a price of zero satoshis, is set the then default price of 1
@@ -186,6 +221,10 @@ func prepareServices(services []*Service) error {
 			return fmt.Errorf("maximum price exceeded for "+
 				"service %s", service.Name)
 		}
+
+		// Initialise a default pricer where all resources in a server
+		// are given the same price.
+		service.pricer = pricer.NewDefaultPricer(service.Price)
 	}
 	return nil
 }
