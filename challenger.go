@@ -21,6 +21,9 @@ import (
 // lnrpc.AddInvoice call.
 type InvoiceRequestGenerator func(price int64) (*lnrpc.Invoice, error)
 
+type VerifyInvoiceStatusFunc func(hash lntypes.Hash,
+	state lnrpc.Invoice_InvoiceState, timeout time.Duration) error
+
 // InvoiceClient is an interface that only implements part of a full lnd client,
 // namely the part around the invoices we need for the challenger to work.
 type InvoiceClient interface {
@@ -41,8 +44,9 @@ type InvoiceClient interface {
 // LndChallenger is a challenger that uses an lnd backend to create new LSAT
 // payment challenges.
 type LndChallenger struct {
-	client        InvoiceClient
-	genInvoiceReq InvoiceRequestGenerator
+	Client                  InvoiceClient
+	GenInvoiceReq           InvoiceRequestGenerator
+	VerifyInvoiceStatusFunc VerifyInvoiceStatusFunc
 
 	invoiceStates  map[lntypes.Hash]lnrpc.Invoice_InvoiceState
 	invoicesMtx    *sync.Mutex
@@ -69,7 +73,7 @@ const (
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
 func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator,
-	errChan chan<- error) (*LndChallenger, error) {
+	verifyInvoiceStatus VerifyInvoiceStatusFunc, errChan chan<- error) (*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
@@ -84,15 +88,20 @@ func NewLndChallenger(cfg *authConfig, genInvoiceReq InvoiceRequestGenerator,
 	}
 
 	invoicesMtx := &sync.Mutex{}
-	return &LndChallenger{
-		client:        client,
-		genInvoiceReq: genInvoiceReq,
+	c := &LndChallenger{
+		Client:        client,
+		GenInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		quit:          make(chan struct{}),
 		errChan:       errChan,
-	}, nil
+	}
+	if verifyInvoiceStatus == nil {
+		c.VerifyInvoiceStatusFunc = c.DefaultVerifyInvoiceStatus
+	}
+
+	return c, nil
 }
 
 // Start starts the challenger's main work which is to keep track of all
@@ -111,7 +120,7 @@ func (l *LndChallenger) Start() error {
 	// cache. We need to keep track of all invoices, even quite old ones to
 	// make sure tokens are valid. But to save space we only keep track of
 	// an invoice's state.
-	invoiceResp, err := l.client.ListInvoices(
+	invoiceResp, err := l.Client.ListInvoices(
 		context.Background(), &lnrpc.ListInvoiceRequest{
 			NumMaxInvoices: math.MaxUint64,
 		},
@@ -148,7 +157,7 @@ func (l *LndChallenger) Start() error {
 	ctxc, cancel := context.WithCancel(context.Background())
 	l.invoicesCancel = cancel
 
-	subscriptionResp, err := l.client.SubscribeInvoices(
+	subscriptionResp, err := l.Client.SubscribeInvoices(
 		ctxc, &lnrpc.InvoiceSubscription{
 			AddIndex:    addIndex,
 			SettleIndex: settleIndex,
@@ -264,13 +273,13 @@ func (l *LndChallenger) Stop() {
 func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) {
 	// Obtain a new invoice from lnd first. We need to know the payment hash
 	// so we can add it as a caveat to the macaroon.
-	invoice, err := l.genInvoiceReq(price)
+	invoice, err := l.GenInvoiceReq(price)
 	if err != nil {
 		log.Errorf("Error generating invoice request: %v", err)
 		return "", lntypes.ZeroHash, err
 	}
 	ctx := context.Background()
-	response, err := l.client.AddInvoice(ctx, invoice)
+	response, err := l.Client.AddInvoice(ctx, invoice)
 	if err != nil {
 		log.Errorf("Error adding invoice: %v", err)
 		return "", lntypes.ZeroHash, err
@@ -285,12 +294,22 @@ func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) 
 }
 
 // VerifyInvoiceStatus checks that an invoice identified by a payment
-// hash has the desired status. To make sure we don't fail while the
-// invoice update is still on its way, we try several times until either
-// the desired status is set or the given timeout is reached.
+// hash has the desired status. An optional invoice checker which could
+// be customized by implementer or using the default implementation
+// `DefaultVerifyInvoiceStatus`.
 //
 // NOTE: This is part of the auth.InvoiceChecker interface.
 func (l *LndChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
+	state lnrpc.Invoice_InvoiceState, timeout time.Duration) error {
+
+	return l.VerifyInvoiceStatusFunc(hash, state, timeout)
+}
+
+// DefaultVerifyInvoiceStatus checks that an invoice identified by a payment
+// hash has the desired status. To make sure we don't fail while the
+// invoice update is still on its way, we try several times until either
+// the desired status is set or the given timeout is reached.
+func (l *LndChallenger) DefaultVerifyInvoiceStatus(hash lntypes.Hash,
 	state lnrpc.Invoice_InvoiceState, timeout time.Duration) error {
 
 	// Prevent the challenger to be shut down while we're still waiting for

@@ -8,21 +8,21 @@ import (
 	"github.com/lightninglabs/aperture/proxy"
 )
 
-// staticServiceLimiter provides static restrictions for services.
+// StaticServiceLimiter provides static restrictions for services.
 //
 // TODO(wilmer): use etcd instead.
-type staticServiceLimiter struct {
-	capabilities map[lsat.Service]lsat.Caveat
-	constraints  map[lsat.Service][]lsat.Caveat
+type StaticServiceLimiter struct {
+	Capabilities map[lsat.Service]lsat.Caveat
+	Constraints  map[lsat.Service][]lsat.Caveat
 }
 
-// A compile-time constraint to ensure staticServiceLimiter implements
+// A compile-time constraint to ensure StaticServiceLimiter implements
 // mint.ServiceLimiter.
-var _ mint.ServiceLimiter = (*staticServiceLimiter)(nil)
+var _ mint.ServiceLimiter = (*StaticServiceLimiter)(nil)
 
-// newStaticServiceLimiter instantiates a new static service limiter backed by
+// NewStaticServiceLimiter instantiates a new static service limiter backed by
 // the given restrictions.
-func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimiter {
+func NewStaticServiceLimiter(proxyServices []*proxy.Service) *StaticServiceLimiter {
 	capabilities := make(map[lsat.Service]lsat.Caveat)
 	constraints := make(map[lsat.Service][]lsat.Caveat)
 
@@ -41,20 +41,20 @@ func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimit
 		}
 	}
 
-	return &staticServiceLimiter{
-		capabilities: capabilities,
-		constraints:  constraints,
+	return &StaticServiceLimiter{
+		Capabilities: capabilities,
+		Constraints:  constraints,
 	}
 }
 
 // ServiceCapabilities returns the capabilities caveats for each service. This
 // determines which capabilities of each service can be accessed.
-func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
+func (l *StaticServiceLimiter) ServiceCapabilities(ctx context.Context,
 	services ...lsat.Service) ([]lsat.Caveat, error) {
 
 	res := make([]lsat.Caveat, 0, len(services))
 	for _, service := range services {
-		capabilities, ok := l.capabilities[service]
+		capabilities, ok := l.Capabilities[service]
 		if !ok {
 			continue
 		}
@@ -66,12 +66,12 @@ func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 
 // ServiceConstraints returns the constraints for each service. This enforces
 // additional constraints on a particular service/service capability.
-func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
+func (l *StaticServiceLimiter) ServiceConstraints(ctx context.Context,
 	services ...lsat.Service) ([]lsat.Caveat, error) {
 
 	res := make([]lsat.Caveat, 0, len(services))
 	for _, service := range services {
-		constraints, ok := l.constraints[service]
+		constraints, ok := l.Constraints[service]
 		if !ok {
 			continue
 		}

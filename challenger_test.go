@@ -100,15 +100,18 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 	}
 	invoicesMtx := &sync.Mutex{}
 	mainErrChan := make(chan error)
-	return &LndChallenger{
-		client:        mockClient,
-		genInvoiceReq: genInvoiceReq,
+	c := &LndChallenger{
+		Client:        mockClient,
+		GenInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
 		quit:          make(chan struct{}),
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		errChan:       mainErrChan,
-	}, mockClient, mainErrChan
+	}
+	c.VerifyInvoiceStatusFunc = c.DefaultVerifyInvoiceStatus
+
+	return c, mockClient, mainErrChan
 }
 
 func newInvoice(hash lntypes.Hash, addIndex uint64,
@@ -130,7 +133,7 @@ func TestLndChallenger(t *testing.T) {
 	// First of all, test that the NewLndChallenger doesn't allow a nil
 	// invoice generator function.
 	errChan := make(chan error)
-	_, err := NewLndChallenger(nil, nil, errChan)
+	_, err := NewLndChallenger(nil, nil, nil, errChan)
 	require.Error(t, err)
 
 	// Now mock the lnd backend and create a challenger instance that we can

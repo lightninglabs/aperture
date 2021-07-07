@@ -119,7 +119,7 @@ func run() error {
 	}
 	errChan := make(chan error)
 	challenger, err := NewLndChallenger(
-		cfg.Authenticator, genInvoiceReq, errChan,
+		cfg.Authenticator, genInvoiceReq, nil, errChan,
 	)
 	if err != nil {
 		return err
@@ -455,7 +455,7 @@ func createProxy(cfg *config, challenger *LndChallenger,
 	minter := mint.New(&mint.Config{
 		Challenger:     challenger,
 		Secrets:        newSecretStore(etcdClient),
-		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+		ServiceLimiter: NewStaticServiceLimiter(cfg.Services),
 	})
 	authenticator := auth.NewLsatAuthenticator(minter, challenger)
 	return proxy.New(
