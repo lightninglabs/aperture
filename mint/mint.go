@@ -3,6 +3,7 @@ package mint
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
@@ -17,6 +18,9 @@ var (
 	// ErrSecretNotFound is an error returned when we attempt to retrieve a
 	// secret by its key but it is not found.
 	ErrSecretNotFound = errors.New("secret not found")
+	// ErrIncompatibleHmacFuncUsed is an error when we try to generate pseudo-random
+	// secret but the output of the hash function is too short.
+	ErrIncompatibleHmacFuncUsed = errors.New("HMAC function returned less than lsat.SecretSize bytes")
 )
 
 // Challenger is an interface used to present requesters of LSATs with a
@@ -76,6 +80,9 @@ type Config struct {
 	// ServiceLimiter provides us with how we should limit a new LSAT based
 	// on its target services.
 	ServiceLimiter ServiceLimiter
+
+	// Key to be used for creating pseudo-random values (instead of using persistent Secrets).
+	KeyForPseudoRandomness []byte
 }
 
 // Mint is an entity that is able to mint and verify LSATs for a set of
@@ -88,6 +95,9 @@ type Mint struct {
 func New(cfg *Config) *Mint {
 	return &Mint{cfg: *cfg}
 }
+
+// SecretRemover is the signature for secret removal delegate
+type SecretRemover func(context.Context)
 
 // MintLSAT mints a new LSAT for the target services.
 func (m *Mint) MintLSAT(ctx context.Context,
@@ -112,8 +122,17 @@ func (m *Mint) MintLSAT(ctx context.Context,
 	if err != nil {
 		return nil, "", err
 	}
+
+	// TODO(fiksn): perhaps split createUniqueIdentifier()
+	idPretty, err := lsat.DecodeIdentifier(bytes.NewReader(id))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Create new secret
 	idHash := sha256.Sum256(id)
-	secret, err := m.cfg.Secrets.NewSecret(ctx, idHash)
+	secret, cleanup, err := m.createSecret(ctx, idHash, idPretty)
+
 	if err != nil {
 		return nil, "", err
 	}
@@ -122,7 +141,7 @@ func (m *Mint) MintLSAT(ctx context.Context,
 	)
 	if err != nil {
 		// Attempt to revoke the secret to save space.
-		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
+		cleanup(ctx)
 		return nil, "", err
 	}
 
@@ -134,13 +153,13 @@ func (m *Mint) MintLSAT(ctx context.Context,
 		caveats, err = m.caveatsForServices(ctx, services...)
 		if err != nil {
 			// Attempt to revoke the secret to save space.
-			_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
+			cleanup(ctx)
 			return nil, "", err
 		}
 	}
 	if err := lsat.AddFirstPartyCaveats(mac, caveats...); err != nil {
 		// Attempt to revoke the secret to save space.
-		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
+		cleanup(ctx)
 		return nil, "", err
 	}
 
@@ -231,6 +250,62 @@ type VerificationParams struct {
 	TargetService string
 }
 
+// Generates a pseudo-random secret.
+func (m *Mint) getDeterministicSecret(id *lsat.Identifier) ([lsat.SecretSize]byte, error) {
+	var ret [lsat.SecretSize]byte
+
+	if m.cfg.KeyForPseudoRandomness == nil {
+		return ret, ErrSecretNotFound
+	}
+
+	mac := hmac.New(sha256.New, m.cfg.KeyForPseudoRandomness)
+	_, err := mac.Write(id.TokenID[:])
+	if err != nil {
+		return ret, err
+	}
+
+	result := mac.Sum(nil)
+	if len(result) < lsat.SecretSize {
+		return ret, ErrIncompatibleHmacFuncUsed
+	}
+
+	copy(ret[0:], result[0:lsat.SecretSize])
+
+	return ret, nil
+}
+
+// Either returns the secret from SecretStore or creates a pseudo-random one.
+func (m *Mint) determineSecret(ctx context.Context, params *VerificationParams,
+	id *lsat.Identifier) ([lsat.SecretSize]byte, error) {
+	if m.cfg.KeyForPseudoRandomness != nil {
+		return m.getDeterministicSecret(id)
+	}
+
+	return m.cfg.Secrets.GetSecret(
+		ctx, sha256.Sum256(params.Macaroon.Id()),
+	)
+}
+
+// Creates a new secret (persistently stored or pseudo-random).
+func (m *Mint) createSecret(ctx context.Context, secretID [32]byte,
+	id *lsat.Identifier) ([lsat.SecretSize]byte, SecretRemover, error) {
+	if m.cfg.KeyForPseudoRandomness != nil {
+
+		secret, err := m.getDeterministicSecret(id)
+		dummy := func(ctx context.Context) {}
+
+		return secret, dummy, err
+	}
+
+	secret, err := m.cfg.Secrets.NewSecret(ctx, secretID)
+
+	remover := func(ctx context.Context) {
+		_ = m.cfg.Secrets.RevokeSecret(ctx, secretID)
+	}
+
+	return secret, remover, err
+}
+
 // VerifyLSAT attempts to verify an LSAT with the given parameters.
 func (m *Mint) VerifyLSAT(ctx context.Context, params *VerificationParams) error {
 	// We'll first perform a quick check to determine if a valid preimage
@@ -245,12 +320,12 @@ func (m *Mint) VerifyLSAT(ctx context.Context, params *VerificationParams) error
 	}
 
 	// If there was, then we'll ensure the LSAT was minted by us.
-	secret, err := m.cfg.Secrets.GetSecret(
-		ctx, sha256.Sum256(params.Macaroon.Id()),
-	)
+	secret, err := m.determineSecret(ctx, params, id)
+
 	if err != nil {
 		return err
 	}
+
 	rawCaveats, err := params.Macaroon.VerifySignature(secret[:], nil)
 	if err != nil {
 		return err

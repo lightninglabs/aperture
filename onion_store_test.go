@@ -2,6 +2,8 @@ package aperture
 
 import (
 	"bytes"
+	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/lightningnetwork/lnd/tor"
@@ -10,7 +12,7 @@ import (
 // assertPrivateKeyExists is a helper to determine if the private key for an
 // onion service exists in the store. If it does, it's compared against what's
 // expected.
-func assertPrivateKeyExists(t *testing.T, store *onionStore,
+func assertPrivateKeyExists(t *testing.T, store tor.OnionStore,
 	onionType tor.OnionType, expPrivateKey *[]byte) {
 
 	t.Helper()
@@ -32,16 +34,7 @@ func assertPrivateKeyExists(t *testing.T, store *onionStore,
 	}
 }
 
-// TestOnionStore ensures the different operations of the onionStore behave as
-// espected.
-func TestOnionStore(t *testing.T) {
-	etcdClient, serverCleanup := etcdSetup(t)
-	defer etcdClient.Close()
-	defer serverCleanup()
-
-	// Upon a fresh initialization of the store, no private keys should
-	// exist for any onion service type.
-	store := newOnionStore(etcdClient)
+func commonTests(t *testing.T, store tor.OnionStore) {
 	assertPrivateKeyExists(t, store, tor.V2, nil)
 	assertPrivateKeyExists(t, store, tor.V3, nil)
 
@@ -78,4 +71,30 @@ func TestOnionStore(t *testing.T) {
 			err)
 	}
 	assertPrivateKeyExists(t, store, tor.V3, nil)
+}
+
+func TestOnionStoreFile(t *testing.T) {
+	dir, err := ioutil.TempDir("", "aperture-test-*")
+	if err != nil {
+		t.Errorf("Temp dir could not be created")
+	}
+	defer os.RemoveAll(dir)
+
+	store := newOnionStoreFile(dir)
+
+	commonTests(t, store)
+}
+
+// TestOnionStore ensures the different operations of the onionStore behave as
+// espected.
+func TestOnionStore(t *testing.T) {
+	etcdClient, serverCleanup := etcdSetup(t)
+	defer etcdClient.Close()
+	defer serverCleanup()
+
+	// Upon a fresh initialization of the store, no private keys should
+	// exist for any onion service type.
+	store := newOnionStore(etcdClient)
+
+	commonTests(t, store)
 }
