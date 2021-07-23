@@ -338,11 +338,12 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 	// exist).
 	tlsKeyFile := filepath.Join(apertureDataDir, defaultTLSKeyFilename)
 	tlsCertFile := filepath.Join(apertureDataDir, defaultTLSCertFilename)
+	tlsExtraDomains := []string{serverName}
 	if !fileExists(tlsCertFile) && !fileExists(tlsKeyFile) {
 		log.Infof("Generating TLS certificates...")
 		err := cert.GenCertPair(
 			selfSignedCertOrganization, tlsCertFile, tlsKeyFile,
-			nil, nil, false, selfSignedCertValidity,
+			nil, tlsExtraDomains, false, selfSignedCertValidity,
 		)
 		if err != nil {
 			return nil, err
