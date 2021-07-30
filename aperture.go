@@ -19,7 +19,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
-	"go.etcd.io/etcd/clientv3"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -72,7 +72,7 @@ func Main() {
 	// TODO: Prevent from running twice.
 	err := run()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -80,30 +80,74 @@ func Main() {
 // run sets up the proxy server and runs it. This function blocks until a
 // shutdown signal is received.
 func run() error {
-	// First, parse configuration file and set up logging.
+	// Before starting everything, make sure we can intercept any interrupt
+	// signals so we can block on waiting for them later.
+	interceptor, err := signal.Intercept()
+	if err != nil {
+		return err
+	}
+
+	// Next, parse configuration file and set up logging.
 	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
 	cfg, err := getConfig(configFile)
 	if err != nil {
 		return fmt.Errorf("unable to parse config file: %v", err)
 	}
-	err = setupLogging(cfg)
+	err = setupLogging(cfg, interceptor)
 	if err != nil {
 		return fmt.Errorf("unable to set up logging: %v", err)
 	}
 
-	// Before starting everything, make sure we can intercept any interrupt
-	// signals so we can block on waiting for them later.
-	err = signal.Intercept()
-	if err != nil {
-		return err
+	errChan := make(chan error)
+	a := NewAperture(cfg)
+	if err := a.Start(errChan); err != nil {
+		return fmt.Errorf("unable to start aperture: %v", err)
 	}
 
+	select {
+	case <-interceptor.ShutdownChannel():
+		log.Infof("Received interrupt signal, shutting down aperture.")
+
+	case err := <-errChan:
+		log.Errorf("Error while running aperture: %v", err)
+	}
+
+	return a.Stop()
+}
+
+// Aperture is the main type of the aperture service. It holds all components
+// that are required for the authenticating reverse proxy to do its job.
+type Aperture struct {
+	cfg *Config
+
+	etcdClient    *clientv3.Client
+	challenger    *LndChallenger
+	httpsServer   *http.Server
+	torHTTPServer *http.Server
+	proxy         *proxy.Proxy
+
+	wg   sync.WaitGroup
+	quit chan struct{}
+}
+
+// NewAperture creates a new instance of the Aperture service.
+func NewAperture(cfg *Config) *Aperture {
+	return &Aperture{
+		cfg:  cfg,
+		quit: make(chan struct{}),
+	}
+}
+
+// Start sets up the proxy server and starts it.
+func (a *Aperture) Start(errChan chan error) error {
+	var err error
+
 	// Initialize our etcd client.
-	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.Etcd.Host},
+	a.etcdClient, err = clientv3.New(clientv3.Config{
+		Endpoints:   []string{a.cfg.Etcd.Host},
 		DialTimeout: 5 * time.Second,
-		Username:    cfg.Etcd.User,
-		Password:    cfg.Etcd.Password,
+		Username:    a.cfg.Etcd.User,
+		Password:    a.cfg.Etcd.Password,
 	})
 	if err != nil {
 		return fmt.Errorf("unable to connect to etcd: %v", err)
@@ -117,44 +161,45 @@ func run() error {
 			Value: price,
 		}, nil
 	}
-	errChan := make(chan error)
-	challenger, err := NewLndChallenger(
-		cfg.Authenticator, genInvoiceReq, errChan,
-	)
-	if err != nil {
-		return err
+
+	if !a.cfg.Authenticator.Disable {
+		a.challenger, err = NewLndChallenger(
+			a.cfg.Authenticator, genInvoiceReq, errChan,
+		)
+		if err != nil {
+			return err
+		}
+		err = a.challenger.Start()
+		if err != nil {
+			return err
+		}
 	}
-	err = challenger.Start()
-	if err != nil {
-		return err
-	}
-	defer challenger.Stop()
 
 	// Create the proxy and connect it to lnd.
-	servicesProxy, err := createProxy(cfg, challenger, etcdClient)
+	a.proxy, err = createProxy(a.cfg, a.challenger, a.etcdClient)
 	if err != nil {
 		return err
 	}
-	handler := http.HandlerFunc(servicesProxy.ServeHTTP)
-	httpsServer := &http.Server{
-		Addr:    cfg.ListenAddr,
+	handler := http.HandlerFunc(a.proxy.ServeHTTP)
+	a.httpsServer = &http.Server{
+		Addr:    a.cfg.ListenAddr,
 		Handler: handler,
 	}
 
 	// Create TLS configuration by either creating new self-signed certs or
 	// trying to obtain one through Let's Encrypt.
 	var serveFn func() error
-	if cfg.Insecure {
+	if a.cfg.Insecure {
 		// Normally, HTTP/2 only works with TLS. But there is a special
 		// version called HTTP/2 Cleartext (h2c) that some clients
 		// support and that gRPC uses when the grpc.WithInsecure()
 		// option is used. The default HTTP handler doesn't support it
 		// though so we need to add a special h2c handler here.
-		serveFn = httpsServer.ListenAndServe
-		httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
+		serveFn = a.httpsServer.ListenAndServe
+		a.httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
 	} else {
-		httpsServer.TLSConfig, err = getTLSConfig(
-			cfg.ServerName, cfg.AutoCert,
+		a.httpsServer.TLSConfig, err = getTLSConfig(
+			a.cfg.ServerName, a.cfg.AutoCert,
 		)
 		if err != nil {
 			return err
@@ -163,24 +208,20 @@ func run() error {
 			// The httpsServer.TLSConfig contains certificates at
 			// this point so we don't need to pass in certificate
 			// and key file names.
-			return httpsServer.ListenAndServeTLS("", "")
+			return a.httpsServer.ListenAndServeTLS("", "")
 		}
 	}
 
 	// Finally run the server.
-	var (
-		wg   sync.WaitGroup
-		quit = make(chan struct{})
-	)
-	log.Infof("Starting the server, listening on %s.", cfg.ListenAddr)
+	log.Infof("Starting the server, listening on %s.", a.cfg.ListenAddr)
 
-	wg.Add(1)
+	a.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer a.wg.Done()
 
 		select {
 		case errChan <- serveFn():
-		case <-quit:
+		case <-a.quit:
 		}
 	}()
 
@@ -191,9 +232,8 @@ func run() error {
 	// will only be reached through the onion services, which already
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
-	var torHTTPServer *http.Server
-	if cfg.Tor != nil && (cfg.Tor.V2 || cfg.Tor.V3) {
-		torController, err := initTorListener(cfg, etcdClient)
+	if a.cfg.Tor != nil && (a.cfg.Tor.V2 || a.cfg.Tor.V3) {
+		torController, err := initTorListener(a.cfg, a.etcdClient)
 		if err != nil {
 			return err
 		}
@@ -201,45 +241,53 @@ func run() error {
 			_ = torController.Stop()
 		}()
 
-		torHTTPServer = &http.Server{
-			Addr:    fmt.Sprintf("localhost:%d", cfg.Tor.ListenPort),
+		a.torHTTPServer = &http.Server{
+			Addr:    fmt.Sprintf("localhost:%d", a.cfg.Tor.ListenPort),
 			Handler: h2c.NewHandler(handler, &http2.Server{}),
 		}
-		wg.Add(1)
+		a.wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer a.wg.Done()
 
 			select {
-			case errChan <- torHTTPServer.ListenAndServe():
-			case <-quit:
+			case errChan <- a.torHTTPServer.ListenAndServe():
+			case <-a.quit:
 			}
 		}()
 	}
 
-	var returnErr error
-	select {
-	case <-signal.ShutdownChannel():
-		log.Infof("Received interrupt signal, shutting down aperture.")
+	return nil
+}
 
-	case err := <-errChan:
-		log.Errorf("Error while running aperture: %v", err)
-		returnErr = err
+// UpdateServices instructs the proxy to re-initialize its internal
+// configuration of backend services. This can be used to add or remove backends
+// at run time or enable/disable authentication on the fly.
+func (a *Aperture) UpdateServices(services []*proxy.Service) error {
+	return a.proxy.UpdateServices(services)
+}
+
+// Stop gracefully shuts down the Aperture service.
+func (a *Aperture) Stop() error {
+	var returnErr error
+
+	if a.challenger != nil {
+		a.challenger.Stop()
 	}
 
 	// Shut down our client and server connections now. This should cause
 	// the first goroutine to quit.
-	cleanup(etcdClient, httpsServer)
+	cleanup(a.etcdClient, a.httpsServer)
 
 	// If we started a tor server as well, shut it down now too to cause the
 	// second goroutine to quit.
-	if torHTTPServer != nil {
-		_ = torHTTPServer.Close()
+	if a.torHTTPServer != nil {
+		returnErr = a.torHTTPServer.Close()
 	}
 
 	// Now we wait for the goroutines to exit before we return. The defers
 	// will take care of the rest of our started resources.
-	close(quit)
-	wg.Wait()
+	close(a.quit)
+	a.wg.Wait()
 
 	return returnErr
 }
@@ -257,8 +305,8 @@ func fileExists(name string) bool {
 
 // getConfig loads and parses the configuration file then checks it for valid
 // content.
-func getConfig(configFile string) (*config, error) {
-	cfg := &config{}
+func getConfig(configFile string) (*Config, error) {
+	cfg := &Config{}
 	b, err := ioutil.ReadFile(configFile)
 	if err != nil {
 		return nil, err
@@ -277,12 +325,13 @@ func getConfig(configFile string) (*config, error) {
 }
 
 // setupLogging parses the debug level and initializes the log file rotator.
-func setupLogging(cfg *config) error {
+func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	if cfg.DebugLevel == "" {
 		cfg.DebugLevel = defaultLogLevel
 	}
 
 	// Now initialize the logger and set the log level.
+	SetupLoggers(logWriter, interceptor)
 	logFile := filepath.Join(apertureDataDir, defaultLogFilename)
 	err := logWriter.InitLogRotator(
 		logFile, defaultMaxLogFileSize, defaultMaxLogFiles,
@@ -413,7 +462,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 // initTorListener initiates a Tor controller instance with the Tor server
 // specified in the config. Onion services will be created over which the proxy
 // can be reached at.
-func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error) {
+func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error) {
 	// Establish a controller connection with the backing Tor server and
 	// proceed to create the requested onion services.
 	onionCfg := tor.AddOnionConfig{
@@ -450,7 +499,7 @@ func initTorListener(cfg *config, etcd *clientv3.Client) (*tor.Controller, error
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *config, challenger *LndChallenger,
+func createProxy(cfg *Config, challenger *LndChallenger,
 	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
 
 	minter := mint.New(&mint.Config{
