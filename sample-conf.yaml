@@ -82,8 +82,26 @@ services:
     constraints:
         "valid_until": "2020-01-01"
 
-    # The LSAT value in satoshis for the service.
-    price: 1     
+    # The LSAT value in satoshis for the service. It is ignored if
+    # dynamicprice.enabled is set to true.
+    price: 0
+
+    # Options to use for connection to the price serving gRPC server.
+    dynamicprice:
+      # Whether or not a gRPC server is available to query price data from. If
+      # this option is set to true then the 'price' option is ignored.
+      enabled: true
+
+      # The address of the gRPC pricer server.
+      grpcaddress: "127.0.0.1:10010"
+
+      # Whether or not TLS encryption should be used for communications with the
+      # gRPC server.
+      insecure: false
+
+      # The path to the pricer server's tls.cert. If the 'insecure' option is
+      # set to true then this path must be set.
+      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
   - name: "service2"
     hostregexp: "service2.com:8083"
@@ -93,6 +111,19 @@ services:
     constraints:
         "valid_until": "2020-01-01"
     price: 1
+
+  - name: "service3"
+    hostregexp: "service3.com:8083"
+    pathregexp: '^/.*$'
+    address: "123.456.789:8082"
+    protocol: https
+    constraints:
+        "valid_until": "2020-01-01"
+    dynamicprice:
+      enbled: true
+      grpcaddress: 123.456.789:8083
+      insecure: false
+      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.
