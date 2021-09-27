@@ -67,11 +67,11 @@ type Config struct {
 	// directory defined by StaticRoot.
 	ServeStatic bool `long:"servestatic" description:"Flag to enable or disable static content serving."`
 
-	Etcd *EtcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
+	Etcd *EtcdConfig `group:"etcd" namespace:"etcd"`
 
-	Authenticator *AuthConfig `long:"authenticator" description:"Configuration for the authenticator."`
+	Authenticator *AuthConfig `group:"authenticator" namespace:"authenticator"`
 
-	Tor *TorConfig `long:"tor" description:"Configuration for the Tor instance backing the proxy."`
+	Tor *TorConfig `group:"tor" namespace:"tor"`
 
 	// Services is a list of JSON objects in string format, which specify
 	// each backend service to Aperture.
