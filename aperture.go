@@ -16,6 +16,7 @@ import (
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -334,6 +335,14 @@ func getConfig(configFile string) (*Config, error) {
 	if _, err := flags.Parse(cfg); err != nil {
 		return nil, err
 	}
+
+	// Clean and expand our cert and macaroon paths.
+	cfg.Authenticator.TLSPath = lnd.CleanAndExpandPath(
+		cfg.Authenticator.TLSPath,
+	)
+	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
+		cfg.Authenticator.MacDir,
+	)
 
 	// Then check the configuration that we got from the config file, all
 	// required values need to be set at this point.
