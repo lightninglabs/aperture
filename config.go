@@ -26,13 +26,13 @@ type AuthConfig struct {
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
-	TLSPath string `long:"tlspath"`
+	TLSPath string `long:"tlspath" description:"Path to LND instance's tls certificate"`
 
-	MacDir string `long:"macdir"`
+	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
 
-	Network string `long:"network"`
+	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
 
-	Disable bool `long:"disable"`
+	Disable bool `long:"disable" description:"Whether to disable LND auth."`
 }
 
 type TorConfig struct {
