@@ -1,6 +1,9 @@
 package aperture
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/btcsuite/btcutil"
 	"github.com/lightninglabs/aperture/proxy"
 )
@@ -33,6 +36,27 @@ type AuthConfig struct {
 	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
 
 	Disable bool `long:"disable" description:"Whether to disable LND auth."`
+}
+
+func (a *AuthConfig) validate() error {
+	// If we're disabled, we don't mind what these values are.
+	if a.Disable {
+		return nil
+	}
+
+	if a.LndHost == "" {
+		return errors.New("lnd host required")
+	}
+
+	if a.TLSPath == "" {
+		return errors.New("lnd tls required")
+	}
+
+	if a.MacDir == "" {
+		return errors.New("lnd mac dir required")
+	}
+
+	return nil
 }
 
 type TorConfig struct {
@@ -80,4 +104,18 @@ type Config struct {
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
 	DebugLevel string `long:"debuglevel" description:"Debug level for the Aperture application and its subsystems."`
+}
+
+func (c *Config) validate() error {
+	if c.Authenticator != nil {
+		if err := c.Authenticator.validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.ListenAddr == "" {
+		return fmt.Errorf("missing listen address for server")
+	}
+
+	return nil
 }

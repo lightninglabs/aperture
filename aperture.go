@@ -346,9 +346,10 @@ func getConfig(configFile string) (*Config, error) {
 
 	// Then check the configuration that we got from the config file, all
 	// required values need to be set at this point.
-	if cfg.ListenAddr == "" {
-		return nil, fmt.Errorf("missing listen address for server")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
+
 	return cfg, nil
 }
 
