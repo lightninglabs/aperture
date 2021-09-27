@@ -104,6 +104,9 @@ type Config struct {
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
 	DebugLevel string `long:"debuglevel" description:"Debug level for the Aperture application and its subsystems."`
+
+	// ConfigFile points aperture to an alternative config file.
+	ConfigFile string `long:"configfile" description:"Custom path to a config file."`
 }
 
 func (c *Config) validate() error {
