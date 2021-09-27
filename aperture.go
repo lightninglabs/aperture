@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	flags "github.com/jessevdk/go-flags"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
@@ -71,10 +73,21 @@ var (
 func Main() {
 	// TODO: Prevent from running twice.
 	err := run()
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+
+	// Unwrap our error and check whether help was requested from our flag
+	// library. If the error is not wrapped, Unwrap returns nil. It is
+	// still safe to check the type of this nil error.
+	flagErr, isFlagErr := errors.Unwrap(err).(*flags.Error)
+	isHelpErr := isFlagErr && flagErr.Type == flags.ErrHelp
+
+	// If we got a nil error, or help was requested, just exit.
+	if err == nil || isHelpErr {
+		os.Exit(0)
 	}
+
+	// Print any other non-help related errors.
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
 }
 
 // run sets up the proxy server and runs it. This function blocks until a
@@ -91,7 +104,7 @@ func run() error {
 	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
 	cfg, err := getConfig(configFile)
 	if err != nil {
-		return fmt.Errorf("unable to parse config file: %v", err)
+		return fmt.Errorf("unable to parse config file: %w", err)
 	}
 	err = setupLogging(cfg, interceptor)
 	if err != nil {
@@ -313,6 +326,12 @@ func getConfig(configFile string) (*Config, error) {
 	}
 	err = yaml.Unmarshal(b, cfg)
 	if err != nil {
+		return nil, err
+	}
+
+	// Finally, parse the remaining command line options again to ensure
+	// they take precedence.
+	if _, err := flags.Parse(cfg); err != nil {
 		return nil, err
 	}
 
