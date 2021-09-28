@@ -1,6 +1,9 @@
 package aperture
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/btcsuite/btcutil"
 	"github.com/lightninglabs/aperture/proxy"
 )
@@ -26,13 +29,34 @@ type AuthConfig struct {
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
-	TLSPath string `long:"tlspath"`
+	TLSPath string `long:"tlspath" description:"Path to LND instance's tls certificate"`
 
-	MacDir string `long:"macdir"`
+	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
 
-	Network string `long:"network"`
+	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
 
-	Disable bool `long:"disable"`
+	Disable bool `long:"disable" description:"Whether to disable LND auth."`
+}
+
+func (a *AuthConfig) validate() error {
+	// If we're disabled, we don't mind what these values are.
+	if a.Disable {
+		return nil
+	}
+
+	if a.LndHost == "" {
+		return errors.New("lnd host required")
+	}
+
+	if a.TLSPath == "" {
+		return errors.New("lnd tls required")
+	}
+
+	if a.MacDir == "" {
+		return errors.New("lnd mac dir required")
+	}
+
+	return nil
 }
 
 type TorConfig struct {
@@ -67,11 +91,11 @@ type Config struct {
 	// directory defined by StaticRoot.
 	ServeStatic bool `long:"servestatic" description:"Flag to enable or disable static content serving."`
 
-	Etcd *EtcdConfig `long:"etcd" description:"Configuration for the etcd instance backing the proxy."`
+	Etcd *EtcdConfig `group:"etcd" namespace:"etcd"`
 
-	Authenticator *AuthConfig `long:"authenticator" description:"Configuration for the authenticator."`
+	Authenticator *AuthConfig `group:"authenticator" namespace:"authenticator"`
 
-	Tor *TorConfig `long:"tor" description:"Configuration for the Tor instance backing the proxy."`
+	Tor *TorConfig `group:"tor" namespace:"tor"`
 
 	// Services is a list of JSON objects in string format, which specify
 	// each backend service to Aperture.
@@ -80,4 +104,21 @@ type Config struct {
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
 	DebugLevel string `long:"debuglevel" description:"Debug level for the Aperture application and its subsystems."`
+
+	// ConfigFile points aperture to an alternative config file.
+	ConfigFile string `long:"configfile" description:"Custom path to a config file."`
+}
+
+func (c *Config) validate() error {
+	if c.Authenticator != nil {
+		if err := c.Authenticator.validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.ListenAddr == "" {
+		return fmt.Errorf("missing listen address for server")
+	}
+
+	return nil
 }

@@ -9,6 +9,7 @@ require (
 	github.com/btcsuite/btcwallet/wtxmgr v1.3.1-0.20210706234807-aaf03fee735a
 	github.com/fortytw2/leaktest v1.3.0
 	github.com/golang/protobuf v1.5.2
+	github.com/jessevdk/go-flags v1.4.0
 	github.com/lightninglabs/lndclient v0.12.0-9
 	github.com/lightningnetwork/lnd v0.13.0-beta.rc5.0.20210728112744-ebabda671786
 	github.com/lightningnetwork/lnd/cert v1.0.3

@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -11,9 +12,11 @@ import (
 	"sync"
 	"time"
 
+	flags "github.com/jessevdk/go-flags"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -71,10 +74,21 @@ var (
 func Main() {
 	// TODO: Prevent from running twice.
 	err := run()
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+
+	// Unwrap our error and check whether help was requested from our flag
+	// library. If the error is not wrapped, Unwrap returns nil. It is
+	// still safe to check the type of this nil error.
+	flagErr, isFlagErr := errors.Unwrap(err).(*flags.Error)
+	isHelpErr := isFlagErr && flagErr.Type == flags.ErrHelp
+
+	// If we got a nil error, or help was requested, just exit.
+	if err == nil || isHelpErr {
+		os.Exit(0)
 	}
+
+	// Print any other non-help related errors.
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
 }
 
 // run sets up the proxy server and runs it. This function blocks until a
@@ -88,10 +102,9 @@ func run() error {
 	}
 
 	// Next, parse configuration file and set up logging.
-	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
-	cfg, err := getConfig(configFile)
+	cfg, err := getConfig()
 	if err != nil {
-		return fmt.Errorf("unable to parse config file: %v", err)
+		return fmt.Errorf("unable to parse config file: %w", err)
 	}
 	err = setupLogging(cfg, interceptor)
 	if err != nil {
@@ -305,22 +318,66 @@ func fileExists(name string) bool {
 
 // getConfig loads and parses the configuration file then checks it for valid
 // content.
-func getConfig(configFile string) (*Config, error) {
+func getConfig() (*Config, error) {
+	// Pre-parse command line flags to determine whether we've been pointed
+	// to a custom config file.
 	cfg := &Config{}
-	b, err := ioutil.ReadFile(configFile)
-	if err != nil {
-		return nil, err
-	}
-	err = yaml.Unmarshal(b, cfg)
-	if err != nil {
+	if _, err := flags.Parse(cfg); err != nil {
 		return nil, err
 	}
 
+	// If a custom config file is provided, we require that it exists.
+	var mustExist bool
+
+	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
+	if cfg.ConfigFile != "" {
+		configFile = lnd.CleanAndExpandPath(cfg.ConfigFile)
+		mustExist = true
+	}
+
+	// Read our config file, either from the custom path provided or our
+	// default location.
+	b, err := ioutil.ReadFile(configFile)
+	switch {
+	// If the file was found, unmarshal it.
+	case err == nil:
+		err = yaml.Unmarshal(b, cfg)
+		if err != nil {
+			return nil, err
+		}
+
+	// If the error is unrelated to the existence of the file, we must
+	// always return it.
+	case !os.IsNotExist(err):
+		return nil, err
+
+	// If we require that the config file exists and we got an error
+	// related to file existence, we must fail.
+	case mustExist && os.IsNotExist(err):
+		return nil, fmt.Errorf("config file: %v must exist: %w",
+			configFile, err)
+	}
+
+	// Finally, parse the remaining command line options again to ensure
+	// they take precedence.
+	if _, err := flags.Parse(cfg); err != nil {
+		return nil, err
+	}
+
+	// Clean and expand our cert and macaroon paths.
+	cfg.Authenticator.TLSPath = lnd.CleanAndExpandPath(
+		cfg.Authenticator.TLSPath,
+	)
+	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
+		cfg.Authenticator.MacDir,
+	)
+
 	// Then check the configuration that we got from the config file, all
 	// required values need to be set at this point.
-	if cfg.ListenAddr == "" {
-		return nil, fmt.Errorf("missing listen address for server")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
+
 	return cfg, nil
 }
 
