@@ -212,7 +212,7 @@ func (a *Aperture) Start(errChan chan error) error {
 		a.httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
 	} else {
 		a.httpsServer.TLSConfig, err = getTLSConfig(
-			a.cfg.ServerName, a.cfg.AutoCert,
+			a.cfg.ServerName, a.cfg.BaseDir, a.cfg.AutoCert,
 		)
 		if err != nil {
 			return err
@@ -329,7 +329,19 @@ func getConfig() (*Config, error) {
 	// If a custom config file is provided, we require that it exists.
 	var mustExist bool
 
+	// Start with our default path for config file.
 	configFile := filepath.Join(apertureDataDir, defaultConfigFilename)
+
+	// If a base directory is set, we'll look in there for a config file.
+	// We don't require it to exist because we could just want to place
+	// all of our files here, and specify all config inline.
+	if cfg.BaseDir != "" {
+		configFile = filepath.Join(cfg.BaseDir, defaultConfigFilename)
+	}
+
+	// If a specific config file is set, we'll look here for a config file,
+	// even if a base directory for our files was set. In this case, the
+	// config file must exist, since we're specifically being pointed it.
 	if cfg.ConfigFile != "" {
 		configFile = lnd.CleanAndExpandPath(cfg.ConfigFile)
 		mustExist = true
@@ -364,7 +376,8 @@ func getConfig() (*Config, error) {
 		return nil, err
 	}
 
-	// Clean and expand our cert and macaroon paths.
+	// Clean and expand our base dir, cert and macaroon paths.
+	cfg.BaseDir = lnd.CleanAndExpandPath(cfg.BaseDir)
 	cfg.Authenticator.TLSPath = lnd.CleanAndExpandPath(
 		cfg.Authenticator.TLSPath,
 	)
@@ -389,7 +402,13 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 
 	// Now initialize the logger and set the log level.
 	SetupLoggers(logWriter, interceptor)
+
+	// Use our default data dir unless a base dir is set.
 	logFile := filepath.Join(apertureDataDir, defaultLogFilename)
+	if cfg.BaseDir != "" {
+		logFile = filepath.Join(cfg.BaseDir, defaultLogFilename)
+	}
+
 	err := logWriter.InitLogRotator(
 		logFile, defaultMaxLogFileSize, defaultMaxLogFiles,
 	)
@@ -401,7 +420,15 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 
 // getTLSConfig returns a TLS configuration for either a self-signed certificate
 // or one obtained through Let's Encrypt.
-func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
+func getTLSConfig(serverName, baseDir string, autoCert bool) (
+	*tls.Config, error) {
+
+	// Use our default data dir unless a base dir is set.
+	apertureDir := apertureDataDir
+	if baseDir != "" {
+		apertureDir = baseDir
+	}
+
 	// If requested, use the autocert library that will create a new
 	// certificate through Let's Encrypt as soon as the first client HTTP
 	// request on the server using the TLS config comes in. Unfortunately
@@ -414,7 +441,7 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 				"required for secure operation")
 		}
 
-		certDir := filepath.Join(apertureDataDir, "autocert")
+		certDir := filepath.Join(apertureDir, "autocert")
 		log.Infof("Configuring autocert for server %v with cache dir "+
 			"%v", serverName, certDir)
 
@@ -442,8 +469,8 @@ func getTLSConfig(serverName string, autoCert bool) (*tls.Config, error) {
 	// If we're not using autocert, we want to create self-signed TLS certs
 	// and save them at the specified location (if they don't already
 	// exist).
-	tlsKeyFile := filepath.Join(apertureDataDir, defaultTLSKeyFilename)
-	tlsCertFile := filepath.Join(apertureDataDir, defaultTLSCertFilename)
+	tlsKeyFile := filepath.Join(apertureDir, defaultTLSKeyFilename)
+	tlsCertFile := filepath.Join(apertureDir, defaultTLSCertFilename)
 	tlsExtraDomains := []string{serverName}
 	if !fileExists(tlsCertFile) && !fileExists(tlsKeyFile) {
 		log.Infof("Generating TLS certificates...")

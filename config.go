@@ -107,6 +107,9 @@ type Config struct {
 
 	// ConfigFile points aperture to an alternative config file.
 	ConfigFile string `long:"configfile" description:"Custom path to a config file."`
+
+	// BaseDir is a custom directory to store all aperture flies.
+	BaseDir string `long:"basedir" description:"Directory to place all of aperture's files in."`
 }
 
 func (c *Config) validate() error {
