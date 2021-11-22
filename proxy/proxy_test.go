@@ -115,7 +115,7 @@ func runHTTPTest(t *testing.T, tc *testCase) {
 	}}
 
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, true, "static")
+	p, err := proxy.New(mockAuth, services)
 	require.NoError(t, err)
 
 	// Start server that gives requests to the proxy.
@@ -264,7 +264,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 
 	// Create the proxy server and start serving on TLS.
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, true, "static")
+	p, err := proxy.New(mockAuth, services)
 	require.NoError(t, err)
 	server := &http.Server{
 		Addr:      testProxyAddr,

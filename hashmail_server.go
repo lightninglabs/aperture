@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/lightninglabs/lndclient"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
 	"github.com/lightningnetwork/lnd/tlv"
 	"golang.org/x/time/rate"
@@ -76,6 +74,7 @@ func (r *readStream) ReadNextMsg() ([]byte, error) {
 // ReturnStream gives up the read stream by passing it back up through the
 // payment stream.
 func (r *readStream) ReturnStream() {
+	log.Debugf("Returning read stream %x", r.parentStream.id[:])
 	r.parentStream.ReturnReadStream(r)
 }
 
@@ -158,7 +157,7 @@ type stream struct {
 }
 
 // newStream creates a new stream independent of any given stream ID.
-func newStream(id streamID,
+func newStream(id streamID, limiter *rate.Limiter,
 	equivAuth func(auth *hashmailrpc.CipherBoxAuth) error) *stream {
 
 	// Our stream is actually just a plain io.Pipe. This allows us to avoid
@@ -173,10 +172,7 @@ func newStream(id streamID,
 		writeStreamChan: make(chan *writeStream, 1),
 		id:              id,
 		equivAuth:       equivAuth,
-		limiter: rate.NewLimiter(
-			rate.Every(DefaultMsgRate),
-			DefaultMsgBurstAllowance,
-		),
+		limiter:         limiter,
 	}
 
 	// Our tear down function will close the write side of the pipe, which
@@ -187,7 +183,6 @@ func newStream(id streamID,
 		if err != nil {
 			return err
 		}
-
 		s.wg.Wait()
 		return nil
 	}
@@ -267,13 +262,8 @@ func (s *stream) RequestWriteStream() (*writeStream, error) {
 
 // hashMailServerConfig is the main config of the mail server.
 type hashMailServerConfig struct {
-	// IsAccountActive returns true of the passed public key belongs to an
-	// active non-expired account) within the system.
-	IsAccountActive func(context.Context, *btcec.PublicKey) bool
-
-	// Signer is a reference to the current lnd signer client which will be
-	// used to verify ECDSA signatures.
-	Signer lndclient.SignerClient
+	msgRate           time.Duration
+	msgBurstAllowance int
 }
 
 // hashMailServer is an implementation of the HashMailServer gRPC service that
@@ -294,6 +284,13 @@ type hashMailServer struct {
 
 // newHashMailServer returns a new mail server instance given a valid config.
 func newHashMailServer(cfg hashMailServerConfig) *hashMailServer {
+	if cfg.msgRate == 0 {
+		cfg.msgRate = DefaultMsgRate
+	}
+	if cfg.msgBurstAllowance == 0 {
+		cfg.msgBurstAllowance = DefaultMsgBurstAllowance
+	}
+
 	return &hashMailServer{
 		streams: make(map[streamID]*stream),
 		quit:    make(chan struct{}),
@@ -352,9 +349,14 @@ func (h *hashMailServer) InitStream(
 	// TODO(roasbeef): validate that ticket or node doesn't already have
 	// the same stream going
 
-	freshStream := newStream(streamID, func(auth *hashmailrpc.CipherBoxAuth) error {
-		return nil
-	})
+	limiter := rate.NewLimiter(
+		rate.Every(h.cfg.msgRate), h.cfg.msgBurstAllowance,
+	)
+	freshStream := newStream(
+		streamID, limiter, func(auth *hashmailrpc.CipherBoxAuth) error {
+			return nil
+		},
+	)
 
 	h.streams[streamID] = freshStream
 
@@ -598,6 +600,7 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 		// exit before shutting down.
 		select {
 		case <-reader.Context().Done():
+			log.Debugf("Read stream context done.")
 			return nil
 		case <-h.quit:
 			return fmt.Errorf("server shutting down")
@@ -607,6 +610,7 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 
 		nextMsg, err := readStream.ReadNextMsg()
 		if err != nil {
+			log.Debugf("Got error an read stream read: %v", err)
 			return err
 		}
 
@@ -618,6 +622,8 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 			Msg:  nextMsg,
 		})
 		if err != nil {
+			log.Debugf("Got error when sending on read stream: %v",
+				err)
 			return err
 		}
 	}
