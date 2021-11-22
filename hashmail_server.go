@@ -1,7 +1,7 @@
 package aperture
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -26,6 +26,10 @@ const (
 	// for messages. If a new message is about to exceed the burst rate,
 	// then we'll allow it up to this burst allowance.
 	DefaultMsgBurstAllowance = 10
+
+	// DefaultBufSize is the default number of bytes that are read in a
+	// single operation.
+	DefaultBufSize = 4096
 )
 
 // streamID is the identifier of a stream.
@@ -42,8 +46,6 @@ func newStreamID(id []byte) streamID {
 // readStream is the read side of the read pipe, which is implemented a
 // buffered wrapper around the core reader.
 type readStream struct {
-	io.Reader
-
 	// parentStream is a pointer to the parent stream. We keep this around
 	// so we can return the stream after we're done using it.
 	parentStream *stream
@@ -56,10 +58,22 @@ type readStream struct {
 // ReadNextMsg attempts to read the next message in the stream.
 //
 // NOTE: This will *block* until a new message is available.
-func (r *readStream) ReadNextMsg() ([]byte, error) {
+func (r *readStream) ReadNextMsg(ctx context.Context) ([]byte, error) {
+	var reader io.Reader
+	select {
+	case b := <-r.parentStream.readBytesChan:
+		reader = bytes.NewReader(b)
+
+	case <-ctx.Done():
+		return nil, ctx.Err()
+
+	case err := <-r.parentStream.readErrChan:
+		return nil, err
+	}
+
 	// First, we'll decode the length of the next message from the stream
 	// so we know how many bytes we need to read.
-	msgLen, err := tlv.ReadVarInt(r, &r.scratchBuf)
+	msgLen, err := tlv.ReadVarInt(reader, &r.scratchBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +81,7 @@ func (r *readStream) ReadNextMsg() ([]byte, error) {
 	// Now that we know the length of the message, we'll make a limit
 	// reader, then read all the encoded bytes until the EOF is emitted by
 	// the reader.
-	msgReader := io.LimitReader(r, int64(msgLen))
+	msgReader := io.LimitReader(reader, int64(msgLen))
 	return ioutil.ReadAll(msgReader)
 }
 
@@ -108,19 +122,18 @@ func (w *writeStream) WriteMsg(ctx context.Context, msg []byte) error {
 	// As we're writing to a stream, we need to delimit each message with a
 	// length prefix so the reader knows how many bytes to consume for each
 	// message.
-	//
-	// TODO(roasbeef): actually needs to be single write?
+	var buf bytes.Buffer
 	msgSize := uint64(len(msg))
-	err := tlv.WriteVarInt(
-		w, msgSize, &w.scratchBuf,
-	)
-	if err != nil {
+	if err := tlv.WriteVarInt(&buf, msgSize, &w.scratchBuf); err != nil {
 		return err
 	}
 
 	// Next, we'll write the message directly to the stream.
-	_, err = w.Write(msg)
-	if err != nil {
+	if _, err := buf.Write(msg); err != nil {
+		return err
+	}
+
+	if _, err := w.Write(buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -142,6 +155,10 @@ type stream struct {
 
 	readStreamChan  chan *readStream
 	writeStreamChan chan *writeStream
+
+	readBytesChan chan []byte
+	readErrChan   chan error
+	quit          chan struct{}
 
 	// equivAuth is a method used to determine if an authentication
 	// mechanism to tear down a stream is equivalent to the one used to
@@ -173,6 +190,9 @@ func newStream(id streamID, limiter *rate.Limiter,
 		id:              id,
 		equivAuth:       equivAuth,
 		limiter:         limiter,
+		readBytesChan:   make(chan []byte),
+		readErrChan:     make(chan error, 1),
+		quit:            make(chan struct{}),
 	}
 
 	// Our tear down function will close the write side of the pipe, which
@@ -183,6 +203,7 @@ func newStream(id streamID, limiter *rate.Limiter,
 		if err != nil {
 			return err
 		}
+		close(s.quit)
 		s.wg.Wait()
 		return nil
 	}
@@ -196,21 +217,37 @@ func newStream(id streamID, limiter *rate.Limiter,
 		// will read from.
 		_, err := io.Copy(
 			readWritePipe,
-			// This is where the buffering will happen, as the
-			// writer writes to the write end of the pipe, this
-			// goroutine will copy the bytes into the buffer until
-			// its full, then attempt to write it to the write end
-			// of the read pipe.
-			bufio.NewReader(writeReadPipe),
+			writeReadPipe,
 		)
 		_ = readWritePipe.CloseWithError(err)
 		_ = writeReadPipe.CloseWithError(err)
 	}()
 
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		var buf [DefaultBufSize]byte
+		for {
+			numBytes, err := readReadPipe.Read(buf[:])
+			if err != nil {
+				s.readErrChan <- err
+				return
+			}
+
+			c := make([]byte, numBytes)
+			copy(c, buf[0:numBytes])
+
+			select {
+			case s.readBytesChan <- c:
+			case <-s.quit:
+			}
+		}
+	}()
+
 	// We'll now initialize our stream by sending the read and write ends
 	// to their respective holding channels.
 	s.readStreamChan <- &readStream{
-		Reader:       readReadPipe,
 		parentStream: s,
 	}
 	s.writeStreamChan <- &writeStream{
@@ -555,6 +592,7 @@ func (h *hashMailServer) SendStream(readStream hashmailrpc.HashMail_SendStreamSe
 		// exit before shutting down.
 		select {
 		case <-ctx.Done():
+			log.Debugf("SendStream: Context done, exiting")
 			return nil
 		case <-h.quit:
 			return fmt.Errorf("server shutting down")
@@ -564,6 +602,8 @@ func (h *hashMailServer) SendStream(readStream hashmailrpc.HashMail_SendStreamSe
 
 		cipherBox, err := readStream.Recv()
 		if err != nil {
+			log.Debugf("SendStream: Exiting write stream RPC "+
+				"stream read: %v", err)
 			return err
 		}
 
@@ -608,7 +648,7 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 		default:
 		}
 
-		nextMsg, err := readStream.ReadNextMsg()
+		nextMsg, err := readStream.ReadNextMsg(reader.Context())
 		if err != nil {
 			log.Debugf("Got error an read stream read: %v", err)
 			return err
