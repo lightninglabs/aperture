@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"math"
 	"net/http"
@@ -89,16 +90,66 @@ func TestHashMailServerReturnStream(t *testing.T) {
 	msg, err = readMsgFromStream(t, client)
 	require.NoError(t, err)
 	require.Equal(t, testMessage2, msg.Msg)
+
+	// Clean up the stream now.
+	_, err = client.DelCipherBox(ctxb, &hashmailrpc.CipherBoxAuth{
+		Auth: &hashmailrpc.CipherBoxAuth_LndAuth{},
+		Desc: testStreamDesc,
+	})
+	require.NoError(t, err)
+}
+
+func TestHashMailServerLargeMessage(t *testing.T) {
+	ctxb := context.Background()
+
+	setupAperture(t)
+
+	// Create a client and connect it to the server.
+	conn, err := grpc.Dial(testApertureAddress, grpc.WithInsecure())
+	require.NoError(t, err)
+	client := hashmailrpc.NewHashMailClient(conn)
+
+	// We'll create a new cipher box that we're going to subscribe to
+	// multiple times to check disconnecting returns the read stream.
+	resp, err := client.NewCipherBox(ctxb, &hashmailrpc.CipherBoxAuth{
+		Auth: &hashmailrpc.CipherBoxAuth_LndAuth{},
+		Desc: testStreamDesc,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetSuccess())
+
+	// Let's create a long message and try to send it.
+	var largeMessage [512*DefaultBufSize]byte
+	_, err = rand.Read(largeMessage[:])
+	require.NoError(t, err)
+	
+	sendCtx, sendCancel := context.WithCancel(context.Background())
+	defer sendCancel()
+	
+	writeStream, err := client.SendStream(sendCtx)
+	require.NoError(t, err)
+	err = writeStream.Send(&hashmailrpc.CipherBox{
+		Desc: testStreamDesc,
+		Msg:  largeMessage[:],
+	})
+	require.NoError(t, err)
+
+	// We need to wait a bit to make sure the message is really sent.
+	time.Sleep(100 * time.Millisecond)
+
+	// Connect, wait for the stream to be ready, read something, then
+	// disconnect immediately.
+	msg, err := readMsgFromStream(t, client)
+	require.NoError(t, err)
+	require.Equal(t, largeMessage[:], msg.Msg)
 }
 
 func setupAperture(t *testing.T) {
 	logWriter := build.NewRotatingLogWriter()
-	interceptor, err := signal.Intercept()
-	require.NoError(t, err)
 
-	SetupLoggers(logWriter, interceptor)
+	SetupLoggers(logWriter, signal.Interceptor{})
 
-	err = build.ParseAndSetDebugLevels("trace,PRXY=warn", logWriter)
+	err := build.ParseAndSetDebugLevels("trace,PRXY=warn", logWriter)
 	require.NoError(t, err)
 
 	apertureCfg := &Config{

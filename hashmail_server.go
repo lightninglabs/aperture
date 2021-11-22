@@ -238,6 +238,15 @@ func newStream(id streamID, limiter *rate.Limiter,
 			c := make([]byte, numBytes)
 			copy(c, buf[0:numBytes])
 
+			for numBytes == DefaultBufSize {
+				numBytes, err = readReadPipe.Read(buf[:])
+				if err != nil {
+					s.readErrChan <- err
+					return
+				}
+				c = append(c, buf[0:numBytes]...)
+			}
+
 			select {
 			case s.readBytesChan <- c:
 			case <-s.quit:

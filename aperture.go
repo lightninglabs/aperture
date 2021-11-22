@@ -220,8 +220,11 @@ func (a *Aperture) Start(errChan chan error) error {
 	}
 	handler := http.HandlerFunc(a.proxy.ServeHTTP)
 	a.httpsServer = &http.Server{
-		Addr:    a.cfg.ListenAddr,
-		Handler: handler,
+		Addr:         a.cfg.ListenAddr,
+		Handler:      handler,
+		IdleTimeout:  0,
+		ReadTimeout:  0,
+		WriteTimeout: 0,
 	}
 
 	// Create TLS configuration by either creating new self-signed certs or
