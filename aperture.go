@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -592,9 +593,27 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 	})
 	authenticator := auth.NewLsatAuthenticator(minter, challenger)
-	return proxy.New(
-		authenticator, cfg.Services, cfg.ServeStatic, cfg.StaticRoot,
-	)
+
+	// By default the static file server only returns 404 answers for
+	// security reasons. Serving files from the staticRoot directory has to
+	// be enabled intentionally.
+	staticServer := http.NotFoundHandler()
+	if cfg.ServeStatic {
+		if len(strings.TrimSpace(cfg.StaticRoot)) == 0 {
+			return nil, fmt.Errorf("staticroot cannot be empty, " +
+				"must contain path to directory that " +
+				"contains index.html")
+		}
+		staticServer = http.FileServer(http.Dir(cfg.StaticRoot))
+	}
+
+	localServices := []proxy.LocalService{
+		proxy.NewLocalService(staticServer, func(r *http.Request) bool {
+			return true
+		}),
+	}
+
+	return proxy.New(authenticator, cfg.Services, localServices...)
 }
 
 // cleanup closes the given server and shuts down the log rotator.
