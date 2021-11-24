@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"github.com/lightningnetwork/lnd/build"
-	"github.com/lightningnetwork/lnd/signal"
 	"math"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
+	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/lntest/wait"
+	"github.com/lightningnetwork/lnd/signal"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
