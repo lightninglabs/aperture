@@ -317,7 +317,7 @@ type hashMailServerConfig struct {
 // write pipes.
 type hashMailServer struct {
 	hashmailrpc.UnimplementedHashMailServer
-	
+
 	sync.RWMutex
 	streams map[streamID]*stream
 

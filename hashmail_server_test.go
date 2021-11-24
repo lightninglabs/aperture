@@ -119,13 +119,13 @@ func TestHashMailServerLargeMessage(t *testing.T) {
 	require.NotNil(t, resp.GetSuccess())
 
 	// Let's create a long message and try to send it.
-	var largeMessage [512*DefaultBufSize]byte
+	var largeMessage [512 * DefaultBufSize]byte
 	_, err = rand.Read(largeMessage[:])
 	require.NoError(t, err)
-	
+
 	sendCtx, sendCancel := context.WithCancel(context.Background())
 	defer sendCancel()
-	
+
 	writeStream, err := client.SendStream(sendCtx)
 	require.NoError(t, err)
 	err = writeStream.Send(&hashmailrpc.CipherBox{
