@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"github.com/lightningnetwork/lnd/build"
+	"github.com/lightningnetwork/lnd/signal"
 	"math"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
-	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/lntest/wait"
-	"github.com/lightningnetwork/lnd/signal"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -26,6 +26,12 @@ var (
 	testMessage          = []byte("I'm a message!")
 	apertureStartTimeout = 3 * time.Second
 )
+
+func init() {
+	logWriter := build.NewRotatingLogWriter()
+	SetupLoggers(logWriter, signal.Interceptor{})
+	_ = build.ParseAndSetDebugLevels("trace,PRXY=warn", logWriter)
+}
 
 func TestHashMailServerReturnStream(t *testing.T) {
 	ctxb := context.Background()
@@ -145,13 +151,6 @@ func TestHashMailServerLargeMessage(t *testing.T) {
 }
 
 func setupAperture(t *testing.T) {
-	logWriter := build.NewRotatingLogWriter()
-
-	SetupLoggers(logWriter, signal.Interceptor{})
-
-	err := build.ParseAndSetDebugLevels("trace,PRXY=warn", logWriter)
-	require.NoError(t, err)
-
 	apertureCfg := &Config{
 		Insecure:   true,
 		ListenAddr: testApertureAddress,
@@ -176,7 +175,7 @@ func setupAperture(t *testing.T) {
 	default:
 	}
 
-	err = wait.NoError(func() error {
+	err := wait.NoError(func() error {
 		apertureAddr := fmt.Sprintf("http://%s/dummy",
 			testApertureAddress)
 
