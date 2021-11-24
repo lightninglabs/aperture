@@ -1,6 +1,7 @@
 package aperture
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -9,13 +10,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
 	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
@@ -26,6 +31,9 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v2"
 )
 
@@ -54,6 +62,14 @@ const (
 	// the certificate validity length to make the chances bigger for it to
 	// be refreshed on a routine server restart.
 	selfSignedCertExpiryMargin = selfSignedCertValidity / 2
+
+	// hashMailGRPCPrefix is the prefix a gRPC request URI has when it is
+	// meant for the hashmailrpc server to be handled.
+	hashMailGRPCPrefix = "/hashmailrpc.HashMail/"
+
+	// hashMailRESTPrefix is the prefix a REST request URI has when it is
+	// meant for the hashmailrpc server to be handled.
+	hashMailRESTPrefix = "/v1/lightning-node-connect/hashmail"
 )
 
 var (
@@ -67,6 +83,12 @@ var (
 		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
 		tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+	}
+
+	// clientStreamingURIs is the list of REST URIs that are
+	// client-streaming and shouldn't be closed after a single message.
+	clientStreamingURIs = []*regexp.Regexp{
+		regexp.MustCompile("^/v1/lightning-node-connect/hashmail/send$"),
 	}
 )
 
@@ -138,6 +160,7 @@ type Aperture struct {
 	httpsServer   *http.Server
 	torHTTPServer *http.Server
 	proxy         *proxy.Proxy
+	proxyCleanup  func()
 
 	wg   sync.WaitGroup
 	quit chan struct{}
@@ -189,14 +212,19 @@ func (a *Aperture) Start(errChan chan error) error {
 	}
 
 	// Create the proxy and connect it to lnd.
-	a.proxy, err = createProxy(a.cfg, a.challenger, a.etcdClient)
+	a.proxy, a.proxyCleanup, err = createProxy(
+		a.cfg, a.challenger, a.etcdClient,
+	)
 	if err != nil {
 		return err
 	}
 	handler := http.HandlerFunc(a.proxy.ServeHTTP)
 	a.httpsServer = &http.Server{
-		Addr:    a.cfg.ListenAddr,
-		Handler: handler,
+		Addr:         a.cfg.ListenAddr,
+		Handler:      handler,
+		IdleTimeout:  0,
+		ReadTimeout:  0,
+		WriteTimeout: 0,
 	}
 
 	// Create TLS configuration by either creating new self-signed certs or
@@ -285,6 +313,12 @@ func (a *Aperture) Stop() error {
 
 	if a.challenger != nil {
 		a.challenger.Stop()
+	}
+
+	// Stop everything that was started alongside the proxy, for example the
+	// gRPC and REST servers.
+	if a.proxyCleanup != nil {
+		a.proxyCleanup()
 	}
 
 	// Shut down our client and server connections now. This should cause
@@ -584,7 +618,7 @@ func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error
 
 // createProxy creates the proxy with all the services it needs.
 func createProxy(cfg *Config, challenger *LndChallenger,
-	etcdClient *clientv3.Client) (*proxy.Proxy, error) {
+	etcdClient *clientv3.Client) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
 		Challenger:     challenger,
@@ -592,9 +626,119 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 	})
 	authenticator := auth.NewLsatAuthenticator(minter, challenger)
-	return proxy.New(
-		authenticator, cfg.Services, cfg.ServeStatic, cfg.StaticRoot,
+
+	// By default the static file server only returns 404 answers for
+	// security reasons. Serving files from the staticRoot directory has to
+	// be enabled intentionally.
+	staticServer := http.NotFoundHandler()
+	if cfg.ServeStatic {
+		if len(strings.TrimSpace(cfg.StaticRoot)) == 0 {
+			return nil, nil, fmt.Errorf("staticroot cannot be " +
+				"empty, must contain path to directory that " +
+				"contains index.html")
+		}
+		staticServer = http.FileServer(http.Dir(cfg.StaticRoot))
+	}
+
+	var (
+		localServices []proxy.LocalService
+		proxyCleanup  = func() {}
 	)
+
+	if cfg.HashMail.Enabled {
+		hashMailServices, cleanup, err := createHashMailServer(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		localServices = append(localServices, hashMailServices...)
+		proxyCleanup = cleanup
+	}
+
+	// The static file server must be last since it will match all calls
+	// that make it to it.
+	localServices = append(localServices, proxy.NewLocalService(
+		staticServer, func(r *http.Request) bool {
+			return true
+		},
+	))
+
+	prxy, err := proxy.New(authenticator, cfg.Services, localServices...)
+	return prxy, proxyCleanup, err
+}
+
+// createHashMailServer creates the gRPC server for the hash mail message
+// gateway and an additional REST and WebSocket capable proxy for that gRPC
+// server.
+func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
+	var localServices []proxy.LocalService
+
+	// Create a gRPC server for the hashmail server.
+	hashMailServer := newHashMailServer(hashMailServerConfig{
+		msgRate:           cfg.HashMail.MessageRate,
+		msgBurstAllowance: cfg.HashMail.MessageBurstAllowance,
+	})
+	hashMailGRPC := grpc.NewServer()
+	hashmailrpc.RegisterHashMailServer(hashMailGRPC, hashMailServer)
+	localServices = append(localServices, proxy.NewLocalService(
+		hashMailGRPC, func(r *http.Request) bool {
+			return strings.HasPrefix(r.URL.Path, hashMailGRPCPrefix)
+		}),
+	)
+
+	// And a REST proxy for it as well.
+	// The default JSON marshaler of the REST proxy only sets OrigName to
+	// true, which instructs it to use the same field names as specified in
+	// the proto file and not switch to camel case. What we also want is
+	// that the marshaler prints all values, even if they are falsey.
+	customMarshalerOption := gateway.WithMarshalerOption(
+		gateway.MIMEWildcard, &gateway.JSONPb{
+			MarshalOptions: protojson.MarshalOptions{
+				UseProtoNames:   true,
+				EmitUnpopulated: true,
+			},
+		},
+	)
+
+	// We'll also create and start an accompanying proxy to serve clients
+	// through REST.
+	ctxc, cancel := context.WithCancel(context.Background())
+	proxyCleanup := func() {
+		hashMailServer.Stop()
+		cancel()
+	}
+
+	mux := gateway.NewServeMux(customMarshalerOption)
+	err := hashmailrpc.RegisterHashMailHandlerFromEndpoint(
+		ctxc, mux, cfg.ListenAddr, []grpc.DialOption{
+			grpc.WithTransportCredentials(credentials.NewTLS(
+				&tls.Config{InsecureSkipVerify: true},
+			)),
+		},
+	)
+	if err != nil {
+		proxyCleanup()
+
+		return nil, nil, err
+	}
+
+	// Wrap the default grpc-gateway handler with the WebSocket handler.
+	restHandler := lnrpc.NewWebSocketProxy(
+		mux, log, time.Second*30, time.Second*5,
+		clientStreamingURIs,
+	)
+
+	// Create our proxy chain now. A request will pass
+	// through the following chain:
+	// req ---> CORS handler --> WS proxy ---> REST proxy --> gRPC endpoint
+	corsHandler := allowCORS(restHandler, []string{"*"})
+	localServices = append(localServices, proxy.NewLocalService(
+		corsHandler, func(r *http.Request) bool {
+			return strings.HasPrefix(r.URL.Path, hashMailRESTPrefix)
+		},
+	))
+
+	return localServices, proxyCleanup, nil
 }
 
 // cleanup closes the given server and shuts down the log rotator.
@@ -614,4 +758,56 @@ func cleanup(etcdClient io.Closer, server io.Closer, proxy io.Closer) {
 	if err != nil {
 		log.Errorf("Could not close log rotator: %v", err)
 	}
+}
+
+// allowCORS wraps the given http.Handler with a function that adds the
+// Access-Control-Allow-Origin header to the response.
+func allowCORS(handler http.Handler, origins []string) http.Handler {
+	allowHeaders := "Access-Control-Allow-Headers"
+	allowMethods := "Access-Control-Allow-Methods"
+	allowOrigin := "Access-Control-Allow-Origin"
+
+	// If the user didn't supply any origins that means CORS is disabled
+	// and we should return the original handler.
+	if len(origins) == 0 {
+		return handler
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+
+		// Skip everything if the browser doesn't send the Origin field.
+		if origin == "" {
+			handler.ServeHTTP(w, r)
+			return
+		}
+
+		// Set the static header fields first.
+		w.Header().Set(
+			allowHeaders,
+			"Content-Type, Accept, Grpc-Metadata-Macaroon",
+		)
+		w.Header().Set(allowMethods, "GET, POST, DELETE")
+
+		// Either we allow all origins or the incoming request matches
+		// a specific origin in our list of allowed origins.
+		for _, allowedOrigin := range origins {
+			if allowedOrigin == "*" || origin == allowedOrigin {
+				// Only set allowed origin to requested origin.
+				w.Header().Set(allowOrigin, origin)
+
+				break
+			}
+		}
+
+		// For a pre-flight request we only need to send the headers
+		// back. No need to call the rest of the chain.
+		if r.Method == "OPTIONS" {
+			return
+		}
+
+		// Everything's prepared now, we can pass the request along the
+		// chain of handlers.
+		handler.ServeHTTP(w, r)
+	})
 }

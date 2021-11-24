@@ -144,3 +144,10 @@ tor:
 
   # Whether a v3 onion service should be created to handle requests.
   v3: false
+
+# Enable the Lightning Node Connect hashmail server, allowing up to 1k messages
+# per burst and a new message every 20 milliseconds.
+hashmail:
+  enabled: true
+  messagerate: 20ms
+  messageburstallowance: 1000

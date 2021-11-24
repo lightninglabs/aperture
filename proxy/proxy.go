@@ -29,13 +29,48 @@ const (
 	hdrTypeGrpc    = "application/grpc"
 )
 
+// LocalService is an interface that describes a service that is handled
+// internally by aperture and is not proxied to another backend.
+type LocalService interface {
+	http.Handler
+
+	// IsHandling returns true if the local service is handling the given
+	// request. If one of the local services returns true on this method
+	// then a request is not forwarded/proxied to any of the remote
+	// backends.
+	IsHandling(r *http.Request) bool
+}
+
+// localService is a struct that represents a service that is local to aperture
+// and is not proxied to a remote backend.
+type localService struct {
+	handler    http.Handler
+	isHandling func(r *http.Request) bool
+}
+
+// NewLocalService creates a new local service.
+func NewLocalService(h http.Handler, f func(r *http.Request) bool) LocalService {
+	return &localService{handler: h, isHandling: f}
+}
+
+// ServeHTTP is the http.Handler implementation.
+func (l *localService) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	l.handler.ServeHTTP(rw, r)
+}
+
+// IsHandling returns true if the local service is handling the given
+// request.
+func (l *localService) IsHandling(r *http.Request) bool {
+	return l.isHandling(r)
+}
+
 // Proxy is a HTTP, HTTP/2 and gRPC handler that takes an incoming request,
 // uses its authenticator to validate the request's headers, and either returns
 // a challenge to the client or forwards the request to another server and
 // proxies the response back to the client.
 type Proxy struct {
 	proxyBackend  *httputil.ReverseProxy
-	staticServer  http.Handler
+	localServices []LocalService
 	authenticator auth.Authenticator
 	services      []*Service
 }
@@ -43,24 +78,11 @@ type Proxy struct {
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
-func New(auth auth.Authenticator, services []*Service, serveStatic bool,
-	staticRoot string) (*Proxy, error) {
-
-	// By default the static file server only returns 404 answers for
-	// security reasons. Serving files from the staticRoot directory has to
-	// be enabled intentionally.
-	staticServer := http.NotFoundHandler()
-	if serveStatic {
-		if len(strings.TrimSpace(staticRoot)) == 0 {
-			return nil, fmt.Errorf("staticroot cannot be empty, " +
-				"must contain path to directory that " +
-				"contains index.html")
-		}
-		staticServer = http.FileServer(http.Dir(staticRoot))
-	}
+func New(auth auth.Authenticator, services []*Service,
+	localServices ...LocalService) (*Proxy, error) {
 
 	proxy := &Proxy{
-		staticServer:  staticServer,
+		localServices: localServices,
 		authenticator: auth,
 		services:      services,
 	}
@@ -98,9 +120,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// will return a 404 for us.
 	target, ok := matchService(r, p.services)
 	if !ok {
-		prefixLog.Debugf("Dispatching request %s to static file "+
-			"server.", r.URL.Path)
-		p.staticServer.ServeHTTP(w, r)
+		// This isn't a request for any configured remote backend that
+		// we are proxying for. So we give it to the local service that
+		// claims is responsible for it.
+		for _, ls := range p.localServices {
+			if ls.IsHandling(r) {
+				prefixLog.Debugf("Dispatching request %s to "+
+					"local service.", r.URL.Path)
+				ls.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// If we get here, something is quite wrong. At least the static
+		// file server should have picked up the request and serve a
+		// 404 response. So nothing we can do here except returning an
+		// error.
+		addCorsHeaders(w.Header())
+		sendDirectResponse(w, r, http.StatusInternalServerError, "")
 		return
 	}
 
@@ -337,7 +374,7 @@ func matchService(req *http.Request, services []*Service) (*Service, bool) {
 			service.Address)
 		return service, true
 	}
-	log.Errorf("No backend service matched request [%s%s].", req.Host,
+	log.Debugf("No backend service matched request [%s%s].", req.Host,
 		req.URL.Path)
 	return nil, false
 }

@@ -3,6 +3,7 @@ package aperture
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/btcsuite/btcutil"
 	"github.com/lightninglabs/aperture/proxy"
@@ -59,6 +60,12 @@ func (a *AuthConfig) validate() error {
 	return nil
 }
 
+type HashMailConfig struct {
+	Enabled               bool          `long:"enabled"`
+	MessageRate           time.Duration `long:"messagerate" description:"The average minimum time that should pass between each message."`
+	MessageBurstAllowance int           `long:"messageburstallowance" description:"The burst rate we allow for messages."`
+}
+
 type TorConfig struct {
 	Control     string `long:"control" description:"The host:port of the Tor instance."`
 	ListenPort  uint16 `long:"listenport" description:"The port we should listen on for client requests over Tor. Note that this port should not be exposed to the outside world, it is only intended to be reached by clients through the onion service."`
@@ -100,6 +107,10 @@ type Config struct {
 	// Services is a list of JSON objects in string format, which specify
 	// each backend service to Aperture.
 	Services []*proxy.Service `long:"service" description:"Configurations for each Aperture backend service."`
+
+	// HashMail is the configuration section for configuring the Lightning
+	// Node Connect mailbox server.
+	HashMail *HashMailConfig `long:"hashmail" description:"Configuration for the Lightning Node Connect mailbox server."`
 
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
