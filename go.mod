@@ -9,12 +9,14 @@ require (
 	github.com/btcsuite/btcwallet/wtxmgr v1.3.1-0.20210706234807-aaf03fee735a
 	github.com/fortytw2/leaktest v1.3.0
 	github.com/golang/protobuf v1.5.2
+	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.5.0
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/lightninglabs/lightning-node-connect/hashmailrpc v1.0.2
 	github.com/lightninglabs/lndclient v0.12.0-9
 	github.com/lightningnetwork/lnd v0.13.0-beta.rc5.0.20210728112744-ebabda671786
 	github.com/lightningnetwork/lnd/cert v1.0.3
+	github.com/prometheus/client_golang v1.11.0
 	github.com/stretchr/testify v1.7.0
 	go.etcd.io/etcd/client/v3 v3.5.0
 	go.etcd.io/etcd/server/v3 v3.5.0

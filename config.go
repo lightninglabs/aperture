@@ -64,6 +64,10 @@ type HashMailConfig struct {
 	Enabled               bool          `long:"enabled"`
 	MessageRate           time.Duration `long:"messagerate" description:"The average minimum time that should pass between each message."`
 	MessageBurstAllowance int           `long:"messageburstallowance" description:"The burst rate we allow for messages."`
+
+	// PromListenAddr is the listening address that we should use to allow
+	// the main Prometheus server to scrape our metrics.
+	PromListenAddr string `long:"promlistenaddr" description:"the interface we should listen on for prometheus"`
 }
 
 type TorConfig struct {

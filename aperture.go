@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lightninglabs/aperture/auth"
@@ -651,6 +654,15 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 			return nil, nil, err
 		}
 
+		// Ensure we spin up the necessary HTTP server to allow
+		// promtheus to scrape us.
+		go func() {
+			http.Handle("/metrics", promhttp.Handler())
+			fmt.Println(http.ListenAndServe(
+				cfg.HashMail.PromListenAddr, nil),
+			)
+		}()
+
 		localServices = append(localServices, hashMailServices...)
 		proxyCleanup = cleanup
 	}
@@ -673,12 +685,26 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	var localServices []proxy.LocalService
 
+	// Before we register both servers, we'll also ensure that the
+	// collector will export latency metrics for the histogram.
+	grpc_prometheus.EnableHandlingTimeHistogram()
+
+	var serverOpts []grpc.ServerOption
+	serverOpts = []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			grpc_prometheus.UnaryServerInterceptor,
+		),
+		grpc.ChainStreamInterceptor(
+			grpc_prometheus.StreamServerInterceptor,
+		),
+	}
+
 	// Create a gRPC server for the hashmail server.
 	hashMailServer := newHashMailServer(hashMailServerConfig{
 		msgRate:           cfg.HashMail.MessageRate,
 		msgBurstAllowance: cfg.HashMail.MessageBurstAllowance,
 	})
-	hashMailGRPC := grpc.NewServer()
+	hashMailGRPC := grpc.NewServer(serverOpts...)
 	hashmailrpc.RegisterHashMailServer(hashMailGRPC, hashMailServer)
 	localServices = append(localServices, proxy.NewLocalService(
 		hashMailGRPC, func(r *http.Request) bool {
