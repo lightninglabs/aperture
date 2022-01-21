@@ -689,8 +689,7 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	// collector will export latency metrics for the histogram.
 	grpc_prometheus.EnableHandlingTimeHistogram()
 
-	var serverOpts []grpc.ServerOption
-	serverOpts = []grpc.ServerOption{
+	serverOpts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(
 			grpc_prometheus.UnaryServerInterceptor,
 		),
@@ -750,8 +749,7 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 
 	// Wrap the default grpc-gateway handler with the WebSocket handler.
 	restHandler := lnrpc.NewWebSocketProxy(
-		mux, log, time.Second*30, time.Second*5,
-		clientStreamingURIs,
+		mux, log, 0, 0, clientStreamingURIs,
 	)
 
 	// Create our proxy chain now. A request will pass
