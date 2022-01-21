@@ -114,7 +114,7 @@ type Config struct {
 
 	// HashMail is the configuration section for configuring the Lightning
 	// Node Connect mailbox server.
-	HashMail *HashMailConfig `long:"hashmail" description:"Configuration for the Lightning Node Connect mailbox server."`
+	HashMail *HashMailConfig `group:"hashmail" namespace:"hashmail" description:"Configuration for the Lightning Node Connect mailbox server."`
 
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
