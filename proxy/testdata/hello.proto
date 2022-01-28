@@ -2,16 +2,16 @@ syntax = "proto3";
 
 package proxy_test;
 
+option go_package = "github.com/lightninglabs/aperture/proxy/testdata";
+
 service Greeter {
-    rpc SayHello (HelloRequest) returns (HelloReply);
-    rpc SayHelloNoAuth (HelloRequest) returns (HelloReply);
+  rpc SayHello(HelloRequest) returns (HelloReply);
+  rpc SayHelloNoAuth(HelloRequest) returns (HelloReply);
 }
 
 message HelloRequest {
-    string name = 1;
-    bool return_error = 2;
+  string name = 1;
+  bool return_error = 2;
 }
 
-message HelloReply {
-    string message = 1;
-}
+message HelloReply { string message = 1; }
