@@ -18,8 +18,8 @@ require (
 	github.com/lightningnetwork/lnd/cert v1.0.3
 	github.com/prometheus/client_golang v1.11.0
 	github.com/stretchr/testify v1.7.0
-	go.etcd.io/etcd/client/v3 v3.5.0
-	go.etcd.io/etcd/server/v3 v3.5.0
+	go.etcd.io/etcd/client/v3 v3.5.1
+	go.etcd.io/etcd/server/v3 v3.5.1
 	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0
 	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
@@ -28,3 +28,6 @@ require (
 	gopkg.in/macaroon.v2 v2.1.0
 	gopkg.in/yaml.v2 v2.4.0
 )
+
+// Fix etcd token renewal issue https://github.com/etcd-io/etcd/pull/13262.
+replace go.etcd.io/etcd/client/v3 => github.com/lightninglabs/etcd/client/v3 v3.5.1-retry-patch
