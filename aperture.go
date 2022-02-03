@@ -16,8 +16,6 @@ import (
 	"time"
 
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lightninglabs/aperture/auth"
@@ -30,6 +28,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
@@ -733,12 +732,22 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 		cancel()
 	}
 
+	// The REST proxy connects to our main listen address. If we're serving
+	// TLS, we don't care about the certificate being valid, as we issue it
+	// ourselves. If we are serving without TLS (for example when behind a
+	// load balancer), we need to connect to ourselves without using TLS as
+	// well.
+	restProxyTLSOpt := grpc.WithTransportCredentials(credentials.NewTLS(
+		&tls.Config{InsecureSkipVerify: true},
+	))
+	if cfg.Insecure {
+		restProxyTLSOpt = grpc.WithInsecure()
+	}
+
 	mux := gateway.NewServeMux(customMarshalerOption)
 	err := hashmailrpc.RegisterHashMailHandlerFromEndpoint(
 		ctxc, mux, cfg.ListenAddr, []grpc.DialOption{
-			grpc.WithTransportCredentials(credentials.NewTLS(
-				&tls.Config{InsecureSkipVerify: true},
-			)),
+			restProxyTLSOpt,
 		},
 	)
 	if err != nil {
