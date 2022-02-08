@@ -35,6 +35,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v2"
 )
@@ -695,6 +696,9 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 		grpc.ChainStreamInterceptor(
 			grpc_prometheus.StreamServerInterceptor,
 		),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime: time.Minute,
+		}),
 	}
 
 	// Create a gRPC server for the hashmail server.
