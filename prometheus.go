@@ -4,7 +4,16 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	// mailboxCount tracks the current number of active mailboxes.
+	mailboxCount = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "hashmail",
+		Name:      "mailbox_count",
+	})
 )
 
 // PrometheusConfig is the set of configuration data that specifies if
@@ -29,6 +38,7 @@ func StartPrometheusExporter(cfg *PrometheusConfig) error {
 	}
 
 	// Next, we'll register all our metrics.
+	prometheus.MustRegister(mailboxCount)
 
 	// Finally, we'll launch the HTTP server that Prometheus will use to
 	// scape our metrics.

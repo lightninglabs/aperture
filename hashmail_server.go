@@ -406,6 +406,8 @@ func (h *hashMailServer) InitStream(
 
 	h.streams[streamID] = freshStream
 
+	mailboxCount.Set(float64(len(h.streams)))
+
 	return &hashmailrpc.CipherInitResp{
 		Resp: &hashmailrpc.CipherInitResp_Success{},
 	}, nil
@@ -477,6 +479,8 @@ func (h *hashMailServer) TearDownStream(ctx context.Context, streamID []byte,
 	}
 
 	delete(h.streams, sid)
+
+	mailboxCount.Set(float64(len(h.streams)))
 
 	return nil
 }
