@@ -710,6 +710,9 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 		}),
 	)
 
+	// Export the gRPC information for the public gRPC server.
+	grpc_prometheus.Register(hashMailGRPC)
+
 	// And a REST proxy for it as well.
 	// The default JSON marshaler of the REST proxy only sets OrigName to
 	// true, which instructs it to use the same field names as specified in
