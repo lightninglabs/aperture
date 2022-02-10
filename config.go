@@ -64,10 +64,6 @@ type HashMailConfig struct {
 	Enabled               bool          `long:"enabled"`
 	MessageRate           time.Duration `long:"messagerate" description:"The average minimum time that should pass between each message."`
 	MessageBurstAllowance int           `long:"messageburstallowance" description:"The burst rate we allow for messages."`
-
-	// PromListenAddr is the listening address that we should use to allow
-	// the main Prometheus server to scrape our metrics.
-	PromListenAddr string `long:"promlistenaddr" description:"the interface we should listen on for prometheus"`
 }
 
 type TorConfig struct {
@@ -115,6 +111,10 @@ type Config struct {
 	// HashMail is the configuration section for configuring the Lightning
 	// Node Connect mailbox server.
 	HashMail *HashMailConfig `group:"hashmail" namespace:"hashmail" description:"Configuration for the Lightning Node Connect mailbox server."`
+
+	// Prometheus is the config for setting up an endpoint for a Prometheus
+	// server to scrape metrics from.
+	Prometheus *PrometheusConfig `group:"prometheus" namespace:"prometheus" description:"Configuration setting up an endpoint that a Prometheus server can scrape."`
 
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.

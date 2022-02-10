@@ -28,7 +28,6 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
@@ -180,6 +179,12 @@ func NewAperture(cfg *Config) *Aperture {
 // Start sets up the proxy server and starts it.
 func (a *Aperture) Start(errChan chan error) error {
 	var err error
+
+	// Start the prometheus exporter.
+	if err := StartPrometheusExporter(a.cfg.Prometheus); err != nil {
+		return fmt.Errorf("unable to start the prometheus exporter: "+
+			"%v", err)
+	}
 
 	// Initialize our etcd client.
 	a.etcdClient, err = clientv3.New(clientv3.Config{
@@ -654,15 +659,6 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 			return nil, nil, err
 		}
 
-		// Ensure we spin up the necessary HTTP server to allow
-		// promtheus to scrape us.
-		go func() {
-			http.Handle("/metrics", promhttp.Handler())
-			fmt.Println(http.ListenAndServe(
-				cfg.HashMail.PromListenAddr, nil),
-			)
-		}()
-
 		localServices = append(localServices, hashMailServices...)
 		proxyCleanup = cleanup
 	}
@@ -713,6 +709,9 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 			return strings.HasPrefix(r.URL.Path, hashMailGRPCPrefix)
 		}),
 	)
+
+	// Export the gRPC information for the public gRPC server.
+	grpc_prometheus.Register(hashMailGRPC)
 
 	// And a REST proxy for it as well.
 	// The default JSON marshaler of the REST proxy only sets OrigName to

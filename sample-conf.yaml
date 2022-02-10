@@ -151,3 +151,9 @@ hashmail:
   enabled: true
   messagerate: 20ms
   messageburstallowance: 1000
+
+# Enable the prometheus metrics exporter so that a prometheus server can scrape
+# the metrics.
+prometheus:
+  enabled: true
+  listenaddr: "localhost:9000"
