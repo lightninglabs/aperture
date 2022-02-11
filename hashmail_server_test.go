@@ -163,6 +163,8 @@ func setupAperture(t *testing.T) {
 			MessageRate:           time.Millisecond,
 			MessageBurstAllowance: math.MaxUint32,
 		},
+		Prometheus: &PrometheusConfig{},
+		Tor:        &TorConfig{},
 	}
 	aperture := NewAperture(apertureCfg)
 	errChan := make(chan error)
