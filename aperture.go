@@ -181,9 +181,10 @@ func (a *Aperture) Start(errChan chan error) error {
 	var err error
 
 	// Start the prometheus exporter.
-	if err := StartPrometheusExporter(a.cfg.Prometheus); err != nil {
-		return fmt.Errorf("unable to start the prometheus exporter: "+
-			"%v", err)
+	err = StartPrometheusExporter(a.cfg.Prometheus)
+	if err != nil {
+		return fmt.Errorf("unable to start the prometheus "+
+			"exporter: %v", err)
 	}
 
 	// Initialize our etcd client.
@@ -281,7 +282,7 @@ func (a *Aperture) Start(errChan chan error) error {
 	// will only be reached through the onion services, which already
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
-	if a.cfg.Tor != nil && (a.cfg.Tor.V2 || a.cfg.Tor.V3) {
+	if a.cfg.Tor.V2 || a.cfg.Tor.V3 {
 		torController, err := initTorListener(a.cfg, a.etcdClient)
 		if err != nil {
 			return err
@@ -363,7 +364,7 @@ func fileExists(name string) bool {
 func getConfig() (*Config, error) {
 	// Pre-parse command line flags to determine whether we've been pointed
 	// to a custom config file.
-	cfg := &Config{}
+	cfg := NewConfig()
 	if _, err := flags.Parse(cfg); err != nil {
 		return nil, err
 	}

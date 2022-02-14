@@ -128,10 +128,8 @@ type Config struct {
 }
 
 func (c *Config) validate() error {
-	if c.Authenticator != nil {
-		if err := c.Authenticator.validate(); err != nil {
-			return err
-		}
+	if err := c.Authenticator.validate(); err != nil {
+		return err
 	}
 
 	if c.ListenAddr == "" {
@@ -139,4 +137,15 @@ func (c *Config) validate() error {
 	}
 
 	return nil
+}
+
+// NewConfig initializes a new Config variable.
+func NewConfig() *Config {
+	return &Config{
+		Etcd:          &EtcdConfig{},
+		Authenticator: &AuthConfig{},
+		Tor:           &TorConfig{},
+		HashMail:      &HashMailConfig{},
+		Prometheus:    &PrometheusConfig{},
+	}
 }
