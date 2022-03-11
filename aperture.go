@@ -178,10 +178,8 @@ func NewAperture(cfg *Config) *Aperture {
 
 // Start sets up the proxy server and starts it.
 func (a *Aperture) Start(errChan chan error) error {
-	var err error
-
 	// Start the prometheus exporter.
-	err = StartPrometheusExporter(a.cfg.Prometheus)
+	err := StartPrometheusExporter(a.cfg.Prometheus)
 	if err != nil {
 		return fmt.Errorf("unable to start the prometheus "+
 			"exporter: %v", err)
