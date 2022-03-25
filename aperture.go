@@ -680,20 +680,25 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	var localServices []proxy.LocalService
 
-	// Before we register both servers, we'll also ensure that the
-	// collector will export latency metrics for the histogram.
-	grpc_prometheus.EnableHandlingTimeHistogram()
-
 	serverOpts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(
-			grpc_prometheus.UnaryServerInterceptor,
-		),
-		grpc.ChainStreamInterceptor(
-			grpc_prometheus.StreamServerInterceptor,
-		),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime: time.Minute,
 		}),
+	}
+
+	// Before we register both servers, we'll also ensure that the collector
+	// will export latency metrics for the histogram.
+	if cfg.Prometheus != nil && cfg.Prometheus.Enabled {
+		grpc_prometheus.EnableHandlingTimeHistogram()
+		serverOpts = append(
+			serverOpts,
+			grpc.ChainUnaryInterceptor(
+				grpc_prometheus.UnaryServerInterceptor,
+			),
+			grpc.ChainStreamInterceptor(
+				grpc_prometheus.StreamServerInterceptor,
+			),
+		)
 	}
 
 	// Create a gRPC server for the hashmail server.
@@ -710,7 +715,9 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	)
 
 	// Export the gRPC information for the public gRPC server.
-	grpc_prometheus.Register(hashMailGRPC)
+	if cfg.Prometheus != nil && cfg.Prometheus.Enabled {
+		grpc_prometheus.Register(hashMailGRPC)
+	}
 
 	// And a REST proxy for it as well.
 	// The default JSON marshaler of the REST proxy only sets OrigName to
