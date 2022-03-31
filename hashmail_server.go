@@ -11,6 +11,7 @@ import (
 
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
 	"github.com/lightningnetwork/lnd/tlv"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,6 +42,19 @@ func newStreamID(id []byte) streamID {
 	copy(s[:], id)
 
 	return s
+}
+
+// baseID returns the first 16 bytes of the streamID. This part of the ID will
+// overlap for the two streams in a bidirectional pair.
+func (s *streamID) baseID() [16]byte {
+	var id [16]byte
+	copy(id[:], s[:16])
+	return id
+}
+
+// isOdd returns true if the streamID is an odd number.
+func (s *streamID) isOdd() bool {
+	return s[63]&0x01 == 0x01
 }
 
 // readStream is the read side of the read pipe, which is implemented a
@@ -669,6 +683,19 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 
 		log.Tracef("Read %v bytes for HashMail stream_id=%x",
 			len(nextMsg), desc.StreamId)
+
+		// In order not to duplicate metric data, we only record this
+		// read if its streamID is odd. We use the base stream ID as the
+		// label. For this to work, it is expected that the read and
+		// write streams of bidirectional pair have the same IDs with
+		// the last bit flipped for one of them.
+		streamID := newStreamID(desc.StreamId)
+		if streamID.isOdd() {
+			baseID := streamID.baseID()
+			mailboxReadCount.With(prometheus.Labels{
+				streamIDLabel: fmt.Sprintf("%x", baseID),
+			}).Inc()
+		}
 
 		err = reader.Send(&hashmailrpc.CipherBox{
 			Desc: desc,
