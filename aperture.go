@@ -37,6 +37,9 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v2"
+
+	// Blank import to set up profiling HTTP handlers.
+	_ "net/http/pprof"
 )
 
 const (
@@ -183,6 +186,27 @@ func (a *Aperture) Start(errChan chan error) error {
 	if err != nil {
 		return fmt.Errorf("unable to start the prometheus "+
 			"exporter: %v", err)
+	}
+
+	// Enable http profiling and validate profile port number if requested.
+	if a.cfg.ProfilePort != 0 {
+		if a.cfg.ProfilePort < 1024 || a.cfg.ProfilePort > 65535 {
+			return fmt.Errorf("the profile port must be between " +
+				"1024 and 65535")
+		}
+
+		go func() {
+			http.Handle("/", http.RedirectHandler(
+				"/debug/pprof", http.StatusSeeOther,
+			))
+
+			listenAddr := fmt.Sprintf(
+				"localhost:%d", a.cfg.ProfilePort,
+			)
+
+			log.Infof("Starting profile server at %s", listenAddr)
+			fmt.Println(http.ListenAndServe(listenAddr, nil))
+		}()
 	}
 
 	// Initialize our etcd client.
