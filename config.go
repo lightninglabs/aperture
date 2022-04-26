@@ -27,6 +27,10 @@ type EtcdConfig struct {
 }
 
 type AuthConfig struct {
+	Disable bool `long:"disable" description:"Whether to disable any auth."`
+
+	Network string `long:"network" description:"The network the authenticator is using." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
+
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
@@ -34,14 +38,22 @@ type AuthConfig struct {
 
 	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
 
-	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
-
-	Disable bool `long:"disable" description:"Whether to disable LND auth."`
+	// LNURL is the lnurl that will be used to fetch invoices from.
+	LNURL string `long:"lnurl" description:"The LNURL to be used to query for invoices. If this is specified then the LND config should not be"`
 }
 
 func (a *AuthConfig) validate() error {
 	// If we're disabled, we don't mind what these values are.
 	if a.Disable {
+		return nil
+	}
+
+	if a.LNURL != "" && a.LndHost != "" {
+		return errors.New("must use either LND or LNURL for " +
+			"authentication, not both")
+	}
+
+	if a.LNURL != "" {
 		return nil
 	}
 

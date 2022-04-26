@@ -34,6 +34,12 @@ authenticator:
   # The chain network the lnd is active on.
   network: "simnet"
 
+  # The LNURL to query for invoices. If this is set then LND config
+  # should not be set. If LNURL is used for invoice retrieval then
+  # aperture can _not_ check for the status of an invoice and will
+  # rely purely on the preimage-paymentHash match.
+  lnurl: "LNURL1DP68GURN8GHJ7URP0YHX2MRVV4KK7AT5DAHZUCM0D5HHQCTE28LWCH"
+
 # Settings for the etcd instance which the proxy will use to reliably store and
 # retrieve token information.
 etcd:
