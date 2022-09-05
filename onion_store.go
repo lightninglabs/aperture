@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/lightninglabs/aperture/secrets"
 	"github.com/lightningnetwork/lnd/tor"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -20,7 +21,8 @@ const (
 
 // onionPath is the full path to an onion service's private key.
 var onionPath = strings.Join(
-	[]string{topLevelKey, onionDir, onionV3Dir}, etcdKeyDelimeter,
+	[]string{secrets.TopLevelKey, onionDir, onionV3Dir},
+	secrets.EtcdKeyDelimeter,
 )
 
 // onionStore is an etcd-based implementation of tor.OnionStore.

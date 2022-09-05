@@ -1,4 +1,4 @@
-package aperture
+package challenger
 
 import (
 	"context"
@@ -55,15 +55,28 @@ type LndChallenger struct {
 	wg   sync.WaitGroup
 }
 
+type AuthConfig struct {
+	// LndHost is the hostname of the LND instance to connect to.
+	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
+
+	TLSPath string `long:"tlspath" description:"Path to LND instance's tls certificate"`
+
+	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
+
+	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
+
+	Disable bool `long:"disable" description:"Whether to disable LND auth."`
+}
+
 // A compile time flag to ensure the LndChallenger satisfies the
 // mint.Challenger and auth.InvoiceChecker interface.
 var _ mint.Challenger = (*LndChallenger)(nil)
 var _ auth.InvoiceChecker = (*LndChallenger)(nil)
 
 const (
-	// invoiceMacaroonName is the name of the invoice macaroon belonging
+	// InvoiceMacaroonName is the name of the invoice macaroon belonging
 	// to the target lnd node.
-	invoiceMacaroonName = "invoice.macaroon"
+	InvoiceMacaroonName = "invoice.macaroon"
 )
 
 // NewLndChallenger creates a new challenger that uses the given connection
@@ -77,7 +90,7 @@ func NewLndChallenger(cfg *AuthConfig, genInvoiceReq InvoiceRequestGenerator,
 
 	client, err := lndclient.NewBasicClient(
 		cfg.LndHost, cfg.TLSPath, cfg.MacDir, cfg.Network,
-		lndclient.MacFilename(invoiceMacaroonName),
+		lndclient.MacFilename(InvoiceMacaroonName),
 	)
 	if err != nil {
 		return nil, err
