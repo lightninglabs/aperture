@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lightninglabs/aperture/lsat"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/macaroon.v2"
 )
 
@@ -27,6 +29,7 @@ func TestBasicLSAT(t *testing.T) {
 		Secrets:        newMockSecretStore(),
 		Challenger:     newMockChallenger(),
 		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
 	})
 
 	// Mint a basic LSAT which is only able to access the given service.
@@ -46,7 +49,7 @@ func TestBasicLSAT(t *testing.T) {
 
 	// It should not be able to access an unknown service.
 	unknownParams := params
-	unknownParams.TargetService = "uknown"
+	unknownParams.TargetService = "unknown"
 	err = mint.VerifyLSAT(ctx, &unknownParams)
 	if !strings.Contains(err.Error(), "not authorized") {
 		t.Fatal("expected LSAT to not be authorized")
@@ -63,6 +66,7 @@ func TestAdminLSAT(t *testing.T) {
 		Secrets:        newMockSecretStore(),
 		Challenger:     newMockChallenger(),
 		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
 	})
 
 	// Mint an admin LSAT by not including any services.
@@ -92,6 +96,7 @@ func TestRevokedLSAT(t *testing.T) {
 		Secrets:        newMockSecretStore(),
 		Challenger:     newMockChallenger(),
 		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
 	})
 
 	// Mint an LSAT and verify it.
@@ -128,6 +133,7 @@ func TestTamperedLSAT(t *testing.T) {
 		Secrets:        newMockSecretStore(),
 		Challenger:     newMockChallenger(),
 		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
 	})
 
 	// Mint a new LSAT and verify it is valid.
@@ -175,6 +181,7 @@ func TestDemotedServicesLSAT(t *testing.T) {
 		Secrets:        newMockSecretStore(),
 		Challenger:     newMockChallenger(),
 		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
 	})
 
 	unauthorizedService := testService
@@ -224,4 +231,67 @@ func TestDemotedServicesLSAT(t *testing.T) {
 	if !strings.Contains(err.Error(), "not authorized") {
 		t.Fatal("expected macaroon to be invalid")
 	}
+}
+
+// TestExpiredServicesLSAT asserts the behavior of the Timeout caveat.
+func TestExpiredServicesLSAT(t *testing.T) {
+	t.Parallel()
+
+	initialTime := int64(1000)
+	mockTime := newMockTime(initialTime)
+
+	ctx := context.Background()
+	mint := New(&Config{
+		Secrets:        newMockSecretStore(),
+		Challenger:     newMockChallenger(),
+		ServiceLimiter: newMockServiceLimiter(),
+		Now:            mockTime.now,
+	})
+
+	// Mint a new lsat for accessing a test service.
+	mac, _, err := mint.MintLSAT(ctx, testService)
+	require.NoError(t, err)
+
+	authorizedParams := VerificationParams{
+		Macaroon:      mac,
+		Preimage:      testPreimage,
+		TargetService: testService.Name,
+	}
+
+	// It should be able to access the service if no timeout caveat added.
+	require.NoError(t, mint.VerifyLSAT(ctx, &authorizedParams))
+
+	// Add a timeout caveat that expires in the future.
+	timeout := lsat.NewTimeoutCaveat(testService.Name, 1000, mockTime.now)
+	require.NoError(t, lsat.AddFirstPartyCaveats(mac, timeout))
+
+	// Make sure that the LSAT is still valid after timeout is added since
+	// the timeout has not yet been reached.
+	require.NoError(t, mint.VerifyLSAT(ctx, &authorizedParams))
+
+	// Force time to pass such that the LSAT should no longer be valid.
+	mockTime.setTime(initialTime + 1001)
+
+	// Assert that the LSAT is no longer valid due to the timeout being
+	// reached.
+	err = mint.VerifyLSAT(ctx, &authorizedParams)
+	require.Contains(t, err.Error(), "not authorized")
+}
+
+type mockTime struct {
+	time time.Time
+}
+
+func newMockTime(initialTime int64) *mockTime {
+	return &mockTime{
+		time: time.Unix(initialTime, 0),
+	}
+}
+
+func (mt *mockTime) now() time.Time {
+	return mt.time
+}
+
+func (mt *mockTime) setTime(timestamp int64) {
+	mt.time = time.Unix(timestamp, 0)
 }

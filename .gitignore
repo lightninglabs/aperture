@@ -13,3 +13,6 @@
 
 /aperture
 cmd/aperture/aperture
+
+# misc
+.vscode

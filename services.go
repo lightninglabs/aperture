@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"time"
 
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
@@ -14,6 +15,7 @@ import (
 type staticServiceLimiter struct {
 	capabilities map[lsat.Service]lsat.Caveat
 	constraints  map[lsat.Service][]lsat.Caveat
+	timeouts     map[lsat.Service]lsat.Caveat
 }
 
 // A compile-time constraint to ensure staticServiceLimiter implements
@@ -22,9 +24,12 @@ var _ mint.ServiceLimiter = (*staticServiceLimiter)(nil)
 
 // newStaticServiceLimiter instantiates a new static service limiter backed by
 // the given restrictions.
-func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimiter {
+func newStaticServiceLimiter(
+	proxyServices []*proxy.Service) *staticServiceLimiter {
+
 	capabilities := make(map[lsat.Service]lsat.Caveat)
 	constraints := make(map[lsat.Service][]lsat.Caveat)
+	timeouts := make(map[lsat.Service]lsat.Caveat)
 
 	for _, proxyService := range proxyServices {
 		s := lsat.Service{
@@ -32,6 +37,15 @@ func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimit
 			Tier:  lsat.BaseTier,
 			Price: proxyService.Price,
 		}
+
+		if proxyService.Timeout > 0 {
+			timeouts[s] = lsat.NewTimeoutCaveat(
+				proxyService.Name,
+				proxyService.Timeout,
+				time.Now,
+			)
+		}
+
 		capabilities[s] = lsat.NewCapabilitiesCaveat(
 			proxyService.Name, proxyService.Capabilities,
 		)
@@ -44,6 +58,7 @@ func newStaticServiceLimiter(proxyServices []*proxy.Service) *staticServiceLimit
 	return &staticServiceLimiter{
 		capabilities: capabilities,
 		constraints:  constraints,
+		timeouts:     timeouts,
 	}
 }
 
@@ -76,6 +91,23 @@ func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
 			continue
 		}
 		res = append(res, constraints...)
+	}
+
+	return res, nil
+}
+
+// ServiceTimeouts returns the timeout caveat for each service. This enforces
+// an expiration time for service access if enabled.
+func (l *staticServiceLimiter) ServiceTimeouts(ctx context.Context,
+	services ...lsat.Service) ([]lsat.Caveat, error) {
+
+	res := make([]lsat.Caveat, 0, len(services))
+	for _, service := range services {
+		timeout, ok := l.timeouts[service]
+		if !ok {
+			continue
+		}
+		res = append(res, timeout)
 	}
 
 	return res, nil

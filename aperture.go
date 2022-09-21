@@ -662,6 +662,7 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 		Challenger:     challenger,
 		Secrets:        newSecretStore(etcdClient),
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+		Now:            time.Now,
 	})
 	authenticator := auth.NewLsatAuthenticator(minter, challenger)
 
