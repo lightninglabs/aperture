@@ -125,6 +125,9 @@ type Config struct {
 
 	// BaseDir is a custom directory to store all aperture flies.
 	BaseDir string `long:"basedir" description:"Directory to place all of aperture's files in."`
+
+	// ProfilePort is the port on which the pprof profile will be served.
+	ProfilePort uint16 `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65535"`
 }
 
 func (c *Config) validate() error {
