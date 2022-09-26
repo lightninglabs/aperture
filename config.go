@@ -64,6 +64,7 @@ type HashMailConfig struct {
 	Enabled               bool          `long:"enabled"`
 	MessageRate           time.Duration `long:"messagerate" description:"The average minimum time that should pass between each message."`
 	MessageBurstAllowance int           `long:"messageburstallowance" description:"The burst rate we allow for messages."`
+	StaleTimeout          time.Duration `long:"staletimeout" description:"The time after the last activity that a mailbox should be removed. Set to -1s to disable. "`
 }
 
 type TorConfig struct {

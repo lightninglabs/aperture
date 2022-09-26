@@ -28,6 +28,10 @@ const (
 	// then we'll allow it up to this burst allowance.
 	DefaultMsgBurstAllowance = 10
 
+	// DefaultStaleTimeout is the time after which a mailbox will be torn
+	// down if neither of its streams are occupied.
+	DefaultStaleTimeout = time.Hour
+
 	// DefaultBufSize is the default number of bytes that are read in a
 	// single operation.
 	DefaultBufSize = 4096
@@ -185,11 +189,14 @@ type stream struct {
 	wg sync.WaitGroup
 
 	limiter *rate.Limiter
+
+	status *streamStatus
 }
 
 // newStream creates a new stream independent of any given stream ID.
 func newStream(id streamID, limiter *rate.Limiter,
-	equivAuth func(auth *hashmailrpc.CipherBoxAuth) error) *stream {
+	equivAuth func(auth *hashmailrpc.CipherBoxAuth) error,
+	onStale func() error, staleTimeout time.Duration) *stream {
 
 	// Our stream is actually just a plain io.Pipe. This allows us to avoid
 	// having to do things like rate limiting, etc as we can limit the
@@ -204,6 +211,7 @@ func newStream(id streamID, limiter *rate.Limiter,
 		id:              id,
 		equivAuth:       equivAuth,
 		limiter:         limiter,
+		status:          newStreamStatus(onStale, staleTimeout),
 		readBytesChan:   make(chan []byte),
 		readErrChan:     make(chan error, 1),
 		quit:            make(chan struct{}),
@@ -213,6 +221,7 @@ func newStream(id streamID, limiter *rate.Limiter,
 	// will cause the goroutine below to get an EOF error when reading,
 	// which will cause it to close the other ends of the pipe.
 	s.tearDown = func() error {
+		s.status.stop()
 		err := writeWritePipe.Close()
 		if err != nil {
 			return err
@@ -284,12 +293,14 @@ func newStream(id streamID, limiter *rate.Limiter,
 // ReturnReadStream returns the target read stream back to its holding channel.
 func (s *stream) ReturnReadStream(r *readStream) {
 	s.readStreamChan <- r
+	s.status.streamReturned(true)
 }
 
 // ReturnWriteStream returns the target write stream back to its holding
 // channel.
 func (s *stream) ReturnWriteStream(w *writeStream) {
 	s.writeStreamChan <- w
+	s.status.streamReturned(false)
 }
 
 // RequestReadStream attempts to request the read stream from the main backing
@@ -300,6 +311,7 @@ func (s *stream) RequestReadStream() (*readStream, error) {
 
 	select {
 	case r := <-s.readStreamChan:
+		s.status.streamTaken(true)
 		return r, nil
 	default:
 		return nil, fmt.Errorf("read stream occupied")
@@ -314,6 +326,7 @@ func (s *stream) RequestWriteStream() (*writeStream, error) {
 
 	select {
 	case w := <-s.writeStreamChan:
+		s.status.streamTaken(false)
 		return w, nil
 	default:
 		return nil, fmt.Errorf("write stream occupied")
@@ -324,6 +337,7 @@ func (s *stream) RequestWriteStream() (*writeStream, error) {
 type hashMailServerConfig struct {
 	msgRate           time.Duration
 	msgBurstAllowance int
+	staleTimeout      time.Duration
 }
 
 // hashMailServer is an implementation of the HashMailServer gRPC service that
@@ -350,6 +364,9 @@ func newHashMailServer(cfg hashMailServerConfig) *hashMailServer {
 	if cfg.msgBurstAllowance == 0 {
 		cfg.msgBurstAllowance = DefaultMsgBurstAllowance
 	}
+	if cfg.staleTimeout == 0 {
+		cfg.staleTimeout = DefaultStaleTimeout
+	}
 
 	return &hashMailServer{
 		streams: make(map[streamID]*stream),
@@ -370,6 +387,29 @@ func (h *hashMailServer) Stop() {
 		}
 	}
 
+}
+
+// tearDownStaleStream can be used to tear down a stale mailbox stream.
+func (h *hashMailServer) tearDownStaleStream(id streamID) error {
+	log.Debugf("Tearing down stale HashMail stream: id=%x", id)
+
+	h.Lock()
+	defer h.Unlock()
+
+	stream, ok := h.streams[id]
+	if !ok {
+		return fmt.Errorf("stream not found")
+	}
+
+	if err := stream.tearDown(); err != nil {
+		return err
+	}
+
+	delete(h.streams, id)
+
+	mailboxCount.Set(float64(len(h.streams)))
+
+	return nil
 }
 
 // ValidateStreamAuth attempts to validate the authentication mechanism that is
@@ -415,7 +455,9 @@ func (h *hashMailServer) InitStream(
 	freshStream := newStream(
 		streamID, limiter, func(auth *hashmailrpc.CipherBoxAuth) error {
 			return nil
-		},
+		}, func() error {
+			return h.tearDownStaleStream(streamID)
+		}, h.cfg.staleTimeout,
 	)
 
 	h.streams[streamID] = freshStream
@@ -430,7 +472,6 @@ func (h *hashMailServer) InitStream(
 // LookUpReadStream attempts to loop up a new stream. If the stream is found, then
 // the stream is marked as being active. Otherwise, an error is returned.
 func (h *hashMailServer) LookUpReadStream(streamID []byte) (*readStream, error) {
-
 	h.RLock()
 	defer h.RUnlock()
 
@@ -710,3 +751,94 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 }
 
 var _ hashmailrpc.HashMailServer = (*hashMailServer)(nil)
+
+// streamStatus keeps track of the occupancy status of a stream's read and
+// write sub-streams. It is initialised with callback functions to call on the
+// event of the streams being occupied (either or both of the streams are
+// occupied) or fully idle (both streams are unoccupied).
+type streamStatus struct {
+	disabled bool
+
+	staleTimeout time.Duration
+	staleTimer   *time.Timer
+
+	readStreamOccupied  bool
+	writeStreamOccupied bool
+	sync.Mutex
+}
+
+// newStreamStatus constructs a new streamStatus instance.
+func newStreamStatus(onStale func() error,
+	staleTimeout time.Duration) *streamStatus {
+
+	if staleTimeout < 0 {
+		return &streamStatus{
+			disabled: true,
+		}
+	}
+
+	staleTimer := time.AfterFunc(staleTimeout, func() {
+		if err := onStale(); err != nil {
+			log.Errorf("error in onStale callback: %v", err)
+		}
+	})
+
+	return &streamStatus{
+		staleTimer:   staleTimer,
+		staleTimeout: staleTimeout,
+	}
+}
+
+// stop cleans up any resources held by streamStatus.
+func (s *streamStatus) stop() {
+	if s.disabled {
+		return
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	_ = s.staleTimer.Stop()
+}
+
+// streamTaken should be called when one of the sub-streams (read or write)
+// become occupied. This will stop the staleTimer. The read parameter should be
+// true if the stream being returned is the read stream.
+func (s *streamStatus) streamTaken(read bool) {
+	if s.disabled {
+		return
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	if read {
+		s.readStreamOccupied = true
+	} else {
+		s.writeStreamOccupied = true
+	}
+	_ = s.staleTimer.Stop()
+}
+
+// streamReturned should be called when one of the sub-streams are released.
+// If the occupancy count after this call is zero, then the staleTimer is reset.
+// The read parameter should be true if the stream being returned is the read
+// stream.
+func (s *streamStatus) streamReturned(read bool) {
+	if s.disabled {
+		return
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	if read {
+		s.readStreamOccupied = false
+	} else {
+		s.writeStreamOccupied = false
+	}
+
+	if !s.readStreamOccupied && !s.writeStreamOccupied {
+		_ = s.staleTimer.Reset(s.staleTimeout)
+	}
+}
