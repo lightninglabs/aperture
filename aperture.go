@@ -729,6 +729,7 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	hashMailServer := newHashMailServer(hashMailServerConfig{
 		msgRate:           cfg.HashMail.MessageRate,
 		msgBurstAllowance: cfg.HashMail.MessageBurstAllowance,
+		staleTimeout:      cfg.HashMail.StaleTimeout,
 	})
 	hashMailGRPC := grpc.NewServer(serverOpts...)
 	hashmailrpc.RegisterHashMailServer(hashMailGRPC, hashMailServer)
