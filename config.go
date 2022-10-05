@@ -71,7 +71,6 @@ type TorConfig struct {
 	Control     string `long:"control" description:"The host:port of the Tor instance."`
 	ListenPort  uint16 `long:"listenport" description:"The port we should listen on for client requests over Tor. Note that this port should not be exposed to the outside world, it is only intended to be reached by clients through the onion service."`
 	VirtualPort uint16 `long:"virtualport" description:"The port through which the onion services created can be reached at."`
-	V2          bool   `long:"v2" description:"Whether we should listen for client requests through a v2 onion service."`
 	V3          bool   `long:"v3" description:"Whether we should listen for client requests through a v3 onion service."`
 }
 

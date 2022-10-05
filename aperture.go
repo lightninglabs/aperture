@@ -303,7 +303,7 @@ func (a *Aperture) Start(errChan chan error) error {
 	// will only be reached through the onion services, which already
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
-	if a.cfg.Tor.V2 || a.cfg.Tor.V3 {
+	if a.cfg.Tor.V3 {
 		torController, err := initTorListener(a.cfg, a.etcdClient)
 		if err != nil {
 			return err
@@ -621,16 +621,6 @@ func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error
 	torController := tor.NewController(cfg.Tor.Control, "", "")
 	if err := torController.Start(); err != nil {
 		return nil, err
-	}
-
-	if cfg.Tor.V2 {
-		onionCfg.Type = tor.V2
-		addr, err := torController.AddOnion(onionCfg)
-		if err != nil {
-			return nil, err
-		}
-
-		log.Infof("Listening over Tor on %v", addr)
 	}
 
 	if cfg.Tor.V3 {

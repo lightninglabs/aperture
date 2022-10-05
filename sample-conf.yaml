@@ -143,9 +143,6 @@ tor:
   # The port through which the onion services to be created can be reached at.
   virtualport: 8082
 
-  # Whether a v2 onion service should be created to handle requests.
-  v2: false
-
   # Whether a v3 onion service should be created to handle requests.
   v3: false
 
