@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/keychain"
+	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 )
@@ -26,7 +27,7 @@ type mockWalletKit struct {
 var _ lndclient.WalletKitClient = (*mockWalletKit)(nil)
 
 func (m *mockWalletKit) ListUnspent(ctx context.Context, minConfs,
-	maxConfs int32) ([]*lnwallet.Utxo, error) {
+	maxConfs int32, opts ...lndclient.ListUnspentOption) ([]*lnwallet.Utxo, error) {
 
 	return nil, nil
 }
@@ -71,7 +72,10 @@ func (m *mockWalletKit) DeriveKey(ctx context.Context, in *keychain.KeyLocator) 
 	}, nil
 }
 
-func (m *mockWalletKit) NextAddr(ctx context.Context) (btcutil.Address, error) {
+func (m *mockWalletKit) NextAddr(ctx context.Context, accountName string,
+	addressType walletrpc.AddressType,
+	change bool) (btcutil.Address, error) {
+
 	addr, err := btcutil.NewAddressWitnessPubKeyHash(
 		make([]byte, 20), &chaincfg.TestNet3Params,
 	)
