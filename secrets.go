@@ -24,7 +24,7 @@ var (
 // delimeter.
 //
 // The resulting path of the identifier bff4ee83 within etcd would look like:
-//	lsat/proxy/secrets/bff4ee83
+// lsat/proxy/secrets/bff4ee83
 func idKey(id [sha256.Size]byte) string {
 	return strings.Join(
 		[]string{topLevelKey, secretsPrefix, hex.EncodeToString(id[:])},

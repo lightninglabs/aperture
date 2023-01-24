@@ -34,9 +34,10 @@ var (
 // FromHeader tries to extract authentication information from HTTP headers.
 // There are two supported formats that can be sent in three different header
 // fields:
-//    1.      Authorization: LSAT <macBase64>:<preimageHex>
-//    2.      Grpc-Metadata-Macaroon: <macHex>
-//    3.      Macaroon: <macHex>
+//  1. Authorization: LSAT <macBase64>:<preimageHex>
+//  2. Grpc-Metadata-Macaroon: <macHex>
+//  3. Macaroon: <macHex>
+//
 // If only the macaroon is sent in header 2 or three then it is expected to have
 // a caveat with the preimage attached to it.
 func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, error) {
