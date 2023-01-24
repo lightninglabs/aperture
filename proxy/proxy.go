@@ -185,7 +185,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// is not authenticated at all.
 		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
 		if !acceptAuth {
-			ok, err := target.freebieDb.CanPass(r, remoteIP)
+			ok, err := target.freebieDB.CanPass(r, remoteIP)
 			if err != nil {
 				prefixLog.Errorf("Error querying freebie db: "+
 					"%v", err)
@@ -222,7 +222,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				)
 				return
 			}
-			_, err = target.freebieDb.TallyFreebie(r, remoteIP)
+			_, err = target.freebieDB.TallyFreebie(r, remoteIP)
 			if err != nil {
 				prefixLog.Errorf("Error updating freebie db: "+
 					"%v", err)
