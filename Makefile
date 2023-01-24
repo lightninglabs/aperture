@@ -1,16 +1,13 @@
 PKG := github.com/lightninglabs/aperture
 ESCPKG := github.com\/lightninglabs\/aperture
+TOOLS_DIR := tools
 
-LINT_PKG := github.com/golangci/golangci-lint/cmd/golangci-lint
 GOVERALLS_PKG := github.com/mattn/goveralls
 GOACC_PKG := github.com/ory/go-acc
 
 GO_BIN := ${GOPATH}/bin
 GOVERALLS_BIN := $(GO_BIN)/goveralls
-LINT_BIN := $(GO_BIN)/golangci-lint
 GOACC_BIN := $(GO_BIN)/go-acc
-
-LINT_COMMIT := v1.18.0
 GOACC_COMMIT := ddc355013f90fea78d83d3a6c71f1d37ac07ecd5
 
 DEPGET := cd /tmp && GO111MODULE=on go get -v
@@ -29,7 +26,9 @@ XARGS := xargs -L 1
 
 include make/testing_flags.mk
 
-LINT = $(LINT_BIN) run -v
+# DOCKER_TOOLS is a docker run command which executes the
+# aperture tools (e.g. linting) docker image.
+DOCKER_TOOLS = docker run -v $$(pwd):/build aperture-tools
 
 default: build
 
@@ -42,10 +41,6 @@ all: build check install
 $(GOVERALLS_BIN):
 	@$(call print, "Fetching goveralls.")
 	go get -u $(GOVERALLS_PKG)
-
-$(LINT_BIN):
-	@$(call print, "Fetching linter")
-	$(DEPGET) $(LINT_PKG)@$(LINT_COMMIT)
 
 $(GOACC_BIN):
 	@$(call print, "Fetching go-acc")
@@ -62,6 +57,10 @@ build:
 install:
 	@$(call print, "Installing aperture.")
 	$(GOINSTALL) $(PKG)/cmd/aperture
+
+docker-tools:
+	@$(call print, "Building tools docker image.")
+	docker build -q -t aperture-tools $(TOOLS_DIR)
 
 # =======
 # TESTING
@@ -101,9 +100,9 @@ fmt:
 	@$(call print, "Formatting source.")
 	gofmt -l -w -s $(GOFILES_NOVENDOR)
 
-lint: $(LINT_BIN)
+lint: docker-tools
 	@$(call print, "Linting source.")
-	$(LINT)
+	$(DOCKER_TOOLS) golangci-lint run -v
 
 list:
 	@$(call print, "Listing commands.")
