@@ -7,6 +7,7 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"golang.org/x/net/context"
 )
@@ -103,7 +104,8 @@ func (c *mockChainNotifier) RegisterBlockEpochNtfn(ctx context.Context) (
 }
 
 func (c *mockChainNotifier) RegisterConfirmationsNtfn(ctx context.Context,
-	txid *chainhash.Hash, pkScript []byte, numConfs, heightHint int32) (
+	txid *chainhash.Hash, pkScript []byte, numConfs, heightHint int32,
+	opts ...lndclient.NotifierOption) (
 	chan *chainntnfs.TxConfirmation, chan error, error) {
 
 	reg := &ConfRegistration{

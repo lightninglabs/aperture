@@ -86,7 +86,7 @@ func TestHashMailServerReturnStream(t *testing.T) {
 
 	// Send then receive yet another message to make sure the stream is
 	// still operational.
-	testMessage2 := append(testMessage, []byte("test")...)
+	testMessage2 := append(testMessage, []byte("test")...) //nolint:gocritic
 	err = writeStream.Send(&hashmailrpc.CipherBox{
 		Desc: testStreamDesc,
 		Msg:  testMessage2,

@@ -1,7 +1,6 @@
 package lsat
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,7 +12,7 @@ import (
 func TestFileStore(t *testing.T) {
 	t.Parallel()
 
-	tempDirName, err := ioutil.TempDir("", "lsatstore")
+	tempDirName, err := os.MkdirTemp("", "lsatstore")
 	if err != nil {
 		t.Fatal(err)
 	}

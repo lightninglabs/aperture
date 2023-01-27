@@ -167,7 +167,8 @@ func (h *mockLightningClient) LookupInvoice(_ context.Context,
 
 // ListTransactions returns all known transactions of the backing lnd node.
 func (h *mockLightningClient) ListTransactions(
-	_ context.Context, _, _ int32) ([]lndclient.Transaction, error) {
+	_ context.Context, _ int32, _ int32,
+	_ ...lndclient.ListTransactionsOption) ([]lndclient.Transaction, error) {
 
 	h.lnd.lock.Lock()
 	txs := h.lnd.Transactions
@@ -256,7 +257,8 @@ func (h *mockLightningClient) DecodePaymentRequest(_ context.Context,
 // OpenChannel opens a channel to the peer provided with the amounts
 // specified.
 func (h *mockLightningClient) OpenChannel(_ context.Context, _ route.Vertex,
-	_, _ btcutil.Amount, _ bool) (*wire.OutPoint, error) {
+	_ btcutil.Amount, _ btcutil.Amount, _ bool,
+	_ ...lndclient.OpenChannelOption) (*wire.OutPoint, error) {
 
 	return nil, nil
 }

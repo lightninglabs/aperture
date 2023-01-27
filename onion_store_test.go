@@ -11,12 +11,12 @@ import (
 // onion service exists in the store. If it does, it's compared against what's
 // expected.
 func assertPrivateKeyExists(t *testing.T, store *onionStore,
-	onionType tor.OnionType, expPrivateKey *[]byte) {
+	expPrivateKey *[]byte) {
 
 	t.Helper()
 
 	exists := expPrivateKey != nil
-	privateKey, err := store.PrivateKey(onionType)
+	privateKey, err := store.PrivateKey()
 	switch {
 	case exists && err != nil:
 		t.Fatalf("unable to retrieve private key: %v", err)
@@ -32,8 +32,8 @@ func assertPrivateKeyExists(t *testing.T, store *onionStore,
 	}
 }
 
-// TestOnionStore ensures the different operations of the onionStore behave as
-// espected.
+// TestOnionStore ensures the different operations of the onionStore behave
+// as expected.
 func TestOnionStore(t *testing.T) {
 	etcdClient, serverCleanup := etcdSetup(t)
 	defer etcdClient.Close()
@@ -42,40 +42,22 @@ func TestOnionStore(t *testing.T) {
 	// Upon a fresh initialization of the store, no private keys should
 	// exist for any onion service type.
 	store := newOnionStore(etcdClient)
-	assertPrivateKeyExists(t, store, tor.V2, nil)
-	assertPrivateKeyExists(t, store, tor.V3, nil)
+	assertPrivateKeyExists(t, store, nil)
 
-	// Store a private key for a V2 onion service and check it was stored
+	// Store a private key for an onion service and check it was stored
 	// correctly.
-	privateKeyV2 := []byte("hide_me_plz_v2")
-	if err := store.StorePrivateKey(tor.V2, privateKeyV2); err != nil {
-		t.Fatalf("unable to store private key for v2 onion service: %v",
+	privateKey := []byte("hide_me_plz")
+	if err := store.StorePrivateKey(privateKey); err != nil {
+		t.Fatalf("unable to store private key for onion service: %v",
 			err)
 	}
-	assertPrivateKeyExists(t, store, tor.V2, &privateKeyV2)
+	assertPrivateKeyExists(t, store, &privateKey)
 
-	// Store a private key for a V3 onion service and check it was stored
-	// correctly.
-	privateKeyV3 := []byte("hide_me_plz_v3")
-	if err := store.StorePrivateKey(tor.V3, privateKeyV3); err != nil {
-		t.Fatalf("unable to store private key for v3 onion service: %v",
-			err)
-	}
-	assertPrivateKeyExists(t, store, tor.V3, &privateKeyV3)
-
-	// Delete the private key for the V2 onion service and check that it was
+	// Delete the private key for the onion service and check that it was
 	// indeed successful.
-	if err := store.DeletePrivateKey(tor.V2); err != nil {
-		t.Fatalf("unable to remove private key for v2 onion service: %v",
+	if err := store.DeletePrivateKey(); err != nil {
+		t.Fatalf("unable to remove private key for onion service: %v",
 			err)
 	}
-	assertPrivateKeyExists(t, store, tor.V2, nil)
-
-	// Delete the private key for the V3 onion service and check that it was
-	// indeed successful.
-	if err := store.DeletePrivateKey(tor.V3); err != nil {
-		t.Fatalf("unable to remove private key for v3 onion service: %v",
-			err)
-	}
-	assertPrivateKeyExists(t, store, tor.V3, nil)
+	assertPrivateKeyExists(t, store, nil)
 }

@@ -15,24 +15,34 @@ linters-settings:
     simplify: true
 
 linters:
-  enable-all: true
-  disable:
-    # Init functions are used by loggers throughout the codebase.
-    - gochecknoinits
 
-    # Global variables are used by loggers.
-    - gochecknoglobals
-
-    # Some lines are over 80 characters on purpose and we don't want to make
-    # them even longer by marking them as 'nolint'.
-    - lll
-
-    # We don't care (enough) about misaligned structs to lint that.
-    - maligned
-
-    # We have long functions, especially in tests. Moving or renaming those
-    # would trigger funlen problems that we may not want to solve at that time.
-    - funlen
-
-    # Gosec is outdated and reports false positives.
-    - gosec
+  # Specify an enabled list of linters rather than a disabled list because
+  # the latest linter includes many sub-linters which do not pass the codebase.
+  enable:
+    - bodyclose
+    - deadcode
+    - depguard
+    - dupl
+    - errcheck
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - goimports
+    - golint
+    - gosimple
+    - govet
+    - ineffassign
+    - interfacer
+    - misspell
+    - nakedret
+    - prealloc
+    - scopelint
+    - staticcheck
+    - structcheck
+    - stylecheck
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - varcheck

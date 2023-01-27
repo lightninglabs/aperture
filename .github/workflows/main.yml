@@ -24,7 +24,7 @@ env:
   # https://github.com/golang/go/issues/51799). There was a race condition
   # introduced with go 1.16.10 that causes the unit tests to fail (could also
   # happen in production).
-  GO_VERSION: 1.16.9
+  GO_VERSION: 1.19.2
 
 jobs:
   ########################

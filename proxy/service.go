@@ -4,8 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 
@@ -97,7 +97,7 @@ type Service struct {
 	// /package_name.ServiceName/MethodName
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
 
-	freebieDb freebie.DB
+	freebieDB freebie.DB
 	pricer    pricer.Pricer
 }
 
@@ -136,7 +136,7 @@ func prepareServices(services []*Service) error {
 	for _, service := range services {
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
-			service.freebieDb = freebie.NewMemIPMaskStore(
+			service.freebieDB = freebie.NewMemIPMaskStore(
 				service.Auth.FreebieCount(),
 			)
 		}
@@ -154,7 +154,7 @@ func prepareServices(services []*Service) error {
 					"must be '!file+hex:path'")
 			}
 			prefix, fileName := parts[0], parts[1]
-			bytes, err := ioutil.ReadFile(fileName)
+			bytes, err := os.ReadFile(fileName)
 			if err != nil {
 				return err
 			}

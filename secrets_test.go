@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"testing"
@@ -22,7 +21,7 @@ import (
 func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
 	t.Helper()
 
-	tempDir, err := ioutil.TempDir("", "etcd")
+	tempDir, err := os.MkdirTemp("", "etcd")
 	if err != nil {
 		t.Fatalf("unable to create temp dir: %v", err)
 	}

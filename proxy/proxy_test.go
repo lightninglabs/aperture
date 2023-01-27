@@ -6,9 +6,9 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"testing"
@@ -169,7 +169,7 @@ func runHTTPTest(t *testing.T, tc *testCase) {
 
 		// Ensure that we got the response body we expect.
 		defer closeOrFail(t, resp.Body)
-		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		bodyBytes, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 
 		require.Equal(t, testHTTPResponseBody, string(bodyBytes))
@@ -188,7 +188,7 @@ func runHTTPTest(t *testing.T, tc *testCase) {
 
 	// Ensure that we got the response body we expect.
 	defer closeOrFail(t, resp.Body)
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 
 	require.Equal(t, testHTTPResponseBody, string(bodyBytes))
@@ -237,7 +237,7 @@ func TestProxyGRPC(t *testing.T) {
 func runGRPCTest(t *testing.T, tc *testCase) {
 	// Since gRPC only really works over TLS, we need to generate a
 	// certificate and key pair first.
-	tempDirName, err := ioutil.TempDir("", "proxytest")
+	tempDirName, err := os.MkdirTemp("", "proxytest")
 	require.NoError(t, err)
 	certFile := path.Join(tempDirName, "proxy.cert")
 	keyFile := path.Join(tempDirName, "proxy.key")
@@ -439,7 +439,6 @@ func configFromCert(crt *tls.Certificate, certPool *x509.CertPool) *tls.Config {
 	tlsConf.CipherSuites = []uint16{
 		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 	}
-	tlsConf.PreferServerCipherSuites = true
 	tlsConf.RootCAs = certPool
 	tlsConf.InsecureSkipVerify = true
 
