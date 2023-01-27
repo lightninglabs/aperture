@@ -4,9 +4,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -329,7 +329,7 @@ func certPool(services []*Service) (*x509.CertPool, error) {
 			continue
 		}
 
-		b, err := ioutil.ReadFile(service.TLSCertPath)
+		b, err := os.ReadFile(service.TLSCertPath)
 		if err != nil {
 			return nil, err
 		}

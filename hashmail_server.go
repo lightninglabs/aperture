@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"sync"
 	"time"
 
@@ -100,7 +99,7 @@ func (r *readStream) ReadNextMsg(ctx context.Context) ([]byte, error) {
 	// reader, then read all the encoded bytes until the EOF is emitted by
 	// the reader.
 	msgReader := io.LimitReader(reader, int64(msgLen))
-	return ioutil.ReadAll(msgReader)
+	return io.ReadAll(msgReader)
 }
 
 // ReturnStream gives up the read stream by passing it back up through the

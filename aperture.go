@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -414,7 +413,7 @@ func getConfig() (*Config, error) {
 
 	// Read our config file, either from the custom path provided or our
 	// default location.
-	b, err := ioutil.ReadFile(configFile)
+	b, err := os.ReadFile(configFile)
 	switch {
 	// If the file was found, unmarshal it.
 	case err == nil:

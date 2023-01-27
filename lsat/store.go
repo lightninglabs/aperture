@@ -3,7 +3,6 @@ package lsat
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,7 +112,7 @@ func (f *FileStore) AllTokens() (map[string]*Token, error) {
 	// just one token, either pending or paid.
 	// TODO(guggero): Update comment once tokens expire and we keep backups.
 	tokenDir := filepath.Dir(f.fileName)
-	files, err := ioutil.ReadDir(tokenDir)
+	files, err := os.ReadDir(tokenDir)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +155,7 @@ func (f *FileStore) StoreToken(newToken *Token) error {
 		if newToken.isPending() {
 			newFileName = f.fileNamePending
 		}
-		return ioutil.WriteFile(newFileName, bytes, 0600)
+		return os.WriteFile(newFileName, bytes, 0600)
 
 	// Fail on any other error.
 	case err != nil:
@@ -173,7 +172,7 @@ func (f *FileStore) StoreToken(newToken *Token) error {
 
 		// Write the new token first, so we still have the pending
 		// around if something goes wrong.
-		err := ioutil.WriteFile(f.fileName, bytes, 0600)
+		err := os.WriteFile(f.fileName, bytes, 0600)
 		if err != nil {
 			return err
 		}
@@ -206,7 +205,7 @@ func (f *FileStore) RemovePendingToken() error {
 
 // readTokenFile reads a single token from a file and returns it deserialized.
 func readTokenFile(tokenFile string) (*Token, error) {
-	bytes, err := ioutil.ReadFile(tokenFile)
+	bytes, err := os.ReadFile(tokenFile)
 	if err != nil {
 		return nil, err
 	}

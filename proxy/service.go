@@ -4,8 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 
@@ -154,7 +154,7 @@ func prepareServices(services []*Service) error {
 					"must be '!file+hex:path'")
 			}
 			prefix, fileName := parts[0], parts[1]
-			bytes, err := ioutil.ReadFile(fileName)
+			bytes, err := os.ReadFile(fileName)
 			if err != nil {
 				return err
 			}
