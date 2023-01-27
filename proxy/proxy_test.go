@@ -439,7 +439,6 @@ func configFromCert(crt *tls.Certificate, certPool *x509.CertPool) *tls.Config {
 	tlsConf.CipherSuites = []uint16{
 		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 	}
-	tlsConf.PreferServerCipherSuites = true
 	tlsConf.RootCAs = certPool
 	tlsConf.InsecureSkipVerify = true
 
