@@ -538,13 +538,23 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 	tlsExtraDomains := []string{serverName}
 	if !fileExists(tlsCertFile) && !fileExists(tlsKeyFile) {
 		log.Infof("Generating TLS certificates...")
-		err := cert.GenCertPair(
-			selfSignedCertOrganization, tlsCertFile, tlsKeyFile,
-			nil, tlsExtraDomains, false, selfSignedCertValidity,
+		certBytes, keyBytes, err := cert.GenCertPair(
+			selfSignedCertOrganization, nil, tlsExtraDomains, false,
+			selfSignedCertValidity,
 		)
 		if err != nil {
 			return nil, err
 		}
+
+		// Now that we have the certificate and key, we'll store them
+		// to the file system.
+		err = cert.WriteCertPair(
+			tlsCertFile, tlsKeyFile, certBytes, keyBytes,
+		)
+		if err != nil {
+			return nil, err
+		}
+
 		log.Infof("Done generating TLS certificates")
 	}
 
@@ -585,13 +595,21 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 		}
 
 		log.Infof("Renewing TLS certificates...")
-		err = cert.GenCertPair(
-			selfSignedCertOrganization, tlsCertFile, tlsKeyFile,
-			nil, nil, false, selfSignedCertValidity,
+		certBytes, keyBytes, err := cert.GenCertPair(
+			selfSignedCertOrganization, nil, nil, false,
+			selfSignedCertValidity,
 		)
 		if err != nil {
 			return nil, err
 		}
+
+		err = cert.WriteCertPair(
+			tlsCertFile, tlsKeyFile, certBytes, keyBytes,
+		)
+		if err != nil {
+			return nil, err
+		}
+
 		log.Infof("Done renewing TLS certificates")
 
 		// Reload the certificate data.
