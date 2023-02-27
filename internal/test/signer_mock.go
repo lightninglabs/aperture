@@ -62,7 +62,7 @@ func (s *mockSigner) DeriveSharedKey(context.Context, *btcec.PublicKey,
 }
 
 func (s *mockSigner) MuSig2CreateSession(ctx context.Context,
-	signerLoc *keychain.KeyLocator, signers [][32]byte,
+	_ input.MuSig2Version, signerLoc *keychain.KeyLocator, signers [][]byte,
 	opts ...lndclient.MuSig2SessionOpts) (*input.MuSig2SessionInfo, error) {
 
 	return nil, nil

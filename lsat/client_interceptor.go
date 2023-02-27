@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,10 @@ const (
 	// GRPCErrCode is the error code we receive from a gRPC call if the
 	// server expects a payment.
 	GRPCErrCode = codes.Internal
+
+	// GRPCErrCodeNew is the new error code we receive for a "402 payment
+	// required" error since google.golang.org/grpc v1.41.0.
+	GRPCErrCodeNew = codes.Unknown
 
 	// GRPCErrMessage is the error message we receive from a gRPC call in
 	// conjunction with the GRPCErrCode to signal the client that a payment
@@ -135,7 +140,7 @@ func (i *ClientInterceptor) UnaryInterceptor(ctx context.Context, method string,
 	rpcCtx, cancel := context.WithTimeout(ctx, i.callTimeout)
 	defer cancel()
 	err = invoker(rpcCtx, method, req, reply, cc, iCtx.opts...)
-	if !isPaymentRequired(err) {
+	if !IsPaymentRequired(err) {
 		return err
 	}
 
@@ -183,7 +188,7 @@ func (i *ClientInterceptor) StreamInterceptor(ctx context.Context,
 	// error. The context of a stream will be used for the whole lifetime of
 	// it, so we can't really clamp down on the initial call with a timeout.
 	stream, err := streamer(ctx, desc, cc, method, iCtx.opts...)
-	if !isPaymentRequired(err) {
+	if !IsPaymentRequired(err) {
 		return stream, err
 	}
 
@@ -464,14 +469,19 @@ func (i *ClientInterceptor) trackPayment(ctx context.Context, token *Token) erro
 	}
 }
 
-// isPaymentRequired inspects an error to find out if it's the specific gRPC
+// IsPaymentRequired inspects an error to find out if it's the specific gRPC
 // error returned by the server to indicate a payment is required to access the
 // service.
-func isPaymentRequired(err error) bool {
+func IsPaymentRequired(err error) bool {
 	statusErr, ok := status.FromError(err)
-	return ok &&
-		statusErr.Message() == GRPCErrMessage &&
-		statusErr.Code() == GRPCErrCode
+	if !ok {
+		return false
+	}
+
+	errMsg := strings.ToLower(statusErr.Message())
+	return strings.Contains(errMsg, GRPCErrMessage) &&
+		(statusErr.Code() == GRPCErrCode ||
+			statusErr.Code() == GRPCErrCodeNew)
 }
 
 // extractPaymentDetails extracts the preimage and amounts paid for a payment

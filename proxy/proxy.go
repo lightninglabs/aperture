@@ -402,7 +402,9 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 
 	addCorsHeaders(r.Header)
 
-	header, err := p.authenticator.FreshChallengeHeader(r, serviceName, servicePrice)
+	header, err := p.authenticator.FreshChallengeHeader(
+		r, serviceName, servicePrice,
+	)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)
 		sendDirectResponse(

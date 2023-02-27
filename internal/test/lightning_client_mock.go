@@ -12,7 +12,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/lndclient"
-	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/invoices"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/routing/route"
@@ -140,7 +140,7 @@ func (h *mockLightningClient) AddInvoice(ctx context.Context,
 		PaymentRequest: payReqString,
 		Amount:         in.Value,
 		CreationDate:   creationDate,
-		State:          channeldb.ContractOpen,
+		State:          invoices.ContractOpen,
 		IsKeysend:      false,
 	}
 
@@ -185,8 +185,8 @@ func (h *mockLightningClient) ListChannels(ctx context.Context,
 }
 
 // ClosedChannels returns a list of our closed channels.
-func (h *mockLightningClient) ClosedChannels(_ context.Context) ([]lndclient.ClosedChannel,
-	error) {
+func (h *mockLightningClient) ClosedChannels(
+	_ context.Context) ([]lndclient.ClosedChannel, error) {
 
 	return h.lnd.ClosedChannels, nil
 }
