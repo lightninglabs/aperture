@@ -4,6 +4,7 @@ import (
 	"github.com/btcsuite/btclog"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
+	"github.com/lightninglabs/aperture/interceptor"
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lndclient"
@@ -30,6 +31,9 @@ func SetupLoggers(root *build.RotatingLogWriter, intercept signal.Interceptor) {
 	lnd.AddSubLogger(root, auth.Subsystem, intercept, auth.UseLogger)
 	lnd.AddSubLogger(
 		root, challenger.Subsystem, intercept, challenger.UseLogger,
+	)
+	lnd.AddSubLogger(
+		root, interceptor.Subsystem, intercept, interceptor.UseLogger,
 	)
 	lnd.AddSubLogger(root, lsat.Subsystem, intercept, lsat.UseLogger)
 	lnd.AddSubLogger(root, proxy.Subsystem, intercept, proxy.UseLogger)

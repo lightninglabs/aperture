@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	// zeroPreimage is an empty, invalid payment preimage that is used to
+	// ZeroPreimage is an empty, invalid payment preimage that is used to
 	// initialize pending tokens with.
-	zeroPreimage lntypes.Preimage
+	ZeroPreimage lntypes.Preimage
 )
 
 // Token is the main type to store an LSAT token in.
@@ -40,15 +40,15 @@ type Token struct {
 	// TimeCreated is the moment when this token was created.
 	TimeCreated time.Time
 
-	// baseMac is the base macaroon in its original form as baked by the
+	// BaseMac is the base macaroon in its original form as baked by the
 	// authentication server. No client side caveats have been added to it
 	// yet.
-	baseMac *macaroon.Macaroon
+	BaseMac *macaroon.Macaroon
 }
 
-// tokenFromChallenge parses the parts that are present in the challenge part
+// TokenFromChallenge parses the parts that are present in the challenge part
 // of the LSAT auth protocol which is the macaroon and the payment hash.
-func tokenFromChallenge(baseMac []byte, paymentHash *[32]byte) (*Token, error) {
+func TokenFromChallenge(baseMac []byte, paymentHash *[32]byte) (*Token, error) {
 	// First, validate that the macaroon is valid and can be unmarshaled.
 	mac := &macaroon.Macaroon{}
 	err := mac.UnmarshalBinary(baseMac)
@@ -58,8 +58,8 @@ func tokenFromChallenge(baseMac []byte, paymentHash *[32]byte) (*Token, error) {
 
 	token := &Token{
 		TimeCreated: time.Now(),
-		baseMac:     mac,
-		Preimage:    zeroPreimage,
+		BaseMac:     mac,
+		Preimage:    ZeroPreimage,
 	}
 	hash, err := lntypes.MakeHash(paymentHash[:])
 	if err != nil {
@@ -72,7 +72,7 @@ func tokenFromChallenge(baseMac []byte, paymentHash *[32]byte) (*Token, error) {
 // BaseMacaroon returns the base macaroon as received from the authentication
 // server.
 func (t *Token) BaseMacaroon() *macaroon.Macaroon {
-	return t.baseMac.Clone()
+	return t.BaseMac.Clone()
 }
 
 // PaidMacaroon returns the base macaroon with the proof of payment (preimage)
@@ -96,17 +96,17 @@ func (t *Token) IsValid() bool {
 	return true
 }
 
-// isPending returns true if the payment for the LSAT is still in flight and we
+// IsPending returns true if the payment for the LSAT is still in flight and we
 // haven't received the preimage yet.
-func (t *Token) isPending() bool {
-	return t.Preimage == zeroPreimage
+func (t *Token) IsPending() bool {
+	return t.Preimage == ZeroPreimage
 }
 
 // serializeToken returns a byte-serialized representation of the token.
 func serializeToken(t *Token) ([]byte, error) {
 	var b bytes.Buffer
 
-	baseMacBytes, err := t.baseMac.MarshalBinary()
+	baseMacBytes, err := t.BaseMac.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func deserializeToken(value []byte) (*Token, error) {
 		return nil, err
 	}
 
-	token, err := tokenFromChallenge(macBytes, &paymentHash)
+	token, err := TokenFromChallenge(macBytes, &paymentHash)
 	if err != nil {
 		return nil, err
 	}
