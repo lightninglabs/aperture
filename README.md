@@ -1,21 +1,20 @@
-# Lightning Service Authentication Token (LSAT) proxy
+# L402 (Lightning HTTP 402) API Key proxy
 
 Aperture is your portal to the Lightning-Native Web. Aperture is used in
 production today by [Lightning Loop](https://lightning.engineering/loop), a
 non-custodial on/off ramp for the Lightning Network.
 
 Aperture is a HTTP 402 reverse proxy that supports proxying requests for gRPC
-(HTTP/2) and REST (HTTP/1 and HTTP/2) backends using the [LSAT Protocol
-Standard](https://lsat.tech/). LSAT stands for: Lightning Service
-Authentication Token. They combine HTTP 402, macaroons, and the Lightning
-Network to create a new standard for authentication and paid services on the
-web.
+(HTTP/2) and REST (HTTP/1 and HTTP/2) backends using the [L402 Protocol
+Standard](https://lsat.tech/). L402 is short for: the Lightning HTTP 402
+protocol.  L402 combines HTTP 402, macaroons, and the Lightning Network to
+create a new standard for authentication and paid services on the web.
 
-LSATs are a new standard protocol for authentication and paid APIs developed by
-Lightning Labs. LSATs can serve both as authentication, as well as a payment
-mechanism (one can view it as a ticket) for paid APIs. In order to obtain a
-token, we require the user to pay us over Lightning in order to obtain a
-preimage, which itself is a cryptographic component of the final LSAT token
+L402 is a new standard protocol for authentication and paid APIs developed by
+Lightning Labs. L402 API keys can serve both as authentication, as well as a
+payment mechanism (one can view it as a ticket) for paid APIs. In order to
+obtain a token, we require the user to pay us over Lightning in order to obtain
+a preimage, which itself is a cryptographic component of the final L402 token
 
 The implementation of the authentication token is chosen to be macaroons, as
 they allow us to package attributes and capabilities along with the token. This
@@ -32,7 +31,7 @@ services and APIs.
 
 **aperture**
 
-* Compilation requires go `1.13.x` or later.
+* Compilation requires go `1.19.x` or later.
 * To build `aperture` in the current directory, run `make build` and then copy the
   file `./aperture` from the local directory to the server.
 * To build and install `aperture` directly on the machine it will be used, run the
@@ -49,5 +48,3 @@ services and APIs.
   compare with `sample-conf.yaml`.
 * Start aperture without any command line parameters (`./aperture`), all configuration
   is done in the `~/.aperture/aperture.yaml` file.
-
-```
