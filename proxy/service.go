@@ -72,6 +72,12 @@ type Service struct {
 	// the file is sent encoded as base64.
 	Headers map[string]string `long:"headers" description:"Header fields to always pass to the service"`
 
+	// Timeout is an optional value that indicates in how many seconds the
+	// service's caveat should time out relative to the time of creation. So
+	// if a value of 100 is set, then the timeout will be 100 seconds
+	// after creation of the LSAT.
+	Timeout int64 `long:"timeout" description:"An integer value that indicates the number of seconds until the service access expires"`
+
 	// Capabilities is the list of capabilities authorized for the service
 	// at the base tier.
 	Capabilities string `long:"capabilities" description:"A comma-separated list of the service capabilities authorized for the base tier"`

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -60,6 +61,10 @@ type ServiceLimiter interface {
 	// enforces additional constraints on a particular service/service
 	// capability.
 	ServiceConstraints(context.Context, ...lsat.Service) ([]lsat.Caveat, error)
+
+	// ServiceTimeouts returns the timeout caveat for each service. This
+	// will determine if and when service access can expire.
+	ServiceTimeouts(context.Context, ...lsat.Service) ([]lsat.Caveat, error)
 }
 
 // Config packages all of the required dependencies to instantiate a new LSAT
@@ -76,6 +81,9 @@ type Config struct {
 	// ServiceLimiter provides us with how we should limit a new LSAT based
 	// on its target services.
 	ServiceLimiter ServiceLimiter
+
+	// Now returns the current time.
+	Now func() time.Time
 }
 
 // Mint is an entity that is able to mint and verify LSATs for a set of
@@ -210,10 +218,15 @@ func (m *Mint) caveatsForServices(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	timeouts, err := m.cfg.ServiceLimiter.ServiceTimeouts(ctx, services...)
+	if err != nil {
+		return nil, err
+	}
 
 	caveats := []lsat.Caveat{servicesCaveat}
 	caveats = append(caveats, capabilities...)
 	caveats = append(caveats, constraints...)
+	caveats = append(caveats, timeouts...)
 	return caveats, nil
 }
 
@@ -269,6 +282,8 @@ func (m *Mint) VerifyLSAT(ctx context.Context, params *VerificationParams) error
 		caveats = append(caveats, caveat)
 	}
 	return lsat.VerifyCaveats(
-		caveats, lsat.NewServicesSatisfier(params.TargetService),
+		caveats,
+		lsat.NewServicesSatisfier(params.TargetService),
+		lsat.NewTimeoutSatisfier(params.TargetService, m.cfg.Now),
 	)
 }

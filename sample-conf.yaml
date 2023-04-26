@@ -84,7 +84,13 @@ services:
     # The set of constraints that are applied to tokens of the service at the
     # base tier.
     constraints:
-        "valid_until": "2020-01-01"
+        # This is just an example of how aperture could be extended
+        # but would not have any effect without additional support added.
+        "valid_until": 1682483169
+      
+    # a caveat will be added that expires the LSAT after this many seconds,
+    # 31557600 = 1 year.
+    timeout: 31557600    
 
     # The LSAT value in satoshis for the service. It is ignored if
     # dynamicprice.enabled is set to true.

@@ -73,6 +73,7 @@ func newMockSecretStore() *mockSecretStore {
 type mockServiceLimiter struct {
 	capabilities map[lsat.Service]lsat.Caveat
 	constraints  map[lsat.Service][]lsat.Caveat
+	timeouts     map[lsat.Service]lsat.Caveat
 }
 
 var _ ServiceLimiter = (*mockServiceLimiter)(nil)
@@ -81,6 +82,7 @@ func newMockServiceLimiter() *mockServiceLimiter {
 	return &mockServiceLimiter{
 		capabilities: make(map[lsat.Service]lsat.Caveat),
 		constraints:  make(map[lsat.Service][]lsat.Caveat),
+		timeouts:     make(map[lsat.Service]lsat.Caveat),
 	}
 }
 
@@ -108,6 +110,20 @@ func (l *mockServiceLimiter) ServiceConstraints(ctx context.Context,
 			continue
 		}
 		res = append(res, constraints...)
+	}
+	return res, nil
+}
+
+func (l *mockServiceLimiter) ServiceTimeouts(ctx context.Context,
+	services ...lsat.Service) ([]lsat.Caveat, error) {
+
+	res := make([]lsat.Caveat, 0, len(services))
+	for _, service := range services {
+		timeouts, ok := l.timeouts[service]
+		if !ok {
+			continue
+		}
+		res = append(res, timeouts)
 	}
 	return res, nil
 }
