@@ -160,7 +160,7 @@ type Aperture struct {
 	cfg *Config
 
 	etcdClient    *clientv3.Client
-	challenger    *LndChallenger
+	challenger    mint.Challenger
 	httpsServer   *http.Server
 	torHTTPServer *http.Server
 	proxy         *proxy.Proxy
@@ -228,22 +228,38 @@ func (a *Aperture) Start(errChan chan error) error {
 		}, nil
 	}
 
+	var checker auth.InvoiceChecker
 	if !a.cfg.Authenticator.Disable {
-		a.challenger, err = NewLndChallenger(
-			a.cfg.Authenticator, genInvoiceReq, errChan,
-		)
-		if err != nil {
-			return err
-		}
-		err = a.challenger.Start()
-		if err != nil {
-			return err
+		if a.cfg.Authenticator.LNURL != "" {
+			a.challenger, err = NewLNURLChallenger(
+				a.cfg.Authenticator.LNURL,
+				a.cfg.Authenticator.Network,
+			)
+			if err != nil {
+				return err
+			}
+
+		} else {
+			lndChallenger, err := NewLndChallenger(
+				a.cfg.Authenticator, genInvoiceReq, errChan,
+			)
+			if err != nil {
+				return err
+			}
+
+			err = lndChallenger.Start()
+			if err != nil {
+				return err
+			}
+
+			a.challenger = lndChallenger
+			checker = lndChallenger
 		}
 	}
 
 	// Create the proxy and connect it to lnd.
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, a.etcdClient,
+		a.cfg, a.challenger, checker, a.etcdClient,
 	)
 	if err != nil {
 		return err
@@ -342,7 +358,10 @@ func (a *Aperture) Stop() error {
 	var returnErr error
 
 	if a.challenger != nil {
-		a.challenger.Stop()
+		ch, ok := a.challenger.(*LndChallenger)
+		if ok {
+			ch.Stop()
+		}
 	}
 
 	// Stop everything that was started alongside the proxy, for example the
@@ -655,8 +674,9 @@ func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *Config, challenger *LndChallenger,
-	etcdClient *clientv3.Client) (*proxy.Proxy, func(), error) {
+func createProxy(cfg *Config, challenger mint.Challenger,
+	checker auth.InvoiceChecker, etcdClient *clientv3.Client) (*proxy.Proxy,
+	func(), error) {
 
 	minter := mint.New(&mint.Config{
 		Challenger:     challenger,
@@ -664,7 +684,7 @@ func createProxy(cfg *Config, challenger *LndChallenger,
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 		Now:            time.Now,
 	})
-	authenticator := auth.NewLsatAuthenticator(minter, challenger)
+	authenticator := auth.NewLsatAuthenticator(minter, checker)
 
 	// By default the static file server only returns 404 answers for
 	// security reasons. Serving files from the staticRoot directory has to
