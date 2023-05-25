@@ -11,7 +11,6 @@ import (
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"google.golang.org/grpc"
@@ -55,19 +54,6 @@ type LndChallenger struct {
 	wg   sync.WaitGroup
 }
 
-type AuthConfig struct {
-	// LndHost is the hostname of the LND instance to connect to.
-	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
-
-	TLSPath string `long:"tlspath" description:"Path to LND instance's tls certificate"`
-
-	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
-
-	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
-
-	Disable bool `long:"disable" description:"Whether to disable LND auth."`
-}
-
 // A compile time flag to ensure the LndChallenger satisfies the
 // mint.Challenger and auth.InvoiceChecker interface.
 var _ mint.Challenger = (*LndChallenger)(nil)
@@ -81,19 +67,11 @@ const (
 
 // NewLndChallenger creates a new challenger that uses the given connection
 // details to connect to an lnd backend to create payment challenges.
-func NewLndChallenger(cfg *AuthConfig, genInvoiceReq InvoiceRequestGenerator,
-	errChan chan<- error) (*LndChallenger, error) {
+func NewLndChallenger(genInvoiceReq InvoiceRequestGenerator,
+	client InvoiceClient, errChan chan<- error) (*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
-	}
-
-	client, err := lndclient.NewBasicClient(
-		cfg.LndHost, cfg.TLSPath, cfg.MacDir, cfg.Network,
-		lndclient.MacFilename(InvoiceMacaroonName),
-	)
-	if err != nil {
-		return nil, err
 	}
 
 	invoicesMtx := &sync.Mutex{}
