@@ -63,6 +63,17 @@ docker-tools:
 	docker build -q -t aperture-tools $(TOOLS_DIR)
 
 # =======
+# CODEGEN
+# =======
+sqlc:
+	@$(call print, "Generating sql models and queries in Go")
+	./scripts/gen_sqlc_docker.sh
+
+sqlc-check: sqlc
+	@$(call print, "Verifying sql code generation.")
+	if test -n "$$(git status --porcelain '*.go')"; then echo "SQL models not properly generated!"; git status --porcelain '*.go'; exit 1; fi
+
+# =======
 # TESTING
 # =======
 
