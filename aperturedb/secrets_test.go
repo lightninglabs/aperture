@@ -16,7 +16,7 @@ var (
 	defaultTestTimeout = 5 * time.Second
 )
 
-func newSecretsStoreWithDB(t *testing.T, db *BaseDB) *SecretsStore {
+func newSecretsStoreWithDB(db *BaseDB) *SecretsStore {
 	dbTxer := NewTransactionExecutor(db,
 		func(tx *sql.Tx) SecretsDB {
 			return db.WithTx(tx)
@@ -34,7 +34,7 @@ func TestSecretDB(t *testing.T) {
 
 	// First, create a new test database.
 	db := NewTestDB(t)
-	store := newSecretsStoreWithDB(t, db.BaseDB)
+	store := newSecretsStoreWithDB(db.BaseDB)
 
 	// Create a random hash.
 	hash := [sha256.Size]byte{}
