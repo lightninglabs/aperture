@@ -22,6 +22,7 @@ require (
 	github.com/lightninglabs/lndclient v0.16.0-10
 	github.com/lightningnetwork/lnd v0.16.0-beta
 	github.com/lightningnetwork/lnd/cert v1.2.1
+	github.com/lightningnetwork/lnd/clock v1.1.0
 	github.com/lightningnetwork/lnd/tlv v1.1.0
 	github.com/lightningnetwork/lnd/tor v1.1.0
 	github.com/ory/dockertest/v3 v3.10.0
@@ -113,7 +114,6 @@ require (
 	github.com/lightninglabs/neutrino v0.15.0 // indirect
 	github.com/lightninglabs/neutrino/cache v1.1.1 // indirect
 	github.com/lightningnetwork/lightning-onion v1.2.1-0.20221202012345-ca23184850a1 // indirect
-	github.com/lightningnetwork/lnd/clock v1.1.0 // indirect
 	github.com/lightningnetwork/lnd/healthcheck v1.2.2 // indirect
 	github.com/lightningnetwork/lnd/kvdb v1.4.1 // indirect
 	github.com/lightningnetwork/lnd/queue v1.1.0 // indirect
