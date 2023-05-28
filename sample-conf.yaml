@@ -37,6 +37,18 @@ authenticator:
 
   # The chain network the lnd is active on.
   network: "simnet"
+ 
+  # The LNC connection passphrase.
+  passphrase: "my-own-passphrase"
+
+  # The host:port of the mailbox server to be used.
+  mailboxaddress: "mailbox.terminal.lightning.today:443"
+
+  # Set to true to skip verification of the mailbox server's tls cert.
+  devserver: false
+
+  # Set to true to disable any auth.
+  disable: false
 
 # The selected database backend. The current default backend is "sqlite". 
 # Aperture also has support for postgres and etcd.
@@ -64,7 +76,6 @@ postgres:
     # Whether to require using SSL (mode: require) when connecting to the 
     # server.
     requireSSL: true
-
 
 # Settings for the etcd instance which the proxy will use to reliably store and
 # retrieve token information.
