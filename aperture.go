@@ -3,6 +3,7 @@ package aperture
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
+	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
@@ -160,6 +162,7 @@ type Aperture struct {
 	cfg *Config
 
 	etcdClient    *clientv3.Client
+	db            *sql.DB
 	challenger    *LndChallenger
 	httpsServer   *http.Server
 	torHTTPServer *http.Server
@@ -208,16 +211,78 @@ func (a *Aperture) Start(errChan chan error) error {
 		}()
 	}
 
-	// Initialize our etcd client.
-	a.etcdClient, err = clientv3.New(clientv3.Config{
-		Endpoints:   []string{a.cfg.Etcd.Host},
-		DialTimeout: 5 * time.Second,
-		Username:    a.cfg.Etcd.User,
-		Password:    a.cfg.Etcd.Password,
-	})
-	if err != nil {
-		return fmt.Errorf("unable to connect to etcd: %v", err)
+	var (
+		secretStore mint.SecretStore
+		onionStore  tor.OnionStore
+	)
+
+	// Connect to the chosen database backend.
+	switch a.cfg.DatabaseBackend {
+	case "etcd":
+		// Initialize our etcd client.
+		a.etcdClient, err = clientv3.New(clientv3.Config{
+			Endpoints:   []string{a.cfg.Etcd.Host},
+			DialTimeout: 5 * time.Second,
+			Username:    a.cfg.Etcd.User,
+			Password:    a.cfg.Etcd.Password,
+		})
+		if err != nil {
+			return fmt.Errorf("unable to connect to etcd: %v", err)
+		}
+
+		secretStore = newSecretStore(a.etcdClient)
+		onionStore = newOnionStore(a.etcdClient)
+
+	case "postgres":
+		db, err := aperturedb.NewPostgresStore(a.cfg.Postgres)
+		if err != nil {
+			return fmt.Errorf("unable to connect to postgres: %v",
+				err)
+		}
+		a.db = db.DB
+
+		dbSecretTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.SecretsDB {
+				return db.WithTx(tx)
+			},
+		)
+		secretStore = aperturedb.NewSecretsStore(dbSecretTxer)
+
+		dbOnionTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.OnionDB {
+				return db.WithTx(tx)
+			},
+		)
+		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
+
+	case "sqlite":
+		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
+		if err != nil {
+			return fmt.Errorf("unable to connect to sqlite: %v",
+				err)
+		}
+		a.db = db.DB
+
+		dbSecretTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.SecretsDB {
+				return db.WithTx(tx)
+			},
+		)
+		secretStore = aperturedb.NewSecretsStore(dbSecretTxer)
+
+		dbOnionTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.OnionDB {
+				return db.WithTx(tx)
+			},
+		)
+		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
+
+	default:
+		return fmt.Errorf("unknown database backend: %s",
+			a.cfg.DatabaseBackend)
 	}
+
+	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
 
 	// Create our challenger that uses our backing lnd node to create
 	// invoices and check their settlement status.
@@ -243,7 +308,7 @@ func (a *Aperture) Start(errChan chan error) error {
 
 	// Create the proxy and connect it to lnd.
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, a.etcdClient,
+		a.cfg, a.challenger, secretStore,
 	)
 	if err != nil {
 		return err
@@ -304,7 +369,7 @@ func (a *Aperture) Start(errChan chan error) error {
 	// provide encryption, so running this additional HTTP server should be
 	// relatively safe.
 	if a.cfg.Tor.V3 {
-		torController, err := initTorListener(a.cfg, a.etcdClient)
+		torController, err := initTorListener(a.cfg, onionStore)
 		if err != nil {
 			return err
 		}
@@ -351,14 +416,31 @@ func (a *Aperture) Stop() error {
 		a.proxyCleanup()
 	}
 
+	if a.etcdClient != nil {
+		if err := a.etcdClient.Close(); err != nil {
+			log.Errorf("Error terminating etcd client: %v", err)
+			returnErr = err
+		}
+	}
+
+	if a.db != nil {
+		if err := a.db.Close(); err != nil {
+			log.Errorf("Error closing database: %v", err)
+			returnErr = err
+		}
+	}
+
 	// Shut down our client and server connections now. This should cause
 	// the first goroutine to quit.
-	cleanup(a.etcdClient, a.httpsServer, a.proxy)
+	cleanup(a.httpsServer, a.proxy)
 
 	// If we started a tor server as well, shut it down now too to cause the
 	// second goroutine to quit.
 	if a.torHTTPServer != nil {
-		returnErr = a.torHTTPServer.Close()
+		if err := a.torHTTPServer.Close(); err != nil {
+			log.Errorf("Error stopping tor server: %v", err)
+			returnErr = err
+		}
 	}
 
 	// Now we wait for the goroutines to exit before we return. The defers
@@ -628,13 +710,15 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 // initTorListener initiates a Tor controller instance with the Tor server
 // specified in the config. Onion services will be created over which the proxy
 // can be reached at.
-func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error) {
+func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
+	error) {
+
 	// Establish a controller connection with the backing Tor server and
 	// proceed to create the requested onion services.
 	onionCfg := tor.AddOnionConfig{
 		VirtualPort: int(cfg.Tor.VirtualPort),
 		TargetPorts: []int{int(cfg.Tor.ListenPort)},
-		Store:       newOnionStore(etcd),
+		Store:       store,
 	}
 	torController := tor.NewController(cfg.Tor.Control, "", "")
 	if err := torController.Start(); err != nil {
@@ -656,11 +740,11 @@ func initTorListener(cfg *Config, etcd *clientv3.Client) (*tor.Controller, error
 
 // createProxy creates the proxy with all the services it needs.
 func createProxy(cfg *Config, challenger *LndChallenger,
-	etcdClient *clientv3.Client) (*proxy.Proxy, func(), error) {
+	store mint.SecretStore) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
 		Challenger:     challenger,
-		Secrets:        newSecretStore(etcdClient),
+		Secrets:        store,
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 		Now:            time.Now,
 	})
@@ -817,12 +901,9 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 }
 
 // cleanup closes the given server and shuts down the log rotator.
-func cleanup(etcdClient io.Closer, server io.Closer, proxy io.Closer) {
+func cleanup(server io.Closer, proxy io.Closer) {
 	if err := proxy.Close(); err != nil {
 		log.Errorf("Error terminating proxy: %v", err)
-	}
-	if err := etcdClient.Close(); err != nil {
-		log.Errorf("Error terminating etcd client: %v", err)
 	}
 	err := server.Close()
 	if err != nil {
