@@ -5,8 +5,21 @@
 package sqlc
 
 import (
+	"database/sql"
 	"time"
 )
+
+type LncSession struct {
+	ID                 int32
+	PassphraseWords    string
+	PassphraseEntropy  []byte
+	RemoteStaticPubKey []byte
+	LocalStaticPrivKey []byte
+	MailboxAddr        string
+	CreatedAt          time.Time
+	Expiry             sql.NullTime
+	DevServer          bool
+}
 
 type Onion struct {
 	PrivateKey []byte
