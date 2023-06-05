@@ -24,6 +24,7 @@ import (
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
+	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
@@ -293,8 +294,19 @@ func (a *Aperture) Start(errChan chan error) error {
 	}
 
 	if !a.cfg.Authenticator.Disable {
+		authCfg := a.cfg.Authenticator
+		client, err := lndclient.NewBasicClient(
+			authCfg.LndHost, authCfg.TLSPath, authCfg.MacDir,
+			authCfg.Network, lndclient.MacFilename(
+				invoiceMacaroonName,
+			),
+		)
+		if err != nil {
+			return err
+		}
+
 		a.challenger, err = NewLndChallenger(
-			a.cfg.Authenticator, genInvoiceReq, errChan,
+			client, genInvoiceReq, errChan,
 		)
 		if err != nil {
 			return err

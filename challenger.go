@@ -11,7 +11,6 @@ import (
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"google.golang.org/grpc"
@@ -66,21 +65,14 @@ const (
 	invoiceMacaroonName = "invoice.macaroon"
 )
 
-// NewLndChallenger creates a new challenger that uses the given connection
-// details to connect to an lnd backend to create payment challenges.
-func NewLndChallenger(cfg *AuthConfig, genInvoiceReq InvoiceRequestGenerator,
+// NewLndChallenger creates a new challenger that uses the given connection to
+// an lnd backend to create payment challenges.
+func NewLndChallenger(client InvoiceClient,
+	genInvoiceReq InvoiceRequestGenerator,
 	errChan chan<- error) (*LndChallenger, error) {
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
-	}
-
-	client, err := lndclient.NewBasicClient(
-		cfg.LndHost, cfg.TLSPath, cfg.MacDir, cfg.Network,
-		lndclient.MacFilename(invoiceMacaroonName),
-	)
-	if err != nil {
-		return nil, err
 	}
 
 	invoicesMtx := &sync.Mutex{}
