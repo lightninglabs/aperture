@@ -76,7 +76,7 @@ func (c GRPCPricer) GetPrice(ctx context.Context, path string) (int64, error) {
 		return 0, err
 	}
 
-	return resp.Price, nil
+	return resp.PriceSats, nil
 }
 
 // Close closes the gRPC connection. It is part of the Pricer interface.
