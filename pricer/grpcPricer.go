@@ -1,8 +1,10 @@
 package pricer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/lightninglabs/aperture/pricesrpc"
 	"google.golang.org/grpc"
@@ -68,9 +70,17 @@ func NewGRPCPricer(cfg *Config) (*GRPCPricer, error) {
 
 // GetPrice queries the server for the price of a resource path and returns the
 // price. GetPrice is part of the Pricer interface.
-func (c GRPCPricer) GetPrice(ctx context.Context, path string) (int64, error) {
+func (c GRPCPricer) GetPrice(ctx context.Context,
+	r *http.Request) (int64, error) {
+
+	var b bytes.Buffer
+	if err := r.Write(&b); err != nil {
+		return 0, nil
+	}
+
 	resp, err := c.rpcClient.GetPrice(ctx, &pricesrpc.GetPriceRequest{
-		Path: path,
+		Path:            r.URL.Path,
+		HttpRequestText: b.String(),
 	})
 	if err != nil {
 		return 0, err
