@@ -55,6 +55,9 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "http_request_text": {
+          "type": "string"
         }
       }
     },
