@@ -111,6 +111,19 @@ list:
 		grep -v Makefile | \
 		sort
 
+rpc:
+	@$(call print, "Compiling protos.")
+	cd ./pricesrpc; ./gen_protos_docker.sh
+
+rpc-format:
+	@$(call print, "Formatting protos.")
+	cd ./pricesrpc; find . -name "*.proto" | xargs clang-format --style=file -i
+
+rpc-check: rpc
+	@$(call print, "Verifying protos.")
+	cd ./pricesrpc; ../scripts/check-rest-annotations.sh
+	if test -n "$$(git status --porcelain)"; then echo "Protos not properly formatted or not compiled with correct version"; git status; git diff; exit 1; fi
+
 clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) ./aperture
