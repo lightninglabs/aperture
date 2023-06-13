@@ -22,6 +22,7 @@ import (
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
+	"github.com/lightninglabs/aperture/lnc"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
@@ -219,6 +220,7 @@ func (a *Aperture) Start(errChan chan error) error {
 	var (
 		secretStore mint.SecretStore
 		onionStore  tor.OnionStore
+		lncStore    lnc.Store
 	)
 
 	// Connect to the chosen database backend.
@@ -260,6 +262,13 @@ func (a *Aperture) Start(errChan chan error) error {
 		)
 		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
 
+		dbLNCTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.LNCSessionsDB {
+				return db.WithTx(tx)
+			},
+		)
+		lncStore = aperturedb.NewLNCSessionsStore(dbLNCTxer)
+
 	case "sqlite":
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
@@ -282,6 +291,13 @@ func (a *Aperture) Start(errChan chan error) error {
 		)
 		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
 
+		dbLNCTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.LNCSessionsDB {
+				return db.WithTx(tx)
+			},
+		)
+		lncStore = aperturedb.NewLNCSessionsStore(dbLNCTxer)
+
 	default:
 		return fmt.Errorf("unknown database backend: %s",
 			a.cfg.DatabaseBackend)
@@ -290,6 +306,7 @@ func (a *Aperture) Start(errChan chan error) error {
 	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
 
 	if !a.cfg.Authenticator.Disable {
+		authCfg := a.cfg.Authenticator
 		genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
 			return &lnrpc.Invoice{
 				Memo:  "LSAT",
@@ -297,23 +314,55 @@ func (a *Aperture) Start(errChan chan error) error {
 			}, nil
 		}
 
-		authCfg := a.cfg.Authenticator
-		client, err := lndclient.NewBasicClient(
-			authCfg.LndHost, authCfg.TLSPath,
-			authCfg.MacDir, authCfg.Network,
-			lndclient.MacFilename(
-				invoiceMacaroonName,
-			),
-		)
-		if err != nil {
-			return err
-		}
-		a.challenger, err = challenger.NewLndChallenger(
-			client, genInvoiceReq, context.Background,
-			errChan,
-		)
-		if err != nil {
-			return err
+		switch {
+		case authCfg.Passphrase != "":
+			log.Infof("Using lnc's authenticator config")
+
+			if a.cfg.DatabaseBackend == "etcd" {
+				return fmt.Errorf("etcd is not supported as " +
+					"a database backend for lnc " +
+					"connections")
+			}
+
+			session, err := lnc.NewSession(
+				authCfg.Passphrase, authCfg.MailboxAddress,
+				authCfg.DevServer,
+			)
+			if err != nil {
+				return fmt.Errorf("unable to create lnc "+
+					"session: %w", err)
+			}
+
+			a.challenger, err = challenger.NewLNCChallenger(
+				session, lncStore, genInvoiceReq, errChan,
+			)
+			if err != nil {
+				return fmt.Errorf("unable to start lnc "+
+					"challenger: %w", err)
+			}
+
+		case authCfg.LndHost != "":
+			log.Infof("Using lnd's authenticator config")
+
+			authCfg := a.cfg.Authenticator
+			client, err := lndclient.NewBasicClient(
+				authCfg.LndHost, authCfg.TLSPath,
+				authCfg.MacDir, authCfg.Network,
+				lndclient.MacFilename(
+					invoiceMacaroonName,
+				),
+			)
+			if err != nil {
+				return err
+			}
+
+			a.challenger, err = challenger.NewLndChallenger(
+				client, genInvoiceReq, context.Background,
+				errChan,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
