@@ -6,7 +6,7 @@ set -e
 function generate() {
   echo "Generating root gRPC server protos"
 
-  PROTOS="rpc.proto"
+  PROTOS="prices.proto"
 
   # For each of the sub-servers, we then generate their protos, but a restricted
   # set as they don't yet require REST proxies, or swagger docs.
@@ -46,7 +46,7 @@ function generate() {
     --plugin=protoc-gen-custom=$falafel\
     --custom_out=. \
     --custom_opt="$opts" \
-    rpc.proto
+    prices.proto
 
   PACKAGES=""
   for package in $PACKAGES; do

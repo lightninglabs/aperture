@@ -97,5 +97,5 @@ var Prices_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "rpc.proto",
+	Metadata: "prices.proto",
 }
