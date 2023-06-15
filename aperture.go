@@ -306,7 +306,7 @@ func (a *Aperture) Start(errChan chan error) error {
 		}
 
 		a.challenger, err = NewLndChallenger(
-			client, genInvoiceReq, errChan,
+			client, genInvoiceReq, context.Background, errChan,
 		)
 		if err != nil {
 			return err

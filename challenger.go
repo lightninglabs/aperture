@@ -41,6 +41,7 @@ type InvoiceClient interface {
 // payment challenges.
 type LndChallenger struct {
 	client        InvoiceClient
+	clientCtx     func() context.Context
 	genInvoiceReq InvoiceRequestGenerator
 
 	invoiceStates  map[lntypes.Hash]lnrpc.Invoice_InvoiceState
@@ -69,7 +70,14 @@ const (
 // an lnd backend to create payment challenges.
 func NewLndChallenger(client InvoiceClient,
 	genInvoiceReq InvoiceRequestGenerator,
+	ctxFunc func() context.Context,
 	errChan chan<- error) (*LndChallenger, error) {
+
+	// Make sure we have a valid context function. This will be called to
+	// create a new context for each call to the lnd client.
+	if ctxFunc == nil {
+		ctxFunc = context.Background
+	}
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
@@ -78,6 +86,7 @@ func NewLndChallenger(client InvoiceClient,
 	invoicesMtx := &sync.Mutex{}
 	return &LndChallenger{
 		client:        client,
+		clientCtx:     ctxFunc,
 		genInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
 		invoicesMtx:   invoicesMtx,
@@ -103,8 +112,9 @@ func (l *LndChallenger) Start() error {
 	// cache. We need to keep track of all invoices, even quite old ones to
 	// make sure tokens are valid. But to save space we only keep track of
 	// an invoice's state.
+	ctx := l.clientCtx()
 	invoiceResp, err := l.client.ListInvoices(
-		context.Background(), &lnrpc.ListInvoiceRequest{
+		ctx, &lnrpc.ListInvoiceRequest{
 			NumMaxInvoices: math.MaxUint64,
 		},
 	)
@@ -137,7 +147,7 @@ func (l *LndChallenger) Start() error {
 	l.invoicesMtx.Unlock()
 
 	// We need to be able to cancel any subscription we make.
-	ctxc, cancel := context.WithCancel(context.Background())
+	ctxc, cancel := context.WithCancel(l.clientCtx())
 	l.invoicesCancel = cancel
 
 	subscriptionResp, err := l.client.SubscribeInvoices(
@@ -261,12 +271,14 @@ func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) 
 		log.Errorf("Error generating invoice request: %v", err)
 		return "", lntypes.ZeroHash, err
 	}
-	ctx := context.Background()
+
+	ctx := l.clientCtx()
 	response, err := l.client.AddInvoice(ctx, invoice)
 	if err != nil {
 		log.Errorf("Error adding invoice: %v", err)
 		return "", lntypes.ZeroHash, err
 	}
+
 	paymentHash, err := lntypes.MakeHash(response.RHash)
 	if err != nil {
 		log.Errorf("Error parsing payment hash: %v", err)
