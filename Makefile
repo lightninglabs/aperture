@@ -121,7 +121,7 @@ rpc-format:
 
 rpc-check: rpc
 	@$(call print, "Verifying protos.")
-	cd ./pricesrpc; ../scripts/check-rest-annotations.sh
+	cd ./pricesrpc; ../pricesrpc/check-rest-annotations.sh
 	if test -n "$$(git status --porcelain)"; then echo "Protos not properly formatted or not compiled with correct version"; git status; git diff; exit 1; fi
 
 clean:
