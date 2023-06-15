@@ -9,29 +9,7 @@ import (
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/lsat"
-	"gopkg.in/macaroon.v2"
 )
-
-// createDummyMacHex creates a valid macaroon with dummy content for our tests.
-func createDummyMacHex(preimage string) string {
-	dummyMac, err := macaroon.New(
-		[]byte("aabbccddeeff00112233445566778899"), []byte("AA=="),
-		"aperture", macaroon.LatestVersion,
-	)
-	if err != nil {
-		panic(err)
-	}
-	preimageCaveat := lsat.Caveat{Condition: lsat.PreimageKey, Value: preimage}
-	err = lsat.AddFirstPartyCaveats(dummyMac, preimageCaveat)
-	if err != nil {
-		panic(err)
-	}
-	macBytes, err := dummyMac.MarshalBinary()
-	if err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(macBytes)
-}
 
 // TestLsatAuthenticator tests that the authenticator properly handles auth
 // headers and the tokens contained in them.
@@ -39,7 +17,7 @@ func TestLsatAuthenticator(t *testing.T) {
 	var (
 		testPreimage = "49349dfea4abed3cd14f6d356afa83de" +
 			"9787b609f088c8df09bacc7b4bd21b39"
-		testMacHex      = createDummyMacHex(testPreimage)
+		testMacHex      = auth.CreateDummyMacHex(testPreimage)
 		testMacBytes, _ = hex.DecodeString(testMacHex)
 		testMacBase64   = base64.StdEncoding.EncodeToString(
 			testMacBytes,
@@ -139,10 +117,10 @@ func TestLsatAuthenticator(t *testing.T) {
 		}
 	)
 
-	c := &mockChecker{}
-	a := auth.NewLsatAuthenticator(&mockMint{}, c)
+	c := &auth.MockChecker{}
+	a := auth.NewLsatAuthenticator(&auth.MockMint{}, c)
 	for _, testCase := range headerTests {
-		c.err = testCase.checkErr
+		c.Err = testCase.checkErr
 		result := a.Accept(testCase.header, "test")
 		if result != testCase.result {
 			t.Fatalf("test case %s failed. got %v expected %v",

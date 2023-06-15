@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/lightninglabs/aperture/secrets"
 	"github.com/lightningnetwork/lnd/tor"
 )
 
@@ -35,7 +36,7 @@ func assertPrivateKeyExists(t *testing.T, store *onionStore,
 // TestOnionStore ensures the different operations of the onionStore behave
 // as expected.
 func TestOnionStore(t *testing.T) {
-	etcdClient, serverCleanup := etcdSetup(t)
+	etcdClient, serverCleanup := secrets.EtcdSetup(t)
 	defer etcdClient.Close()
 	defer serverCleanup()
 

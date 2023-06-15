@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/interceptor"
 	"github.com/lightninglabs/aperture/proxy"
 	proxytest "github.com/lightninglabs/aperture/proxy/testdata"
 	"github.com/lightningnetwork/lnd/cert"
@@ -309,7 +309,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 		grpc.Trailer(&captureMetadata),
 	)
 	require.Error(t, err)
-	require.True(t, lsat.IsPaymentRequired(err))
+	require.True(t, interceptor.IsPaymentRequired(err))
 
 	// We expect the WWW-Authenticate header field to be set to an LSAT
 	// auth response.

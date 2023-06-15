@@ -22,11 +22,11 @@ func TestFileStore(t *testing.T) {
 		paidPreimage = lntypes.Preimage{1, 2, 3, 4, 5}
 		paidToken    = &Token{
 			Preimage: paidPreimage,
-			baseMac:  makeMac(),
+			BaseMac:  MakeMac(),
 		}
 		pendingToken = &Token{
-			Preimage: zeroPreimage,
-			baseMac:  makeMac(),
+			Preimage: ZeroPreimage,
+			BaseMac:  MakeMac(),
 		}
 	)
 
@@ -61,7 +61,7 @@ func TestFileStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not read pending token: %v", err)
 	}
-	if !token.baseMac.Equal(pendingToken.baseMac) {
+	if !token.BaseMac.Equal(pendingToken.BaseMac) {
 		t.Fatalf("expected macaroon to match")
 	}
 	tokens, err = store.AllTokens()
@@ -73,7 +73,7 @@ func TestFileStore(t *testing.T) {
 			len(tokens), 1)
 	}
 	for key := range tokens {
-		if !tokens[key].baseMac.Equal(pendingToken.baseMac) {
+		if !tokens[key].BaseMac.Equal(pendingToken.BaseMac) {
 			t.Fatalf("expected macaroon to match")
 		}
 	}
@@ -96,7 +96,7 @@ func TestFileStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not read pending token: %v", err)
 	}
-	if !token.baseMac.Equal(paidToken.baseMac) {
+	if !token.BaseMac.Equal(paidToken.BaseMac) {
 		t.Fatalf("expected macaroon to match")
 	}
 	tokens, err = store.AllTokens()
@@ -108,7 +108,7 @@ func TestFileStore(t *testing.T) {
 			len(tokens), 1)
 	}
 	for key := range tokens {
-		if !tokens[key].baseMac.Equal(paidToken.baseMac) {
+		if !tokens[key].BaseMac.Equal(paidToken.BaseMac) {
 			t.Fatalf("expected macaroon to match")
 		}
 	}

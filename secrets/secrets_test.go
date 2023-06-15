@@ -1,69 +1,19 @@
-package aperture
+package secrets
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"net/url"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/server/v3/embed"
 )
-
-// etcdSetup is a helper that instantiates a new etcd cluster along with a
-// client connection to it. A cleanup closure is also returned to free any
-// allocated resources required by etcd.
-func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
-	t.Helper()
-
-	tempDir, err := os.MkdirTemp("", "etcd")
-	if err != nil {
-		t.Fatalf("unable to create temp dir: %v", err)
-	}
-
-	cfg := embed.NewConfig()
-	cfg.Dir = tempDir
-	cfg.Logger = "zap"
-	cfg.LCUrls = []url.URL{{Host: "127.0.0.1:9125"}}
-	cfg.LPUrls = []url.URL{{Host: "127.0.0.1:9126"}}
-
-	etcd, err := embed.StartEtcd(cfg)
-	if err != nil {
-		os.RemoveAll(tempDir)
-		t.Fatalf("unable to start etcd: %v", err)
-	}
-
-	select {
-	case <-etcd.Server.ReadyNotify():
-	case <-time.After(5 * time.Second):
-		os.RemoveAll(tempDir)
-		etcd.Server.Stop() // trigger a shutdown
-		t.Fatal("server took too long to start")
-	}
-
-	client, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.LCUrls[0].Host},
-		DialTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("unable to connect to etcd: %v", err)
-	}
-
-	return client, func() {
-		etcd.Close()
-		os.RemoveAll(tempDir)
-	}
-}
 
 // assertSecretExists is a helper to determine if a secret for the given
 // identifier exists in the store. If it exists, its value is compared against
 // the expected secret.
-func assertSecretExists(t *testing.T, store *secretStore, id [sha256.Size]byte,
+func assertSecretExists(t *testing.T, store *SecretStore, id [sha256.Size]byte,
 	expSecret *[lsat.SecretSize]byte) {
 
 	t.Helper()
@@ -84,15 +34,15 @@ func assertSecretExists(t *testing.T, store *secretStore, id [sha256.Size]byte,
 	}
 }
 
-// TestSecretStore ensures the different operations of the secretStore behave as
+// TestSecretStore ensures the different operations of the SecretStore behave as
 // expected.
 func TestSecretStore(t *testing.T) {
-	etcdClient, serverCleanup := etcdSetup(t)
+	etcdClient, serverCleanup := EtcdSetup(t)
 	defer etcdClient.Close()
 	defer serverCleanup()
 
 	ctx := context.Background()
-	store := newSecretStore(etcdClient)
+	store := NewStore(etcdClient)
 
 	// Create a test ID and ensure a secret doesn't exist for it yet as we
 	// haven't created one.

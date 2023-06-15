@@ -1,7 +1,6 @@
-package aperture
+package challenger
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -10,86 +9,14 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
 
 var (
 	defaultTimeout = 100 * time.Millisecond
 )
 
-type invoiceStreamMock struct {
-	lnrpc.Lightning_SubscribeInvoicesClient
-
-	updateChan chan *lnrpc.Invoice
-	errChan    chan error
-	quit       chan struct{}
-}
-
-func (i *invoiceStreamMock) Recv() (*lnrpc.Invoice, error) {
-	select {
-	case msg := <-i.updateChan:
-		return msg, nil
-
-	case err := <-i.errChan:
-		return nil, err
-
-	case <-i.quit:
-		return nil, context.Canceled
-	}
-}
-
-type mockInvoiceClient struct {
-	invoices   []*lnrpc.Invoice
-	updateChan chan *lnrpc.Invoice
-	errChan    chan error
-	quit       chan struct{}
-
-	lastAddIndex uint64
-}
-
-// ListInvoices returns a paginated list of all invoices known to lnd.
-func (m *mockInvoiceClient) ListInvoices(_ context.Context,
-	_ *lnrpc.ListInvoiceRequest,
-	_ ...grpc.CallOption) (*lnrpc.ListInvoiceResponse, error) {
-
-	return &lnrpc.ListInvoiceResponse{
-		Invoices: m.invoices,
-	}, nil
-}
-
-// SubscribeInvoices subscribes to updates on invoices.
-func (m *mockInvoiceClient) SubscribeInvoices(_ context.Context,
-	in *lnrpc.InvoiceSubscription, _ ...grpc.CallOption) (
-	lnrpc.Lightning_SubscribeInvoicesClient, error) {
-
-	m.lastAddIndex = in.AddIndex
-
-	return &invoiceStreamMock{
-		updateChan: m.updateChan,
-		errChan:    m.errChan,
-		quit:       m.quit,
-	}, nil
-}
-
-// AddInvoice adds a new invoice to lnd.
-func (m *mockInvoiceClient) AddInvoice(_ context.Context, in *lnrpc.Invoice,
-	_ ...grpc.CallOption) (*lnrpc.AddInvoiceResponse, error) {
-
-	m.invoices = append(m.invoices, in)
-
-	return &lnrpc.AddInvoiceResponse{
-		RHash:          in.RHash,
-		PaymentRequest: in.PaymentRequest,
-		AddIndex:       uint64(len(m.invoices) - 1),
-	}, nil
-}
-
-func (m *mockInvoiceClient) stop() {
-	close(m.quit)
-}
-
-func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
-	mockClient := &mockInvoiceClient{
+func newChallenger() (*LndChallenger, *MockInvoiceClient, chan error) {
+	mockClient := &MockInvoiceClient{
 		updateChan: make(chan *lnrpc.Invoice),
 		errChan:    make(chan error, 1),
 		quit:       make(chan struct{}),
@@ -109,19 +36,6 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		errChan:       mainErrChan,
 	}, mockClient, mainErrChan
-}
-
-func newInvoice(hash lntypes.Hash, addIndex uint64,
-	state lnrpc.Invoice_InvoiceState) *lnrpc.Invoice {
-
-	return &lnrpc.Invoice{
-		PaymentRequest: "foo",
-		RHash:          hash[:],
-		AddIndex:       addIndex,
-		State:          state,
-		CreationDate:   time.Now().Unix(),
-		Expiry:         10,
-	}
 }
 
 func TestLndChallenger(t *testing.T) {

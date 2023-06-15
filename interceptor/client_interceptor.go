@@ -1,4 +1,4 @@
-package lsat
+package interceptor
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -77,7 +78,7 @@ var (
 // connection to lnd to automatically pay for an authentication token.
 type ClientInterceptor struct {
 	lnd           *lndclient.LndServices
-	store         Store
+	store         lsat.Store
 	callTimeout   time.Duration
 	maxCost       btcutil.Amount
 	maxFee        btcutil.Amount
@@ -85,10 +86,10 @@ type ClientInterceptor struct {
 	allowInsecure bool
 }
 
-// NewInterceptor creates a new gRPC client interceptor that uses the provided
-// lnd connection to automatically acquire and pay for LSAT tokens, unless the
-// indicated store already contains a usable token.
-func NewInterceptor(lnd *lndclient.LndServices, store Store,
+// NewClientInterceptor creates a new gRPC client interceptor that uses the
+// provided lnd connection to automatically acquire and pay for LSAT tokens,
+// unless the indicated store already contains a usable token.
+func NewClientInterceptor(lnd *lndclient.LndServices, store lsat.Store,
 	rpcCallTimeout time.Duration, maxCost,
 	maxFee btcutil.Amount, allowInsecure bool) *ClientInterceptor {
 
@@ -108,7 +109,7 @@ type interceptContext struct {
 	mainCtx  context.Context
 	opts     []grpc.CallOption
 	metadata *metadata.MD
-	token    *Token
+	token    *lsat.Token
 }
 
 // UnaryInterceptor is an interceptor method that can be used directly by gRPC
@@ -223,7 +224,7 @@ func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	iCtx.token, err = i.store.CurrentToken()
 	switch {
 	// If there is no token yet, nothing to do at this point.
-	case err == ErrNoToken:
+	case err == lsat.ErrNoToken:
 
 	// Some other error happened that we have to surface.
 	case err != nil:
@@ -235,7 +236,7 @@ func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	// payment just yet, since we don't even know if a token is required for
 	// this call. We also never send a pending payment to the server since
 	// we know it's not valid.
-	case !iCtx.token.isPending():
+	case !iCtx.token.IsPending():
 		if err = i.addLsatCredentials(iCtx); err != nil {
 			log.Errorf("Adding macaroon to request failed: %v", err)
 			return nil, fmt.Errorf("adding macaroon failed: %v",
@@ -257,7 +258,7 @@ func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 	switch {
 	// Resume/track a pending payment if it was interrupted for some reason.
-	case iCtx.token != nil && iCtx.token.isPending():
+	case iCtx.token != nil && iCtx.token.IsPending():
 		log.Infof("Payment of LSAT token is required, resuming/" +
 			"tracking previous payment from pending LSAT token")
 		err := i.trackPayment(iCtx.mainCtx, iCtx.token)
@@ -321,7 +322,7 @@ func (i *ClientInterceptor) addLsatCredentials(iCtx *interceptContext) error {
 		return err
 	}
 	iCtx.opts = append(iCtx.opts, grpc.PerRPCCredentials(
-		NewMacaroonCredential(macaroon, i.allowInsecure),
+		lsat.NewMacaroonCredential(macaroon, i.allowInsecure),
 	))
 	return nil
 }
@@ -330,7 +331,7 @@ func (i *ClientInterceptor) addLsatCredentials(iCtx *interceptContext) error {
 // to pay the invoice encoded in them, returning a paid LSAT token if
 // successful.
 func (i *ClientInterceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
-	*Token, error) {
+	*lsat.Token, error) {
 
 	// First parse the authentication header that was stored in the
 	// metadata.
@@ -367,7 +368,7 @@ func (i *ClientInterceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
 
 	// Create and store the pending token so we can resume the payment in
 	// case the payment is interrupted somehow.
-	token, err := tokenFromChallenge(macBytes, invoice.PaymentHash)
+	token, err := lsat.TokenFromChallenge(macBytes, invoice.PaymentHash)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create token: %v", err)
 	}
@@ -407,7 +408,9 @@ func (i *ClientInterceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
 
 // trackPayment tries to resume a pending payment by tracking its state and
 // waiting for a conclusive result.
-func (i *ClientInterceptor) trackPayment(ctx context.Context, token *Token) error {
+func (i *ClientInterceptor) trackPayment(ctx context.Context,
+	token *lsat.Token) error {
+
 	// Lookup state of the payment.
 	paymentStateCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -486,7 +489,7 @@ func IsPaymentRequired(err error) bool {
 
 // extractPaymentDetails extracts the preimage and amounts paid for a payment
 // from the payment status and stores them in the token.
-func extractPaymentDetails(token *Token, status lndclient.PaymentStatus) {
+func extractPaymentDetails(token *lsat.Token, status lndclient.PaymentStatus) {
 	token.Preimage = status.Preimage
 	token.AmountPaid = status.Value
 	token.RoutingFeePaid = status.Fee

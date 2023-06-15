@@ -1,4 +1,4 @@
-package lsat
+package interceptor
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/aperture/internal/test"
+	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -36,21 +37,21 @@ type interceptTestCase struct {
 }
 
 type mockStore struct {
-	token *Token
+	token *lsat.Token
 }
 
-func (s *mockStore) CurrentToken() (*Token, error) {
+func (s *mockStore) CurrentToken() (*lsat.Token, error) {
 	if s.token == nil {
-		return nil, ErrNoToken
+		return nil, lsat.ErrNoToken
 	}
 	return s.token, nil
 }
 
-func (s *mockStore) AllTokens() (map[string]*Token, error) {
-	return map[string]*Token{"foo": s.token}, nil
+func (s *mockStore) AllTokens() (map[string]*lsat.Token, error) {
+	return map[string]*lsat.Token{"foo": s.token}, nil
 }
 
-func (s *mockStore) StoreToken(token *Token) error {
+func (s *mockStore) StoreToken(token *lsat.Token) error {
 	s.token = token
 	return nil
 }
@@ -64,11 +65,11 @@ var (
 	lnd         = test.NewMockLnd()
 	store       = &mockStore{}
 	testTimeout = 5 * time.Second
-	interceptor = NewInterceptor(
+	interceptor = NewClientInterceptor(
 		&lnd.LndServices, store, testTimeout,
 		DefaultMaxCostSats, DefaultMaxRoutingFeeSats, false,
 	)
-	testMac         = makeMac()
+	testMac         = lsat.MakeMac()
 	testMacBytes    = serializeMac(testMac)
 	testMacHex      = hex.EncodeToString(testMacBytes)
 	paidPreimage    = lntypes.Preimage{1, 2, 3, 4, 5}
@@ -135,7 +136,7 @@ var (
 		expectMacaroonCall2: false,
 	}, {
 		name:            "auth required, has pending token",
-		initialPreimage: &zeroPreimage,
+		initialPreimage: &lsat.ZeroPreimage,
 		interceptor:     interceptor,
 		resetCb: func() {
 			resetBackend(
@@ -166,7 +167,7 @@ var (
 		expectMacaroonCall2: true,
 	}, {
 		name:            "auth required, has pending but expired token",
-		initialPreimage: &zeroPreimage,
+		initialPreimage: &lsat.ZeroPreimage,
 		interceptor:     interceptor,
 		resetCb: func() {
 			resetBackend(
@@ -207,7 +208,7 @@ var (
 	}, {
 		name:            "auth required, no token yet, cost limit",
 		initialPreimage: nil,
-		interceptor: NewInterceptor(
+		interceptor: NewClientInterceptor(
 			&lnd.LndServices, store, testTimeout, 100,
 			DefaultMaxRoutingFeeSats, false,
 		),
@@ -393,7 +394,7 @@ func testInterceptor(t *testing.T, tc interceptTestCase,
 		require.NoError(t, err)
 		require.Equal(t, paidPreimage, storeToken.Preimage)
 	} else {
-		require.Equal(t, ErrNoToken, err)
+		require.Equal(t, lsat.ErrNoToken, err)
 	}
 	if tc.expectMacaroonCall2 {
 		require.Len(t, callMD, 1)
@@ -405,25 +406,14 @@ func testInterceptor(t *testing.T, tc interceptTestCase,
 	require.Equal(t, tc.expectBackendCalls, numBackendCalls)
 }
 
-func makeToken(preimage *lntypes.Preimage) *Token {
+func makeToken(preimage *lntypes.Preimage) *lsat.Token {
 	if preimage == nil {
 		return nil
 	}
-	return &Token{
+	return &lsat.Token{
 		Preimage: *preimage,
-		baseMac:  testMac,
+		BaseMac:  testMac,
 	}
-}
-
-func makeMac() *macaroon.Macaroon {
-	dummyMac, err := macaroon.New(
-		[]byte("aabbccddeeff00112233445566778899"), []byte("AA=="),
-		"LSAT", macaroon.LatestVersion,
-	)
-	if err != nil {
-		panic(fmt.Errorf("unable to create macaroon: %v", err))
-	}
-	return dummyMac
 }
 
 func serializeMac(mac *macaroon.Macaroon) []byte {

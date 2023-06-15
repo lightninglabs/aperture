@@ -24,7 +24,12 @@ var (
 	// errNoReplace is the error that is returned if a new token is
 	// being written to a store that already contains a paid token.
 	errNoReplace = errors.New("won't replace existing paid token with " +
-		"new token. " + manualRetryHint)
+		"new token. " + ManualRetryHint)
+
+	// ManualRetryHint is the error text we return to tell the user how a
+	// token payment can be retried if the payment fails.
+	ManualRetryHint = "consider removing pending token file if error " +
+		"persists. use 'listauth' command to find out token file name"
 )
 
 // Store is an interface that allows users to store and retrieve an LSAT token.
@@ -152,7 +157,7 @@ func (f *FileStore) StoreToken(newToken *Token) error {
 	case err == ErrNoToken:
 		// What's the target file name we are going to write?
 		newFileName := f.fileName
-		if newToken.isPending() {
+		if newToken.IsPending() {
 			newFileName = f.fileNamePending
 		}
 		return os.WriteFile(newFileName, bytes, 0600)
@@ -162,7 +167,7 @@ func (f *FileStore) StoreToken(newToken *Token) error {
 		return err
 
 	// Replace a pending token with a paid one.
-	case currentToken.isPending() && !newToken.isPending():
+	case currentToken.IsPending() && !newToken.IsPending():
 		// Make sure we replace the the same token, just with a
 		// different state.
 		if currentToken.PaymentHash != newToken.PaymentHash {

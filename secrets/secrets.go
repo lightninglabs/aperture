@@ -1,4 +1,4 @@
-package aperture
+package secrets
 
 import (
 	"context"
@@ -11,6 +11,16 @@ import (
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightninglabs/aperture/mint"
 	clientv3 "go.etcd.io/etcd/client/v3"
+)
+
+const (
+	// TopLevelKey is the top level key for an etcd cluster where we'll
+	// store all LSAT proxy related data.
+	TopLevelKey = "lsat/proxy"
+
+	// EtcdKeyDelimeter is the delimeter we'll use for all etcd keys to
+	// represent a path-like structure.
+	EtcdKeyDelimeter = "/"
 )
 
 var (
@@ -27,28 +37,28 @@ var (
 // lsat/proxy/secrets/bff4ee83
 func idKey(id [sha256.Size]byte) string {
 	return strings.Join(
-		[]string{topLevelKey, secretsPrefix, hex.EncodeToString(id[:])},
-		etcdKeyDelimeter,
+		[]string{TopLevelKey, secretsPrefix, hex.EncodeToString(id[:])},
+		EtcdKeyDelimeter,
 	)
 }
 
-// secretStore is a store of LSAT secrets backed by an etcd cluster.
-type secretStore struct {
+// SecretStore is a store of LSAT secrets backed by an etcd cluster.
+type SecretStore struct {
 	*clientv3.Client
 }
 
-// A compile-time constraint to ensure secretStore implements mint.SecretStore.
-var _ mint.SecretStore = (*secretStore)(nil)
+// A compile-time constraint to ensure SecretStore implements mint.SecretStore.
+var _ mint.SecretStore = (*SecretStore)(nil)
 
-// newSecretStore instantiates a new LSAT secrets store backed by an etcd
+// NewStore instantiates a new LSAT secrets store backed by an etcd
 // cluster.
-func newSecretStore(client *clientv3.Client) *secretStore {
-	return &secretStore{Client: client}
+func NewStore(client *clientv3.Client) *SecretStore {
+	return &SecretStore{Client: client}
 }
 
 // NewSecret creates a new cryptographically random secret which is keyed by the
 // given hash.
-func (s *secretStore) NewSecret(ctx context.Context,
+func (s *SecretStore) NewSecret(ctx context.Context,
 	id [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
 
 	var secret [lsat.SecretSize]byte
@@ -62,7 +72,7 @@ func (s *secretStore) NewSecret(ctx context.Context,
 
 // GetSecret returns the cryptographically random secret that corresponds to the
 // given hash. If there is no secret, then mint.ErrSecretNotFound is returned.
-func (s *secretStore) GetSecret(ctx context.Context,
+func (s *SecretStore) GetSecret(ctx context.Context,
 	id [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
 
 	resp, err := s.Get(ctx, idKey(id))
@@ -84,7 +94,7 @@ func (s *secretStore) GetSecret(ctx context.Context,
 
 // RevokeSecret removes the cryptographically random secret that corresponds to
 // the given hash. This acts as a NOP if the secret does not exist.
-func (s *secretStore) RevokeSecret(ctx context.Context,
+func (s *SecretStore) RevokeSecret(ctx context.Context,
 	id [sha256.Size]byte) error {
 
 	_, err := s.Delete(ctx, idKey(id))
