@@ -27,15 +27,15 @@ env:
   GO_VERSION: 1.19.2
 
 jobs:
-   rpc-check:
-     name: RPC check
-     runs-on: ubuntu-latest
-     steps:
-       - name: git checkout
-         uses: actions/checkout@v3
+  rpc-check:
+    name: RPC check
+    runs-on: ubuntu-latest
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v3
 
-       - name: Generate RPC stubs and check REST annotations
-         run: make rpc-check
+      - name: Generate RPC stubs and check REST annotations
+        run: make rpc-check
 
   ########################
   # lint code
