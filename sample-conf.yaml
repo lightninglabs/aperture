@@ -38,6 +38,34 @@ authenticator:
   # The chain network the lnd is active on.
   network: "simnet"
 
+# The selected database backend. The current default backend is "sqlite". 
+# Aperture also has support for postgres and etcd.
+dbbackend: "sqlite"
+
+# Settings for the sqlite process which the proxy will use to reliably store and
+# retrieve token information.
+sqlite:
+    # The full path to the database.
+    dbfile: "/path/to/.aperture/aperture.db"
+
+# Settings for the postgres instance which the proxy will use to reliably store 
+# and retrieve token information.
+postgres:
+    # Connection parameters.
+    host: "localhost"
+    port: 5432
+    user: "user"
+    password: "password"
+    dbname: "aperture"
+
+    # Max open connections to keep alive to the database server.
+    maxconnections: 25
+
+    # Whether to require using SSL (mode: require) when connecting to the 
+    # server.
+    requireSSL: true
+
+
 # Settings for the etcd instance which the proxy will use to reliably store and
 # retrieve token information.
 etcd:

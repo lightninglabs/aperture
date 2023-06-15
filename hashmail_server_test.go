@@ -160,7 +160,8 @@ func setupAperture(t *testing.T) {
 		Authenticator: &AuthConfig{
 			Disable: true,
 		},
-		Etcd: &EtcdConfig{},
+		DatabaseBackend: "etcd",
+		Etcd:            &EtcdConfig{},
 		HashMail: &HashMailConfig{
 			Enabled:               true,
 			MessageRate:           time.Millisecond,

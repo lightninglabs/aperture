@@ -1,0 +1,10 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "aperturedb/sqlc/migrations"
+    queries: "aperturedb/sqlc/queries"
+    gen:
+      go:
+        out: aperturedb/sqlc
+        package: sqlc
+        emit_interface: true

@@ -19,6 +19,8 @@ GOFILES_NOVENDOR = $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 GOLIST := go list -deps $(PKG)/... | grep '$(PKG)'| grep -v '/vendor/'
 GOLISTCOVER := $(shell go list -deps -f '{{.ImportPath}}' ./... | grep '$(PKG)' | sed -e 's/^$(ESCPKG)/./')
 
+MIGRATE_BIN := $(GO_BIN)/migrate
+
 RM := rm -f
 CP := cp
 MAKE := make
@@ -61,6 +63,30 @@ install:
 docker-tools:
 	@$(call print, "Building tools docker image.")
 	docker build -q -t aperture-tools $(TOOLS_DIR)
+
+# ===================
+# DATABASE MIGRATIONS
+# ===================
+
+migrate-up: $(MIGRATE_BIN)
+	migrate -path aperturedb/sqlc/migrations -database $(APERTURE_DB_CONNECTIONSTRING) -verbose up
+
+migrate-down: $(MIGRATE_BIN)
+	migrate -path aperturedb/sqlc/migrations -database $(APERTURE_DB_CONNECTIONSTRING) -verbose down 1
+
+migrate-create: $(MIGRATE_BIN)
+	migrate create -dir aperturedb/sqlc/migrations -seq -ext sql $(patchname)
+
+# =======
+# CODEGEN
+# =======
+sqlc:
+	@$(call print, "Generating sql models and queries in Go")
+	./scripts/gen_sqlc_docker.sh
+
+sqlc-check: sqlc
+	@$(call print, "Verifying sql code generation.")
+	if test -n "$$(git status --porcelain '*.go')"; then echo "SQL models not properly generated!"; git status --porcelain '*.go'; exit 1; fi
 
 # =======
 # TESTING
