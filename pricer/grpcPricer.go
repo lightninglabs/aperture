@@ -9,6 +9,7 @@ import (
 	"github.com/lightninglabs/aperture/pricesrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Config holds all the config values required to initialise the GRPCPricer.
@@ -44,7 +45,7 @@ func NewGRPCPricer(cfg *Config) (*GRPCPricer, error) {
 	)
 
 	if cfg.Insecure {
-		opt = grpc.WithInsecure()
+		opt = grpc.WithTransportCredentials(insecure.NewCredentials())
 	} else {
 		tlsCredentials, err := credentials.NewClientTLSFromFile(
 			cfg.TLSCertPath, "",
