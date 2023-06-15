@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package pricesrpc;
+
+option go_package = "github.com/lightninglabs/aperture/pricesrpc";
+
+service Prices { rpc GetPrice(GetPriceRequest) returns (GetPriceResponse); }
+
+message GetPriceRequest {
+  string path = 1;
+
+  string http_request_text = 2;
+}
+
+message GetPriceResponse { int64 price_sats = 1; }

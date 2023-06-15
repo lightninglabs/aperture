@@ -1,0 +1,8 @@
+type: google.api.Service
+config_version: 3
+
+http:
+  rules:
+    - selector: pricesrpc.Prices.GetPrice
+      post: "/v1/aperture/price"
+      body: "*"

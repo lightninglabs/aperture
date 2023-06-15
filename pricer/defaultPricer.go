@@ -1,6 +1,9 @@
 package pricer
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 // DefaultPricer provides the same price for any service path. It implements
 // the Pricer interface.
@@ -16,8 +19,8 @@ func NewDefaultPricer(price int64) *DefaultPricer {
 
 // GetPrice returns the price charged for all resources of a service.
 // It is part of the Pricer interface.
-func (d *DefaultPricer) GetPrice(_ context.Context, _ string) (int64,
-	error) {
+func (d *DefaultPricer) GetPrice(_ context.Context,
+	_ *http.Request) (int64, error) {
 
 	return d.Price, nil
 }

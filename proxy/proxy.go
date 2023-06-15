@@ -155,9 +155,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// resources.
 		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
 		if !acceptAuth {
-			price, err := target.pricer.GetPrice(
-				r.Context(), r.URL.Path,
-			)
+			price, err := target.pricer.GetPrice(r.Context(), r)
 			if err != nil {
 				prefixLog.Errorf("error getting "+
 					"resource price: %v", err)
@@ -197,7 +195,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if !ok {
 				price, err := target.pricer.GetPrice(
-					r.Context(), r.URL.Path,
+					r.Context(), r,
 				)
 				if err != nil {
 					prefixLog.Errorf("error getting "+
