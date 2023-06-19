@@ -26,8 +26,12 @@ const (
 	// server expects a payment.
 	GRPCErrCode = codes.Internal
 
-	// GRPCErrCodeNew is the new error code we receive for a "402 payment
-	// required" error since google.golang.org/grpc v1.41.0.
+	// GRPCErrCodeNew is the new error code we received for a "402 payment
+	// required" error with version google.golang.org/grpc v1.41.0. This
+	// error should not really be returned by any aperture instance since
+	// we never deployed any version with google.golang.org/grpc v1.41.0 in
+	// the wild as there were other issues with it as well. So this is just
+	// here for completeness and shouldn't be used.
 	GRPCErrCodeNew = codes.Unknown
 
 	// GRPCErrMessage is the error message we receive from a gRPC call in

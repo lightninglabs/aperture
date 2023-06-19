@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	_ "net/http/pprof" // Blank import to set up profiling HTTP handlers.
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,12 +36,10 @@ import (
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v2"
-
-	// Blank import to set up profiling HTTP handlers.
-	_ "net/http/pprof"
 )
 
 const (
@@ -867,7 +866,9 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 		&tls.Config{InsecureSkipVerify: true},
 	))
 	if cfg.Insecure {
-		restProxyTLSOpt = grpc.WithInsecure()
+		restProxyTLSOpt = grpc.WithTransportCredentials(
+			insecure.NewCredentials(),
+		)
 	}
 
 	mux := gateway.NewServeMux(customMarshalerOption)

@@ -437,7 +437,12 @@ func sendDirectResponse(w http.ResponseWriter, r *http.Request,
 		w.Header().Set(hdrGrpcStatus, strconv.Itoa(int(codes.Internal)))
 		w.Header().Set(hdrGrpcMessage, errInfo)
 
-		w.WriteHeader(statusCode)
+		// As per the gRPC spec, we need to send a 200 OK status code
+		// even if the request failed. The Grpc-Status and Grpc-Message
+		// header fields are enough to inform any gRPC compliant client
+		// about the error. See:
+		// https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#responses
+		w.WriteHeader(http.StatusOK)
 
 	default:
 		http.Error(w, errInfo, statusCode)

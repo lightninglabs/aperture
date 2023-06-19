@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -42,7 +43,11 @@ func TestHashMailServerReturnStream(t *testing.T) {
 	setupAperture(t)
 
 	// Create a client and connect it to the server.
-	conn, err := grpc.Dial(testApertureAddress, grpc.WithInsecure())
+	conn, err := grpc.Dial(
+		testApertureAddress, grpc.WithTransportCredentials(
+			insecure.NewCredentials(),
+		),
+	)
 	require.NoError(t, err)
 	client := hashmailrpc.NewHashMailClient(conn)
 
@@ -114,7 +119,11 @@ func TestHashMailServerLargeMessage(t *testing.T) {
 	setupAperture(t)
 
 	// Create a client and connect it to the server.
-	conn, err := grpc.Dial(testApertureAddress, grpc.WithInsecure())
+	conn, err := grpc.Dial(
+		testApertureAddress, grpc.WithTransportCredentials(
+			insecure.NewCredentials(),
+		),
+	)
 	require.NoError(t, err)
 	client := hashmailrpc.NewHashMailClient(conn)
 
@@ -410,7 +419,7 @@ func (h *hashMailHarness) newClientConn() *grpc.ClientConn {
 	conn, err := grpc.Dial("bufnet", grpc.WithContextDialer(
 		func(ctx context.Context, s string) (net.Conn, error) {
 			return h.lis.Dial()
-		}), grpc.WithInsecure(),
+		}), grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(h.t, err)
 	h.t.Cleanup(func() {
