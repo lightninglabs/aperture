@@ -21,6 +21,7 @@ import (
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/challenger"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
@@ -76,6 +77,10 @@ const (
 	// hashMailRESTPrefix is the prefix a REST request URI has when it is
 	// meant for the hashmailrpc server to be handled.
 	hashMailRESTPrefix = "/v1/lightning-node-connect/hashmail"
+
+	// invoiceMacaroonName is the name of the invoice macaroon belonging
+	// to the target lnd node.
+	invoiceMacaroonName = "invoice.macaroon"
 )
 
 var (
@@ -163,7 +168,7 @@ type Aperture struct {
 
 	etcdClient    *clientv3.Client
 	db            *sql.DB
-	challenger    *LndChallenger
+	challenger    challenger.Challenger
 	httpsServer   *http.Server
 	torHTTPServer *http.Server
 	proxy         *proxy.Proxy
@@ -284,34 +289,29 @@ func (a *Aperture) Start(errChan chan error) error {
 
 	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
 
-	// Create our challenger that uses our backing lnd node to create
-	// invoices and check their settlement status.
-	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
-		return &lnrpc.Invoice{
-			Memo:  "LSAT",
-			Value: price,
-		}, nil
-	}
-
 	if !a.cfg.Authenticator.Disable {
+		genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
+			return &lnrpc.Invoice{
+				Memo:  "LSAT",
+				Value: price,
+			}, nil
+		}
+
 		authCfg := a.cfg.Authenticator
 		client, err := lndclient.NewBasicClient(
-			authCfg.LndHost, authCfg.TLSPath, authCfg.MacDir,
-			authCfg.Network, lndclient.MacFilename(
+			authCfg.LndHost, authCfg.TLSPath,
+			authCfg.MacDir, authCfg.Network,
+			lndclient.MacFilename(
 				invoiceMacaroonName,
 			),
 		)
 		if err != nil {
 			return err
 		}
-
-		a.challenger, err = NewLndChallenger(
-			client, genInvoiceReq, context.Background, errChan,
+		a.challenger, err = challenger.NewLndChallenger(
+			client, genInvoiceReq, context.Background,
+			errChan,
 		)
-		if err != nil {
-			return err
-		}
-		err = a.challenger.Start()
 		if err != nil {
 			return err
 		}
@@ -750,7 +750,7 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *Config, challenger *LndChallenger,
+func createProxy(cfg *Config, challenger challenger.Challenger,
 	store mint.SecretStore) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
