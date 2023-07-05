@@ -29,6 +29,9 @@ type Challenger interface {
 	// to avoid having to decode the payment request in order to retrieve
 	// its payment hash.
 	NewChallenge(price int64) (string, lntypes.Hash, error)
+
+	// Stop shuts down the challenger.
+	Stop()
 }
 
 // SecretStore is the store responsible for storing LSAT secrets. These secrets
@@ -36,12 +39,14 @@ type Challenger interface {
 type SecretStore interface {
 	// NewSecret creates a new cryptographically random secret which is
 	// keyed by the given hash.
-	NewSecret(context.Context, [sha256.Size]byte) ([lsat.SecretSize]byte, error)
+	NewSecret(context.Context, [sha256.Size]byte) ([lsat.SecretSize]byte,
+		error)
 
 	// GetSecret returns the cryptographically random secret that
 	// corresponds to the given hash. If there is no secret, then
 	// ErrSecretNotFound is returned.
-	GetSecret(context.Context, [sha256.Size]byte) ([lsat.SecretSize]byte, error)
+	GetSecret(context.Context, [sha256.Size]byte) ([lsat.SecretSize]byte,
+		error)
 
 	// RevokeSecret removes the cryptographically random secret that
 	// corresponds to the given hash. This acts as a NOP if the secret does
@@ -55,16 +60,19 @@ type ServiceLimiter interface {
 	// ServiceCapabilities returns the capabilities caveats for each
 	// service. This determines which capabilities of each service can be
 	// accessed.
-	ServiceCapabilities(context.Context, ...lsat.Service) ([]lsat.Caveat, error)
+	ServiceCapabilities(context.Context, ...lsat.Service) ([]lsat.Caveat,
+		error)
 
 	// ServiceConstraints returns the constraints for each service. This
 	// enforces additional constraints on a particular service/service
 	// capability.
-	ServiceConstraints(context.Context, ...lsat.Service) ([]lsat.Caveat, error)
+	ServiceConstraints(context.Context, ...lsat.Service) ([]lsat.Caveat,
+		error)
 
 	// ServiceTimeouts returns the timeout caveat for each service. This
 	// will determine if and when service access can expire.
-	ServiceTimeouts(context.Context, ...lsat.Service) ([]lsat.Caveat, error)
+	ServiceTimeouts(context.Context, ...lsat.Service) ([]lsat.Caveat,
+		error)
 }
 
 // Config packages all of the required dependencies to instantiate a new LSAT
@@ -245,7 +253,9 @@ type VerificationParams struct {
 }
 
 // VerifyLSAT attempts to verify an LSAT with the given parameters.
-func (m *Mint) VerifyLSAT(ctx context.Context, params *VerificationParams) error {
+func (m *Mint) VerifyLSAT(ctx context.Context,
+	params *VerificationParams) error {
+
 	// We'll first perform a quick check to determine if a valid preimage
 	// was provided.
 	id, err := lsat.DecodeIdentifier(bytes.NewReader(params.Macaroon.Id()))

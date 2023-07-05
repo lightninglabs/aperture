@@ -1,4 +1,4 @@
-package aperture
+package challenger
 
 import (
 	"context"
@@ -102,6 +102,7 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 	mainErrChan := make(chan error)
 	return &LndChallenger{
 		client:        mockClient,
+		clientCtx:     context.Background,
 		genInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
 		quit:          make(chan struct{}),
@@ -130,7 +131,7 @@ func TestLndChallenger(t *testing.T) {
 	// First of all, test that the NewLndChallenger doesn't allow a nil
 	// invoice generator function.
 	errChan := make(chan error)
-	_, err := NewLndChallenger(nil, nil, errChan)
+	_, err := NewLndChallenger(nil, nil, nil, errChan)
 	require.Error(t, err)
 
 	// Now mock the lnd backend and create a challenger instance that we can

@@ -37,6 +37,10 @@ type EtcdConfig struct {
 }
 
 type AuthConfig struct {
+	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
+
+	Disable bool `long:"disable" description:"Whether to disable auth."`
+
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
@@ -44,9 +48,17 @@ type AuthConfig struct {
 
 	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
 
-	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
+	// The one-time-use passphrase used to set up the connection. This field
+	// identifies the connection that will be used.
+	Passphrase string `long:"passphrase" description:"the lnc passphrase"`
 
-	Disable bool `long:"disable" description:"Whether to disable LND auth."`
+	// MailboxAddress is the address of the mailbox that the client will
+	// use for the LNC connection.
+	MailboxAddress string `long:"mailboxaddress" description:"the host:port of the mailbox server to be used"`
+
+	// DevServer set to true to skip verification of the mailbox server's
+	// tls cert.
+	DevServer bool `long:"devserver" description:"set to true to skip verification of the server's tls cert."`
 }
 
 func (a *AuthConfig) validate() error {
@@ -55,6 +67,30 @@ func (a *AuthConfig) validate() error {
 		return nil
 	}
 
+	switch {
+	// If LndHost is set we connect directly to the LND node.
+	case a.LndHost != "":
+		log.Info("Validating lnd configuration")
+
+		if a.Passphrase != "" {
+			return errors.New("passphrase field cannot be set " +
+				"when connecting directly to the lnd node")
+		}
+
+		return a.validateLNDAuth()
+
+	// If Passphrase is set we connect to the LND node through LNC.
+	case a.Passphrase != "":
+		log.Info("Validating lnc configuration")
+		return a.validateLNCAuth()
+
+	default:
+		return errors.New("invalid authenticator configuration")
+	}
+}
+
+// validateLNDAuth validates the direct LND auth configuration.
+func (a *AuthConfig) validateLNDAuth() error {
 	if a.LndHost == "" {
 		return errors.New("lnd host required")
 	}
@@ -65,6 +101,22 @@ func (a *AuthConfig) validate() error {
 
 	if a.MacDir == "" {
 		return errors.New("lnd mac dir required")
+	}
+
+	return nil
+}
+
+// validateLNCAuth validates the LNC auth configuration.
+func (a *AuthConfig) validateLNCAuth() error {
+	switch {
+	case a.Passphrase == "":
+		return errors.New("lnc passphrase required")
+
+	case a.MailboxAddress == "":
+		return errors.New("lnc mailbox address required")
+
+	case a.Network == "":
+		return errors.New("lnc network required")
 	}
 
 	return nil
@@ -120,6 +172,8 @@ type Config struct {
 	// Etcd is the configuration section for the Etcd database backend.
 	Etcd *EtcdConfig `group:"etcd" namespace:"etcd"`
 
+	// Authenticator is the configuration section for connecting directly
+	// to the LND node.
 	Authenticator *AuthConfig `group:"authenticator" namespace:"authenticator"`
 
 	Tor *TorConfig `group:"tor" namespace:"tor"`
@@ -151,8 +205,10 @@ type Config struct {
 }
 
 func (c *Config) validate() error {
-	if err := c.Authenticator.validate(); err != nil {
-		return err
+	if !c.Authenticator.Disable {
+		if err := c.Authenticator.validate(); err != nil {
+			return err
+		}
 	}
 
 	if c.ListenAddr == "" {

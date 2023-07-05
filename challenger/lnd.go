@@ -1,4 +1,4 @@
-package aperture
+package challenger
 
 import (
 	"context"
@@ -9,39 +9,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/aperture/mint"
-	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
-	"google.golang.org/grpc"
 )
-
-// InvoiceRequestGenerator is a function type that returns a new request for the
-// lnrpc.AddInvoice call.
-type InvoiceRequestGenerator func(price int64) (*lnrpc.Invoice, error)
-
-// InvoiceClient is an interface that only implements part of a full lnd client,
-// namely the part around the invoices we need for the challenger to work.
-type InvoiceClient interface {
-	// ListInvoices returns a paginated list of all invoices known to lnd.
-	ListInvoices(ctx context.Context, in *lnrpc.ListInvoiceRequest,
-		opts ...grpc.CallOption) (*lnrpc.ListInvoiceResponse, error)
-
-	// SubscribeInvoices subscribes to updates on invoices.
-	SubscribeInvoices(ctx context.Context, in *lnrpc.InvoiceSubscription,
-		opts ...grpc.CallOption) (
-		lnrpc.Lightning_SubscribeInvoicesClient, error)
-
-	// AddInvoice adds a new invoice to lnd.
-	AddInvoice(ctx context.Context, in *lnrpc.Invoice,
-		opts ...grpc.CallOption) (*lnrpc.AddInvoiceResponse, error)
-}
 
 // LndChallenger is a challenger that uses an lnd backend to create new LSAT
 // payment challenges.
 type LndChallenger struct {
 	client        InvoiceClient
+	clientCtx     func() context.Context
 	genInvoiceReq InvoiceRequestGenerator
 
 	invoiceStates  map[lntypes.Hash]lnrpc.Invoice_InvoiceState
@@ -55,44 +31,45 @@ type LndChallenger struct {
 	wg   sync.WaitGroup
 }
 
-// A compile time flag to ensure the LndChallenger satisfies the
-// mint.Challenger and auth.InvoiceChecker interface.
-var _ mint.Challenger = (*LndChallenger)(nil)
-var _ auth.InvoiceChecker = (*LndChallenger)(nil)
+// A compile time flag to ensure the LndChallenger satisfies the Challenger
+// interface.
+var _ Challenger = (*LndChallenger)(nil)
 
-const (
-	// invoiceMacaroonName is the name of the invoice macaroon belonging
-	// to the target lnd node.
-	invoiceMacaroonName = "invoice.macaroon"
-)
-
-// NewLndChallenger creates a new challenger that uses the given connection
-// details to connect to an lnd backend to create payment challenges.
-func NewLndChallenger(cfg *AuthConfig, genInvoiceReq InvoiceRequestGenerator,
+// NewLndChallenger creates a new challenger that uses the given connection to
+// an lnd backend to create payment challenges.
+func NewLndChallenger(client InvoiceClient,
+	genInvoiceReq InvoiceRequestGenerator,
+	ctxFunc func() context.Context,
 	errChan chan<- error) (*LndChallenger, error) {
+
+	// Make sure we have a valid context function. This will be called to
+	// create a new context for each call to the lnd client.
+	if ctxFunc == nil {
+		ctxFunc = context.Background
+	}
 
 	if genInvoiceReq == nil {
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
 	}
 
-	client, err := lndclient.NewBasicClient(
-		cfg.LndHost, cfg.TLSPath, cfg.MacDir, cfg.Network,
-		lndclient.MacFilename(invoiceMacaroonName),
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	invoicesMtx := &sync.Mutex{}
-	return &LndChallenger{
+	challenger := &LndChallenger{
 		client:        client,
+		clientCtx:     ctxFunc,
 		genInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
 		invoicesMtx:   invoicesMtx,
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		quit:          make(chan struct{}),
 		errChan:       errChan,
-	}, nil
+	}
+
+	err := challenger.Start()
+	if err != nil {
+		return nil, fmt.Errorf("unable to start challenger: %w", err)
+	}
+
+	return challenger, nil
 }
 
 // Start starts the challenger's main work which is to keep track of all
@@ -111,8 +88,9 @@ func (l *LndChallenger) Start() error {
 	// cache. We need to keep track of all invoices, even quite old ones to
 	// make sure tokens are valid. But to save space we only keep track of
 	// an invoice's state.
+	ctx := l.clientCtx()
 	invoiceResp, err := l.client.ListInvoices(
-		context.Background(), &lnrpc.ListInvoiceRequest{
+		ctx, &lnrpc.ListInvoiceRequest{
 			NumMaxInvoices: math.MaxUint64,
 		},
 	)
@@ -145,7 +123,7 @@ func (l *LndChallenger) Start() error {
 	l.invoicesMtx.Unlock()
 
 	// We need to be able to cancel any subscription we make.
-	ctxc, cancel := context.WithCancel(context.Background())
+	ctxc, cancel := context.WithCancel(l.clientCtx())
 	l.invoicesCancel = cancel
 
 	subscriptionResp, err := l.client.SubscribeInvoices(
@@ -261,7 +239,9 @@ func (l *LndChallenger) Stop() {
 // request (invoice) and the corresponding payment hash.
 //
 // NOTE: This is part of the mint.Challenger interface.
-func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) {
+func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash,
+	error) {
+
 	// Obtain a new invoice from lnd first. We need to know the payment hash
 	// so we can add it as a caveat to the macaroon.
 	invoice, err := l.genInvoiceReq(price)
@@ -269,12 +249,14 @@ func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash, error) 
 		log.Errorf("Error generating invoice request: %v", err)
 		return "", lntypes.ZeroHash, err
 	}
-	ctx := context.Background()
+
+	ctx := l.clientCtx()
 	response, err := l.client.AddInvoice(ctx, invoice)
 	if err != nil {
 		log.Errorf("Error adding invoice: %v", err)
 		return "", lntypes.ZeroHash, err
 	}
+
 	paymentHash, err := lntypes.MakeHash(response.RHash)
 	if err != nil {
 		log.Errorf("Error parsing payment hash: %v", err)
