@@ -82,6 +82,10 @@ const (
 	// invoiceMacaroonName is the name of the invoice macaroon belonging
 	// to the target lnd node.
 	invoiceMacaroonName = "invoice.macaroon"
+
+	// defaultMailboxAddress is the default address of the mailbox server
+	// that will be used if none is specified.
+	defaultMailboxAddress = "mailbox.terminal.lightning.today:443"
 )
 
 var (
@@ -590,6 +594,11 @@ func getConfig() (*Config, error) {
 	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
 		cfg.Authenticator.MacDir,
 	)
+
+	// Set default mailbox address if none is set.
+	if cfg.Authenticator.MailboxAddress == "" {
+		cfg.Authenticator.MailboxAddress = defaultMailboxAddress
+	}
 
 	// Then check the configuration that we got from the config file, all
 	// required values need to be set at this point.
