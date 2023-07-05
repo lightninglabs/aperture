@@ -102,6 +102,12 @@ func (l *LndChallenger) Start() error {
 	// updates for new invoices and/or newly settled invoices.
 	l.invoicesMtx.Lock()
 	for _, invoice := range invoiceResp.Invoices {
+		// Some invoices like AMP invoices may not have a payment hash
+		// populated.
+		if invoice.RHash == nil {
+			continue
+		}
+
 		if invoice.AddIndex > addIndex {
 			addIndex = invoice.AddIndex
 		}
@@ -205,6 +211,12 @@ func (l *LndChallenger) readInvoiceStream(
 			return
 
 		default:
+		}
+
+		// Some invoices like AMP invoices may not have a payment hash
+		// populated.
+		if invoice.RHash == nil {
+			continue
 		}
 
 		hash, err := lntypes.MakeHash(invoice.RHash)

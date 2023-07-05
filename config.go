@@ -161,7 +161,7 @@ type Config struct {
 	ServeStatic bool `long:"servestatic" description:"Flag to enable or disable static content serving."`
 
 	// DatabaseBackend is the database backend to be used by the server.
-	DatabaseBackend string `long:"dbbackend" description:"The database backend to use for storing all asset related data." choice:"sqlite" choice:"postgres"`
+	DatabaseBackend string `long:"dbbackend" description:"The database backend to use for storing all asset related data." choice:"sqlite" choice:"postgres" yaml:"dbbackend"`
 
 	// Sqlite is the configuration section for the SQLite database backend.
 	Sqlite *aperturedb.SqliteConfig `group:"sqlite" namespace:"sqlite"`
