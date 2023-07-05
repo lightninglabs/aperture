@@ -335,8 +335,18 @@ func (a *Aperture) Start(errChan chan error) error {
 					"session: %w", err)
 			}
 
+			// An LNC session will automatically try to reconnect to
+			// the node whenever an error occurs. Instead of
+			// shutting the proxy down we will just log the error.
+			lncErrChan := make(chan error)
+			go func() {
+				for err := range lncErrChan {
+					log.Errorf("lnc session error: %v", err)
+				}
+			}()
+
 			a.challenger, err = challenger.NewLNCChallenger(
-				session, lncStore, genInvoiceReq, errChan,
+				session, lncStore, genInvoiceReq, lncErrChan,
 			)
 			if err != nil {
 				return fmt.Errorf("unable to start lnc "+
