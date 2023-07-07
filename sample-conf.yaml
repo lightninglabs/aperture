@@ -26,6 +26,17 @@ profile: 9999
 # Settings for the lnd node used to generate payment requests. All of these
 # options are required.
 authenticator:
+  ## Common fields.
+
+  # The chain network the lnd is active on.
+  network: "simnet"
+ 
+  # Set to true to disable any auth.
+  disable: false
+
+
+  ## Direct LND connection fields.
+
   # The host:port which lnd's RPC can be reached at.
   lndhost: "localhost:10009"
 
@@ -35,9 +46,9 @@ authenticator:
   # The path to lnd's macaroon directory.
   macdir: "/path/to/lnd/data/chain/bitcoin/simnet"
 
-  # The chain network the lnd is active on.
-  network: "simnet"
- 
+
+  ## LNC connection fields.
+
   # The LNC connection passphrase.
   passphrase: "your pairing phrase"
 
@@ -47,9 +58,7 @@ authenticator:
   # Set to true to skip verification of the mailbox server's tls cert.
   devserver: false
 
-  # Set to true to disable any auth.
-  disable: false
-
+  
 # The selected database backend. The current default backend is "sqlite". 
 # Aperture also has support for postgres and etcd.
 dbbackend: "sqlite"
