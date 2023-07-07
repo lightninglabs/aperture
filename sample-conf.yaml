@@ -39,7 +39,7 @@ authenticator:
   network: "simnet"
  
   # The LNC connection passphrase.
-  passphrase: "my-own-passphrase"
+  passphrase: "your pairing phrase"
 
   # The host:port of the mailbox server to be used.
   mailboxaddress: "mailbox.terminal.lightning.today:443"
