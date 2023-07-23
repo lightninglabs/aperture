@@ -51,3 +51,6 @@ services and APIs.
 
 ### Running Local
 `aperture --configfile=<path_to>/aperture.yaml`
+
+### Special Note
+Use `LSAT` in header instead of `L402`
