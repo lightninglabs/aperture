@@ -48,3 +48,6 @@ services and APIs.
   compare with `sample-conf.yaml`.
 * Start aperture without any command line parameters (`./aperture`), all configuration
   is done in the `~/.aperture/aperture.yaml` file.
+
+### Running Local
+`aperture --configfile=<path_to>/aperture.yaml`

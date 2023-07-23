@@ -1,6 +1,8 @@
 # The address which the proxy can be reached at.
 listenaddr: "localhost:8081"
 
+insecure: true
+
 # The root path of static content to serve upon receiving a request the proxy
 # cannot handle.
 staticroot: "./static"
@@ -12,37 +14,37 @@ servestatic: false
 # The log level that should be used for the proxy.
 #
 # Valid options include: trace, debug, info, warn, error, critical, off.
-debuglevel: "debug"
+debuglevel: "trace"
 
 # Whether the proxy should create a valid certificate through Let's Encrypt for
 # the fully qualifying domain name.
-autocert: false
-servername: aperture.example.com
+#autocert: false
+#servername: aperture.example.com
 
 # The port on which the pprof profile will be served. If no port is provided,
 # the profile will not be served.
-profile: 9999
+#profile: 9999
 
 # Settings for the lnd node used to generate payment requests. All of these
 # options are required.
 authenticator:
   # The host:port which lnd's RPC can be reached at.
-  lndhost: "localhost:10009"
+  lndhost: "127.0.0.1:10001"
 
   # The path to lnd's TLS certificate.
-  tlspath: "/path/to/lnd/tls.cert"
+  tlspath: "/Users/<user>/.polar/networks/2/volumes/lnd/alice/tls.cert"
 
   # The path to lnd's macaroon directory.
-  macdir: "/path/to/lnd/data/chain/bitcoin/simnet"
+  macdir: "/Users/<user>/.polar/networks/2/volumes/lnd/alice/data/chain/bitcoin/regtest"
 
   # The chain network the lnd is active on.
-  network: "simnet"
- 
-  # The LNC connection passphrase.
-  passphrase: "my-own-passphrase"
+  network: "regtest"
 
-  # The host:port of the mailbox server to be used.
-  mailboxaddress: "mailbox.terminal.lightning.today:443"
+  # The LNC connection passphrase.
+  #  passphrase: "my-own-passphrase"
+  #
+  #  # The host:port of the mailbox server to be used.
+  #  mailboxaddress: "mailbox.terminal.lightning.today:443"
 
   # Set to true to skip verification of the mailbox server's tls cert.
   devserver: false
@@ -50,43 +52,43 @@ authenticator:
   # Set to true to disable any auth.
   disable: false
 
-# The selected database backend. The current default backend is "sqlite". 
+# The selected database backend. The current default backend is "sqlite".
 # Aperture also has support for postgres and etcd.
 dbbackend: "sqlite"
 
 # Settings for the sqlite process which the proxy will use to reliably store and
 # retrieve token information.
 sqlite:
-    # The full path to the database.
-    dbfile: "/path/to/.aperture/aperture.db"
+  # The full path to the database.
+  dbfile: "/Users/<user>/.aperture/aperture.db"
 
-# Settings for the postgres instance which the proxy will use to reliably store 
-# and retrieve token information.
-postgres:
-    # Connection parameters.
-    host: "localhost"
-    port: 5432
-    user: "user"
-    password: "password"
-    dbname: "aperture"
+  # Settings for the postgres instance which the proxy will use to reliably store
+  # and retrieve token information.
+  #postgres:
+  # Connection parameters.
+  #    host: "localhost"
+  #    port: 5432
+  #    user: "user"
+  #    password: "password"
+  #    dbname: "aperture"
+  #
+  #    # Max open connections to keep alive to the database server.
+  #    maxconnections: 25
+  #
+  #    # Whether to require using SSL (mode: require) when connecting to the
+  #    # server.
+  #    requireSSL: true
 
-    # Max open connections to keep alive to the database server.
-    maxconnections: 25
-
-    # Whether to require using SSL (mode: require) when connecting to the 
-    # server.
-    requireSSL: true
-
-# Settings for the etcd instance which the proxy will use to reliably store and
-# retrieve token information.
-etcd:
+  # Settings for the etcd instance which the proxy will use to reliably store and
+  # retrieve token information.
+  #etcd:
   # The client host:port which the etcd instance can be reached at.
-  host: "localhost:2379"
+  #  host: "localhost:2379"
 
   # If authentication is enabled, the user and password required to access the
   # etcd instance.
-  user: "user"
-  password: "password"
+#  user: "user"
+#  password: "password"
 
 # List of services that should be reachable behind the proxy.  Requests will be
 # matched to the services in order, picking the first that satisfies hostregexp
@@ -95,26 +97,26 @@ etcd:
 # Use single quotes for regular expressions with special characters in them to
 # avoid YAML parsing errors!
 services:
-    # The identifying name of the service. This will also be used to identify
-    # which capabilities caveat (if any) corresponds to the service.
-  - name: "service1"
+  # The identifying name of the service. This will also be used to identify
+  # which capabilities caveat (if any) corresponds to the service.
+  - name: "ibexhub"
 
     # The regular expression used to match the service host.
-    hostregexp: '^service1.com$'
+    hostregexp: '^127.0.0.1:8081$'
 
     # The regular expression used to match the path of the URL.
-    pathregexp: '^/.*$'
+    pathregexp: '^.*$'
 
     # The host:port which the service can be reached at.
-    address: "127.0.0.1:10009"
+    address: "127.0.0.1:3030"
 
     # The HTTP protocol that should be used to connect to the service. Valid
     # options include: http, https.
-    protocol: https
+    protocol: http
 
     # If required, a path to the service's TLS certificate to successfully
     # establish a secure connection.
-    tlscertpath: "path-to-optional-tls-cert/tls.cert"
+    #    tlscertpath: "path-to-optional-tls-cert/tls.cert"
 
     # A comma-delimited list of capabilities that will be granted for tokens of
     # the service at the base tier.
@@ -123,83 +125,84 @@ services:
     # The set of constraints that are applied to tokens of the service at the
     # base tier.
     constraints:
-        # This is just an example of how aperture could be extended
-        # but would not have any effect without additional support added.
-        "valid_until": 1682483169
-      
+      # This is just an example of how aperture could be extended
+      # but would not have any effect without additional support added.
+      "valid_until": 1682483169
+
     # a caveat will be added that expires the LSAT after this many seconds,
     # 31557600 = 1 year.
-    timeout: 31557600    
+    # 3600 = 1 Hour.
+    timeout: 3600
 
     # The LSAT value in satoshis for the service. It is ignored if
     # dynamicprice.enabled is set to true.
-    price: 0
-
-    # Options to use for connection to the price serving gRPC server.
-    dynamicprice:
-      # Whether or not a gRPC server is available to query price data from. If
-      # this option is set to true then the 'price' option is ignored.
-      enabled: true
-
-      # The address of the gRPC pricer server.
-      grpcaddress: "127.0.0.1:10010"
-
-      # Whether or not TLS encryption should be used for communications with the
-      # gRPC server.
-      insecure: false
-
-      # The path to the pricer server's tls.cert. If the 'insecure' option is
-      # set to true then this path must be set.
-      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
-
-  - name: "service2"
-    hostregexp: "service2.com:8083"
-    pathregexp: '^/.*$'
-    address: "123.456.789:8082"
-    protocol: https
-    constraints:
-        "valid_until": "2020-01-01"
     price: 1
 
-  - name: "service3"
-    hostregexp: "service3.com:8083"
-    pathregexp: '^/.*$'
-    address: "123.456.789:8082"
-    protocol: https
-    constraints:
-        "valid_until": "2020-01-01"
-    dynamicprice:
-      enbled: true
-      grpcaddress: 123.456.789:8083
-      insecure: false
-      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
+    # Options to use for connection to the price serving gRPC server.
+#    dynamicprice:
+#      # Whether or not a gRPC server is available to query price data from. If
+#      # this option is set to true then the 'price' option is ignored.
+#      enabled: true
+#
+#      # The address of the gRPC pricer server.
+#      grpcaddress: "127.0.0.1:10010"
+#
+#      # Whether or not TLS encryption should be used for communications with the
+#      # gRPC server.
+#      insecure: false
+#
+#      # The path to the pricer server's tls.cert. If the 'insecure' option is
+#      # set to true then this path must be set.
+#      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
+
+#  - name: "service2"
+#    hostregexp: "service2.com:8083"
+#    pathregexp: '^/.*$'
+#    address: "123.456.789:8082"
+#    protocol: https
+#    constraints:
+#        "valid_until": "2020-01-01"
+#    price: 1
+#
+#  - name: "service3"
+#    hostregexp: "service3.com:8083"
+#    pathregexp: '^/.*$'
+#    address: "123.456.789:8082"
+#    protocol: https
+#    constraints:
+#        "valid_until": "2020-01-01"
+#    dynamicprice:
+#      enbled: true
+#      grpcaddress: 123.456.789:8083
+#      insecure: false
+#      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.
-tor:
-  # The host:port which Tor's control can be reached at.
-  control: "localhost:9051"
-
-  # The internal port we should listen on for client requests over Tor. Note
-  # that this port should not be exposed to the outside world, it is only
-  # intended to be reached by clients through the onion service.
-  listenport: 8082
-
-  # The port through which the onion services to be created can be reached at.
-  virtualport: 8082
-
-  # Whether a v3 onion service should be created to handle requests.
-  v3: false
+#tor:
+#  # The host:port which Tor's control can be reached at.
+#  control: "localhost:9051"
+#
+#  # The internal port we should listen on for client requests over Tor. Note
+#  # that this port should not be exposed to the outside world, it is only
+#  # intended to be reached by clients through the onion service.
+#  listenport: 8082
+#
+#  # The port through which the onion services to be created can be reached at.
+#  virtualport: 8082
+#
+#  # Whether a v3 onion service should be created to handle requests.
+#  v3: false
 
 # Enable the Lightning Node Connect hashmail server, allowing up to 1k messages
 # per burst and a new message every 20 milliseconds.
-hashmail:
-  enabled: true
-  messagerate: 20ms
-  messageburstallowance: 1000
+#hashmail:
+#  enabled: true
+#  messagerate: 20ms
+#  messageburstallowance: 1000
 
 # Enable the prometheus metrics exporter so that a prometheus server can scrape
 # the metrics.
-prometheus:
-  enabled: true
-  listenaddr: "localhost:9000"
+#prometheus:
+#  enabled: true
+#  listenaddr: "localhost:9000"
