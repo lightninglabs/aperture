@@ -399,7 +399,7 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 	serviceName string, servicePrice int64) {
 
 	header, err := p.authenticator.FreshChallengeHeader(
-		r, serviceName, servicePrice,
+		serviceName, servicePrice,
 	)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)

@@ -83,8 +83,8 @@ const (
 // complete.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *L402Authenticator) FreshChallengeHeader(r *http.Request,
-	serviceName string, servicePrice int64) (http.Header, error) {
+func (l *L402Authenticator) FreshChallengeHeader(serviceName string,
+	servicePrice int64) (http.Header, error) {
 
 	service := l402.Service{
 		Name:  serviceName,
