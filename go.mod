@@ -32,11 +32,11 @@ require (
 	github.com/stretchr/testify v1.8.1
 	go.etcd.io/etcd/client/v3 v3.5.7
 	go.etcd.io/etcd/server/v3 v3.5.7
-	golang.org/x/crypto v0.14.0
-	golang.org/x/net v0.17.0
+	golang.org/x/crypto v0.15.0
+	golang.org/x/net v0.18.0
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-	google.golang.org/grpc v1.56.3
-	google.golang.org/protobuf v1.30.0
+	google.golang.org/grpc v1.59.0
+	google.golang.org/protobuf v1.31.0
 	gopkg.in/macaroon-bakery.v2 v2.1.0
 	gopkg.in/macaroon.v2 v2.1.0
 	gopkg.in/yaml.v2 v2.4.0
@@ -88,7 +88,7 @@ require (
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v1.0.1 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
-	github.com/google/uuid v1.3.0 // indirect
+	github.com/google/uuid v1.3.1 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
@@ -176,12 +176,14 @@ require (
 	go.uber.org/zap v1.17.0 // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
 	golang.org/x/mod v0.10.0 // indirect
-	golang.org/x/sync v0.2.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
-	golang.org/x/term v0.13.0 // indirect
-	golang.org/x/text v0.13.0 // indirect
+	golang.org/x/sync v0.3.0 // indirect
+	golang.org/x/sys v0.14.0 // indirect
+	golang.org/x/term v0.14.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.9.1 // indirect
-	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
+	google.golang.org/genproto v0.0.0-20230822172742-b8732ec3820d // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20230822172742-b8732ec3820d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20230822172742-b8732ec3820d // indirect
 	gopkg.in/errgo.v1 v1.0.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
