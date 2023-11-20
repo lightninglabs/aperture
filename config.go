@@ -30,6 +30,12 @@ var (
 	)
 )
 
+const (
+	defaultIdleTimeout  = time.Minute * 2
+	defaultReadTimeout  = time.Second * 15
+	defaultWriteTimeout = time.Second * 30
+)
+
 type EtcdConfig struct {
 	Host     string `long:"host" description:"host:port of an active etcd instance"`
 	User     string `long:"user" description:"user authorized to access the etcd host"`
@@ -202,6 +208,17 @@ type Config struct {
 
 	// Profile is the port on which the pprof profile will be served.
 	Profile uint16 `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65535"`
+
+	// IdleTimeout is the maximum amount of time a connection may be idle.
+	IdleTimeout time.Duration `long:"idletimeout" description:"The maximum amount of time a connection may be idle before being closed."`
+
+	// ReadTimeout is the maximum amount of time to wait for a request to
+	// be fully read.
+	ReadTimeout time.Duration `long:"readtimeout" description:"The maximum amount of time to wait for a request to be fully read."`
+
+	// WriteTimeout is the maximum amount of time to wait for a response to
+	// be fully written.
+	WriteTimeout time.Duration `long:"writetimeout" description:"The maximum amount of time to wait for a response to be fully written."`
 }
 
 func (c *Config) validate() error {
@@ -237,5 +254,8 @@ func NewConfig() *Config {
 		Tor:             &TorConfig{},
 		HashMail:        &HashMailConfig{},
 		Prometheus:      &PrometheusConfig{},
+		IdleTimeout:     defaultIdleTimeout,
+		ReadTimeout:     defaultReadTimeout,
+		WriteTimeout:    defaultWriteTimeout,
 	}
 }

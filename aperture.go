@@ -379,10 +379,14 @@ func (a *Aperture) Start(errChan chan error) error {
 	a.httpsServer = &http.Server{
 		Addr:         a.cfg.ListenAddr,
 		Handler:      handler,
-		IdleTimeout:  0,
-		ReadTimeout:  0,
-		WriteTimeout: 0,
+		IdleTimeout:  a.cfg.IdleTimeout,
+		ReadTimeout:  a.cfg.ReadTimeout,
+		WriteTimeout: a.cfg.WriteTimeout,
 	}
+
+	log.Infof("Creating server with idle_timeout=%v, read_timeout=%v "+
+		"and write_timeout=%v", a.cfg.IdleTimeout, a.cfg.ReadTimeout,
+		a.cfg.WriteTimeout)
 
 	// Create TLS configuration by either creating new self-signed certs or
 	// trying to obtain one through Let's Encrypt.
