@@ -201,8 +201,8 @@ func (a *Aperture) Start(errChan chan error) error {
 	}
 
 	// Enable http profiling and validate profile port number if requested.
-	if a.cfg.ProfilePort != 0 {
-		if a.cfg.ProfilePort < 1024 || a.cfg.ProfilePort > 65535 {
+	if a.cfg.Profile != 0 {
+		if a.cfg.Profile < 1024 || a.cfg.Profile > 65535 {
 			return fmt.Errorf("the profile port must be between " +
 				"1024 and 65535")
 		}
@@ -212,9 +212,7 @@ func (a *Aperture) Start(errChan chan error) error {
 				"/debug/pprof", http.StatusSeeOther,
 			))
 
-			listenAddr := fmt.Sprintf(
-				"localhost:%d", a.cfg.ProfilePort,
-			)
+			listenAddr := fmt.Sprintf("localhost:%d", a.cfg.Profile)
 
 			log.Infof("Starting profile server at %s", listenAddr)
 			fmt.Println(http.ListenAndServe(listenAddr, nil))
