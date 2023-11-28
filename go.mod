@@ -166,13 +166,13 @@ require (
 	go.etcd.io/etcd/client/v2 v2.305.7 // indirect
 	go.etcd.io/etcd/pkg/v3 v3.5.7 // indirect
 	go.etcd.io/etcd/raft/v3 v3.5.7 // indirect
-	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.0 // indirect
-	go.opentelemetry.io/otel v1.20.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.1 // indirect
+	go.opentelemetry.io/otel v1.21.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.0.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.0.1 // indirect
-	go.opentelemetry.io/otel/metric v1.20.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.0.1 // indirect
-	go.opentelemetry.io/otel/trace v1.20.0 // indirect
+	go.opentelemetry.io/otel/metric v1.21.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.21.0 // indirect
+	go.opentelemetry.io/otel/trace v1.21.0 // indirect
 	go.opentelemetry.io/proto/otlp v0.9.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
