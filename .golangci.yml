@@ -20,10 +20,9 @@ linters:
   # the latest linter includes many sub-linters which do not pass the codebase.
   enable:
     - bodyclose
-    - deadcode
-    - depguard
     - dupl
     - errcheck
+    - exportloopref
     - goconst
     - gocritic
     - gocyclo
@@ -33,16 +32,18 @@ linters:
     - gosimple
     - govet
     - ineffassign
-    - interfacer
     - misspell
     - nakedret
     - prealloc
-    - scopelint
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
+
+issues:
+  exclude-rules:
+    - path: internal/test
+      linters:
+        - goconst

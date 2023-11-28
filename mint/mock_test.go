@@ -2,8 +2,8 @@ package mint
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
-	"math/rand"
 
 	"github.com/lightninglabs/aperture/lsat"
 	"github.com/lightningnetwork/lnd/lntypes"
