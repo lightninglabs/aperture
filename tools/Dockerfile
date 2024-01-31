@@ -1,4 +1,4 @@
-FROM golang:1.22rc2-bookworm
+FROM golang:1.19.10-buster
 
 RUN apt-get update && apt-get install -y git
 ENV GOCACHE=/tmp/build/.cache
