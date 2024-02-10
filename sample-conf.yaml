@@ -50,6 +50,9 @@ authenticator:
   ## LNC connection fields.
 
   # The LNC connection passphrase.
+  # NOTE: The passphrase generates a secret for authenticating the LNC
+  # connection. Once a passphrase has been utilized for a connection, it 
+  # cannot be reused in a different server/database.
   passphrase: "your pairing phrase"
 
   # The host:port of the mailbox server to be used.
