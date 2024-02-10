@@ -281,8 +281,11 @@ func (n *NodeConn) newConn(session *Session, opts ...grpc.DialOption) (*conn,
 	}
 	dialOpts = append(dialOpts, opts...)
 
+	ctxt, cancelT := context.WithTimeout(ctxc, DefaultConnectionTimetout)
+	defer cancelT()
+
 	grpcClient, err := grpc.DialContext(
-		ctxc, session.MailboxAddr, dialOpts...,
+		ctxt, session.MailboxAddr, dialOpts...,
 	)
 	if err != nil {
 		cancel()
