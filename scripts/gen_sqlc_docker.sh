@@ -16,5 +16,5 @@ docker run \
   -e UID=$UID \
   -v "$DIR/../:/build" \
   -w /build \
-  kjconroy/sqlc:1.18.0 generate
+   sqlc/sqlc:1.25.0 generate
 
