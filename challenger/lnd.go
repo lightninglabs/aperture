@@ -13,6 +13,12 @@ import (
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
+const (
+	// defaultLNDCallTimeout is the default timeout used for calls to the
+	// LND client.
+	defaultLNDCallTimeout = time.Second * 10
+)
+
 // LndChallenger is a challenger that uses an lnd backend to create new LSAT
 // payment challenges.
 type LndChallenger struct {
@@ -199,12 +205,20 @@ func (l *LndChallenger) readInvoiceStream(
 			log.Errorf("Received error from invoice subscription: "+
 				"%v", err)
 
+			// If the challenger was shutting down, we will receive the
+			// "client connection is closing" error for LNC connections
+			// but there is no need to signal the error to the main goroutine.
+			select {
+			case <-l.quit:
+				return
+			default:
+			}
+
 			// The connection is faulty, we can't continue to
 			// function properly. Signal the error to the main
 			// goroutine to force a shutdown/restart.
 			select {
 			case l.errChan <- err:
-			case <-l.quit:
 			default:
 			}
 
@@ -244,6 +258,7 @@ func (l *LndChallenger) readInvoiceStream(
 func (l *LndChallenger) Stop() {
 	l.invoicesCancel()
 	close(l.quit)
+	close(l.errChan)
 	l.wg.Wait()
 }
 
@@ -263,7 +278,10 @@ func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash,
 	}
 
 	ctx := l.clientCtx()
-	response, err := l.client.AddInvoice(ctx, invoice)
+	ctxt, cancel := context.WithTimeout(ctx, defaultLNDCallTimeout)
+	defer cancel()
+
+	response, err := l.client.AddInvoice(ctxt, invoice)
 	if err != nil {
 		log.Errorf("Error adding invoice: %v", err)
 		return "", lntypes.ZeroHash, err
