@@ -163,12 +163,12 @@ func (n *NodeConn) CtxFunc() context.Context {
 // NOTE: this function is a callback to be used by the mailbox package during
 // the mailbox.NewConnData call.
 func (n *NodeConn) onRemoteStatic(key *btcec.PublicKey) error {
+	remoteKey := key.SerializeCompressed()
+
 	ctxt, cancel := context.WithTimeout(
-		context.Background(), time.Second*10,
+		context.Background(), DefaultStoreTimetout,
 	)
 	defer cancel()
-
-	remoteKey := key.SerializeCompressed()
 
 	err := n.store.SetRemotePubKey(
 		ctxt, n.session.PassphraseEntropy, remoteKey,
@@ -226,8 +226,12 @@ func (n *NodeConn) onAuthData(data []byte) error {
 	// microseconds, but we can store the correct one here.
 	n.session.Expiry = &expiry
 
-	ctxb := context.Background()
-	err = n.store.SetExpiry(ctxb, n.session.PassphraseEntropy, expiry)
+	ctxt, cancel := context.WithTimeout(
+		context.Background(), DefaultStoreTimetout,
+	)
+	defer cancel()
+
+	err = n.store.SetExpiry(ctxt, n.session.PassphraseEntropy, expiry)
 	if err != nil {
 		log.Errorf("unable to set expiry for session(%x): %w",
 			n.session.PassphraseEntropy, err)
@@ -281,8 +285,11 @@ func (n *NodeConn) newConn(session *Session, opts ...grpc.DialOption) (*conn,
 	}
 	dialOpts = append(dialOpts, opts...)
 
+	ctxt, cancelT := context.WithTimeout(ctxc, DefaultConnectionTimetout)
+	defer cancelT()
+
 	grpcClient, err := grpc.DialContext(
-		ctxc, session.MailboxAddr, dialOpts...,
+		ctxt, session.MailboxAddr, dialOpts...,
 	)
 	if err != nil {
 		cancel()

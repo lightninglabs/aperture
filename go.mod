@@ -1,6 +1,6 @@
 module github.com/lightninglabs/aperture
 
-go 1.19
+go 1.21
 
 require (
 	github.com/btcsuite/btcd v0.23.5-0.20230125025938-be056b0a0b2f
@@ -18,7 +18,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/lib/pq v1.10.7
-	github.com/lightninglabs/lightning-node-connect v0.2.5-alpha
+	github.com/lightninglabs/lightning-node-connect v0.3.0-alpha
 	github.com/lightninglabs/lightning-node-connect/hashmailrpc v1.0.2
 	github.com/lightninglabs/lndclient v0.16.0-10
 	github.com/lightningnetwork/lnd v0.16.0-beta
