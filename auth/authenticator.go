@@ -75,8 +75,8 @@ func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool
 // complete.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request,
-	serviceName string, servicePrice int64) (http.Header, error) {
+func (l *LsatAuthenticator) FreshChallengeHeader(serviceName string,
+	servicePrice int64) (http.Header, error) {
 
 	service := lsat.Service{
 		Name:  serviceName,
@@ -97,7 +97,7 @@ func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request,
 
 	str := fmt.Sprintf("LSAT macaroon=\"%s\", invoice=\"%s\"",
 		base64.StdEncoding.EncodeToString(macBytes), paymentRequest)
-	header := r.Header
+	header := http.Header{}
 	header.Set("WWW-Authenticate", str)
 
 	log.Debugf("Created new challenge header: [%s]", str)

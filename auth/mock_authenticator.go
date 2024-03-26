@@ -31,10 +31,10 @@ func (a MockAuthenticator) Accept(header *http.Header, _ string) bool {
 
 // FreshChallengeHeader returns a header containing a challenge for the user to
 // complete.
-func (a MockAuthenticator) FreshChallengeHeader(r *http.Request,
-	_ string, _ int64) (http.Header, error) {
+func (a MockAuthenticator) FreshChallengeHeader(string, int64) (http.Header,
+	error) {
 
-	header := r.Header
+	header := http.Header{}
 	header.Set(
 		"WWW-Authenticate", "LSAT macaroon=\"AGIAJEemVQUTEyNCR0exk7ek9"+
 			"0Cg==\", invoice=\"lnbc1500n1pw5kjhmpp5fu6xhthlt2vucm"+
