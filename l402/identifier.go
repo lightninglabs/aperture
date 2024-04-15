@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"encoding/binary"
@@ -11,14 +11,14 @@ import (
 )
 
 const (
-	// LatestVersion is the latest version used for minting new LSATs.
+	// LatestVersion is the latest version used for minting new L402s.
 	LatestVersion = 0
 
-	// SecretSize is the size in bytes of a LSAT's secret, also known as
+	// SecretSize is the size in bytes of a L402's secret, also known as
 	// the root key of the macaroon.
 	SecretSize = 32
 
-	// TokenIDSize is the size in bytes of an LSAT's ID encoded in its
+	// TokenIDSize is the size in bytes of an L402's ID encoded in its
 	// macaroon identifier.
 	TokenIDSize = 32
 )
@@ -29,11 +29,11 @@ var (
 	byteOrder = binary.BigEndian
 
 	// ErrUnknownVersion is an error returned when attempting to decode an
-	// LSAT identifier with an unknown version.
-	ErrUnknownVersion = errors.New("unknown LSAT version")
+	// L402 identifier with an unknown version.
+	ErrUnknownVersion = errors.New("unknown L402 version")
 )
 
-// TokenID is the type that stores the token identifier of an LSAT token.
+// TokenID is the type that stores the token identifier of an L402 token.
 type TokenID [TokenIDSize]byte
 
 // String returns the hex encoded representation of the token ID as a string.
@@ -58,24 +58,24 @@ func MakeIDFromString(newID string) (TokenID, error) {
 	return id, nil
 }
 
-// Identifier contains the static identifying details of an LSAT. This is
-// intended to be used as the identifier of the macaroon within an LSAT.
+// Identifier contains the static identifying details of an L402. This is
+// intended to be used as the identifier of the macaroon within an L402.
 type Identifier struct {
-	// Version is the version of an LSAT. Having a version allows us to
+	// Version is the version of an L402. Having a version allows us to
 	// introduce new fields to the identifier in a backwards-compatible
 	// manner.
 	Version uint16
 
-	// PaymentHash is the payment hash linked to an LSAT. Verification of
-	// an LSAT depends on a valid payment, which is enforced by ensuring a
+	// PaymentHash is the payment hash linked to an L402. Verification of
+	// an L402 depends on a valid payment, which is enforced by ensuring a
 	// preimage is provided that hashes to our payment hash.
 	PaymentHash lntypes.Hash
 
-	// TokenID is the unique identifier of an LSAT.
+	// TokenID is the unique identifier of an L402.
 	TokenID TokenID
 }
 
-// EncodeIdentifier encodes an LSAT's identifier according to its version.
+// EncodeIdentifier encodes an L402's identifier according to its version.
 func EncodeIdentifier(w io.Writer, id *Identifier) error {
 	if err := binary.Write(w, byteOrder, id.Version); err != nil {
 		return err
@@ -96,7 +96,7 @@ func EncodeIdentifier(w io.Writer, id *Identifier) error {
 	}
 }
 
-// DecodeIdentifier decodes an LSAT's identifier according to its version.
+// DecodeIdentifier decodes an L402's identifier according to its version.
 func DecodeIdentifier(r io.Reader) (*Identifier, error) {
 	var version uint16
 	if err := binary.Read(r, byteOrder, &version); err != nil {

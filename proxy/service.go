@@ -34,8 +34,8 @@ const (
 // Service generically specifies configuration data for backend services to the
 // Aperture proxy.
 type Service struct {
-	// Name is the name of the LSAT-enabled service.
-	Name string `long:"name" description:"Name of the LSAT-enabled service"`
+	// Name is the name of the L402-enabled service.
+	Name string `long:"name" description:"Name of the L402-enabled service"`
 
 	// TLSCertPath is the optional path to the service's TLS certificate.
 	TLSCertPath string `long:"tlscertpath" description:"Path to the service's TLS certificate"`
@@ -75,7 +75,7 @@ type Service struct {
 	// Timeout is an optional value that indicates in how many seconds the
 	// service's caveat should time out relative to the time of creation. So
 	// if a value of 100 is set, then the timeout will be 100 seconds
-	// after creation of the LSAT.
+	// after creation of the L402.
 	Timeout int64 `long:"timeout" description:"An integer value that indicates the number of seconds until the service access expires"`
 
 	// Capabilities is the list of capabilities authorized for the service
@@ -87,9 +87,9 @@ type Service struct {
 	// correspond to the caveat's condition.
 	Constraints map[string]string `long:"constraints" description:"The service constraints to enforce at the base tier"`
 
-	// Price is the custom LSAT value in satoshis to be used for the
+	// Price is the custom L402 value in satoshis to be used for the
 	// service's endpoint.
-	Price int64 `long:"price" description:"Static LSAT value in satoshis to be used for this service"`
+	Price int64 `long:"price" description:"Static L402 value in satoshis to be used for this service"`
 
 	// DynamicPrice holds the config options needed for initialising
 	// the pricer if a gPRC server is to be used for price data.
@@ -99,7 +99,7 @@ type Service struct {
 	// are matched against the path of the URL of a request. If the request
 	// URL matches any of those regular expressions, the call is treated as
 	// if Auth was set to "off". This allows certain RPC methods to not
-	// require an LSAT token. E.g. the path for a gRPC call looks like this:
+	// require an L402 token. E.g. the path for a gRPC call looks like this:
 	// /package_name.ServiceName/MethodName
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
 
@@ -217,7 +217,7 @@ func prepareServices(services []*Service) error {
 		// satoshi is to be used.
 		switch {
 		case service.Price == 0:
-			log.Debugf("Using default LSAT price of %v satoshis for "+
+			log.Debugf("Using default L402 price of %v satoshis for "+
 				"service %s.", defaultServicePrice, service.Name)
 			service.Price = defaultServicePrice
 		case service.Price < 0:

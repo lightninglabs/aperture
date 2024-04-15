@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"os"
@@ -12,7 +12,7 @@ import (
 func TestFileStore(t *testing.T) {
 	t.Parallel()
 
-	tempDirName, err := os.MkdirTemp("", "lsatstore")
+	tempDirName, err := os.MkdirTemp("", "l402store")
 	if err != nil {
 		t.Fatal(err)
 	}

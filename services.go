@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
 )
@@ -13,9 +13,9 @@ import (
 //
 // TODO(wilmer): use etcd instead.
 type staticServiceLimiter struct {
-	capabilities map[lsat.Service]lsat.Caveat
-	constraints  map[lsat.Service][]lsat.Caveat
-	timeouts     map[lsat.Service]lsat.Caveat
+	capabilities map[l402.Service]l402.Caveat
+	constraints  map[l402.Service][]l402.Caveat
+	timeouts     map[l402.Service]l402.Caveat
 }
 
 // A compile-time constraint to ensure staticServiceLimiter implements
@@ -27,30 +27,30 @@ var _ mint.ServiceLimiter = (*staticServiceLimiter)(nil)
 func newStaticServiceLimiter(
 	proxyServices []*proxy.Service) *staticServiceLimiter {
 
-	capabilities := make(map[lsat.Service]lsat.Caveat)
-	constraints := make(map[lsat.Service][]lsat.Caveat)
-	timeouts := make(map[lsat.Service]lsat.Caveat)
+	capabilities := make(map[l402.Service]l402.Caveat)
+	constraints := make(map[l402.Service][]l402.Caveat)
+	timeouts := make(map[l402.Service]l402.Caveat)
 
 	for _, proxyService := range proxyServices {
-		s := lsat.Service{
+		s := l402.Service{
 			Name:  proxyService.Name,
-			Tier:  lsat.BaseTier,
+			Tier:  l402.BaseTier,
 			Price: proxyService.Price,
 		}
 
 		if proxyService.Timeout > 0 {
-			timeouts[s] = lsat.NewTimeoutCaveat(
+			timeouts[s] = l402.NewTimeoutCaveat(
 				proxyService.Name,
 				proxyService.Timeout,
 				time.Now,
 			)
 		}
 
-		capabilities[s] = lsat.NewCapabilitiesCaveat(
+		capabilities[s] = l402.NewCapabilitiesCaveat(
 			proxyService.Name, proxyService.Capabilities,
 		)
 		for cond, value := range proxyService.Constraints {
-			caveat := lsat.Caveat{Condition: cond, Value: value}
+			caveat := l402.Caveat{Condition: cond, Value: value}
 			constraints[s] = append(constraints[s], caveat)
 		}
 	}
@@ -65,9 +65,9 @@ func newStaticServiceLimiter(
 // ServiceCapabilities returns the capabilities caveats for each service. This
 // determines which capabilities of each service can be accessed.
 func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	res := make([]lsat.Caveat, 0, len(services))
+	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		capabilities, ok := l.capabilities[service]
 		if !ok {
@@ -82,9 +82,9 @@ func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 // ServiceConstraints returns the constraints for each service. This enforces
 // additional constraints on a particular service/service capability.
 func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	res := make([]lsat.Caveat, 0, len(services))
+	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		constraints, ok := l.constraints[service]
 		if !ok {
@@ -99,9 +99,9 @@ func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
 // ServiceTimeouts returns the timeout caveat for each service. This enforces
 // an expiration time for service access if enabled.
 func (l *staticServiceLimiter) ServiceTimeouts(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	res := make([]lsat.Caveat, 0, len(services))
+	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		timeout, ok := l.timeouts[service]
 		if !ok {

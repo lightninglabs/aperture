@@ -139,11 +139,11 @@ services:
         # but would not have any effect without additional support added.
         "valid_until": 1682483169
       
-    # a caveat will be added that expires the LSAT after this many seconds,
+    # a caveat will be added that expires the L402 after this many seconds,
     # 31557600 = 1 year.
     timeout: 31557600    
 
-    # The LSAT value in satoshis for the service. It is ignored if
+    # The L402 value in satoshis for the service. It is ignored if
     # dynamicprice.enabled is set to true.
     price: 0
 

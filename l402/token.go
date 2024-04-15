@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"bytes"
@@ -17,9 +17,9 @@ var (
 	zeroPreimage lntypes.Preimage
 )
 
-// Token is the main type to store an LSAT token in.
+// Token is the main type to store an L402 token in.
 type Token struct {
-	// PaymentHash is the hash of the LSAT invoice that needs to be paid.
+	// PaymentHash is the hash of the L402 invoice that needs to be paid.
 	// Knowing the preimage to this hash is seen as proof of payment by the
 	// authentication server.
 	PaymentHash lntypes.Hash
@@ -47,7 +47,7 @@ type Token struct {
 }
 
 // tokenFromChallenge parses the parts that are present in the challenge part
-// of the LSAT auth protocol which is the macaroon and the payment hash.
+// of the L402 auth protocol which is the macaroon and the payment hash.
 func tokenFromChallenge(baseMac []byte, paymentHash *[32]byte) (*Token, error) {
 	// First, validate that the macaroon is valid and can be unmarshaled.
 	mac := &macaroon.Macaroon{}
@@ -92,11 +92,11 @@ func (t *Token) PaidMacaroon() (*macaroon.Macaroon, error) {
 // yet expired.
 func (t *Token) IsValid() bool {
 	// TODO(guggero): Extract and validate from caveat once we add an
-	//  expiration date to the LSAT.
+	//  expiration date to the L402.
 	return true
 }
 
-// isPending returns true if the payment for the LSAT is still in flight and we
+// isPending returns true if the payment for the L402 is still in flight and we
 // haven't received the preimage yet.
 func (t *Token) isPending() bool {
 	return t.Preimage == zeroPreimage

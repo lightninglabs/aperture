@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"errors"
@@ -33,26 +33,26 @@ var (
 		"\"name:tier\"")
 )
 
-// ServiceTier represents the different possible tiers of an LSAT-enabled
+// ServiceTier represents the different possible tiers of an L402-enabled
 // service.
 type ServiceTier uint8
 
 const (
-	// BaseTier is the base tier of an LSAT-enabled service. This tier
-	// should be used for any new LSATs that are not part of a service tier
+	// BaseTier is the base tier of an L402-enabled service. This tier
+	// should be used for any new L402s that are not part of a service tier
 	// upgrade.
 	BaseTier ServiceTier = iota
 )
 
-// Service contains the details of an LSAT-enabled service.
+// Service contains the details of an L402-enabled service.
 type Service struct {
-	// Name is the name of the LSAT-enabled service.
+	// Name is the name of the L402-enabled service.
 	Name string
 
-	// Tier is the tier of the LSAT-enabled service.
+	// Tier is the tier of the L402-enabled service.
 	Tier ServiceTier
 
-	// Price of service LSAT in satoshis.
+	// Price of service L402 in satoshis.
 	Price int64
 }
 

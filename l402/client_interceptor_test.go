@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"context"
@@ -219,7 +219,7 @@ var (
 		},
 		expectLndCall: false,
 		expectToken:   false,
-		expectInterceptErr: "cannot pay for LSAT automatically, cost " +
+		expectInterceptErr: "cannot pay for L402 automatically, cost " +
 			"of 500000 msat exceeds configured max cost of " +
 			"100000 msat",
 		expectBackendCalls:  1,
@@ -262,7 +262,7 @@ func invoker(opts []grpc.CallOption) error {
 	return backendErr
 }
 
-// TestUnaryInterceptor tests that the interceptor can handle LSAT protocol
+// TestUnaryInterceptor tests that the interceptor can handle L402 protocol
 // responses for unary calls and pay the token.
 func TestUnaryInterceptor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -290,7 +290,7 @@ func TestUnaryInterceptor(t *testing.T) {
 	}
 }
 
-// TestStreamInterceptor tests that the interceptor can handle LSAT protocol
+// TestStreamInterceptor tests that the interceptor can handle L402 protocol
 // responses in streams and pay the token.
 func TestStreamInterceptor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)

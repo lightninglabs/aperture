@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"bytes"
@@ -11,11 +11,11 @@ import (
 )
 
 // ServerInterceptor is a gRPC server interceptor that extracts the token ID
-// from the request context if an LSAT is present.
+// from the request context if an L402 is present.
 type ServerInterceptor struct{}
 
 // UnaryInterceptor is an unary gRPC server interceptor that inspects incoming
-// calls for authentication tokens. If an LSAT authentication token is found in
+// calls for authentication tokens. If an L402 authentication token is found in
 // the request, its token ID is extracted and treated as client ID. The
 // extracted ID is then attached to the request context in a format that is easy
 // to extract by request handlers.
@@ -53,7 +53,7 @@ func (w *wrappedStream) Context() context.Context {
 }
 
 // StreamInterceptor is an stream gRPC server interceptor that inspects incoming
-// streams for authentication tokens. If an LSAT authentication token is found
+// streams for authentication tokens. If an L402 authentication token is found
 // in the initial stream establishment request, its token ID is extracted and
 // treated as client ID. The extracted ID is then attached to the request
 // context in a format that is easy to extract by request handlers.
@@ -81,7 +81,7 @@ func (i *ServerInterceptor) StreamInterceptor(srv interface{},
 	return handler(srv, wrappedStream)
 }
 
-// tokenFromContext tries to extract the LSAT from a context.
+// tokenFromContext tries to extract the L402 from a context.
 func tokenFromContext(ctx context.Context) (*TokenID, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -97,7 +97,7 @@ func tokenFromContext(ctx context.Context) (*TokenID, error) {
 		return nil, fmt.Errorf("auth header extraction failed: %v", err)
 	}
 
-	// If there is an LSAT, decode and add it to the context.
+	// If there is an L402, decode and add it to the context.
 	identifier, err := DecodeIdentifier(bytes.NewBuffer(macaroon.Id()))
 	if err != nil {
 		return nil, fmt.Errorf("token ID decoding failed: %v", err)

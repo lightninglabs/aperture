@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
@@ -64,7 +64,7 @@ func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
 // identifier exists in the store. If it exists, its value is compared against
 // the expected secret.
 func assertSecretExists(t *testing.T, store *secretStore, id [sha256.Size]byte,
-	expSecret *[lsat.SecretSize]byte) {
+	expSecret *[l402.SecretSize]byte) {
 
 	t.Helper()
 

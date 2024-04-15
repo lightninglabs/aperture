@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
@@ -20,8 +20,8 @@ var (
 	ErrSecretNotFound = errors.New("secret not found")
 )
 
-// Challenger is an interface used to present requesters of LSATs with a
-// challenge that must be satisfied before an LSAT can be validated. This
+// Challenger is an interface used to present requesters of L402s with a
+// challenge that must be satisfied before an L402 can be validated. This
 // challenge takes the form of a Lightning payment request.
 type Challenger interface {
 	// NewChallenge returns a new challenge in the form of a Lightning
@@ -34,18 +34,18 @@ type Challenger interface {
 	Stop()
 }
 
-// SecretStore is the store responsible for storing LSAT secrets. These secrets
-// are required for proper verification of each minted LSAT.
+// SecretStore is the store responsible for storing L402 secrets. These secrets
+// are required for proper verification of each minted L402.
 type SecretStore interface {
 	// NewSecret creates a new cryptographically random secret which is
 	// keyed by the given hash.
-	NewSecret(context.Context, [sha256.Size]byte) ([lsat.SecretSize]byte,
+	NewSecret(context.Context, [sha256.Size]byte) ([l402.SecretSize]byte,
 		error)
 
 	// GetSecret returns the cryptographically random secret that
 	// corresponds to the given hash. If there is no secret, then
 	// ErrSecretNotFound is returned.
-	GetSecret(context.Context, [sha256.Size]byte) ([lsat.SecretSize]byte,
+	GetSecret(context.Context, [sha256.Size]byte) ([l402.SecretSize]byte,
 		error)
 
 	// RevokeSecret removes the cryptographically random secret that
@@ -55,38 +55,38 @@ type SecretStore interface {
 }
 
 // ServiceLimiter abstracts the source of caveats that should be applied to an
-// LSAT for a particular service.
+// L402 for a particular service.
 type ServiceLimiter interface {
 	// ServiceCapabilities returns the capabilities caveats for each
 	// service. This determines which capabilities of each service can be
 	// accessed.
-	ServiceCapabilities(context.Context, ...lsat.Service) ([]lsat.Caveat,
+	ServiceCapabilities(context.Context, ...l402.Service) ([]l402.Caveat,
 		error)
 
 	// ServiceConstraints returns the constraints for each service. This
 	// enforces additional constraints on a particular service/service
 	// capability.
-	ServiceConstraints(context.Context, ...lsat.Service) ([]lsat.Caveat,
+	ServiceConstraints(context.Context, ...l402.Service) ([]l402.Caveat,
 		error)
 
 	// ServiceTimeouts returns the timeout caveat for each service. This
 	// will determine if and when service access can expire.
-	ServiceTimeouts(context.Context, ...lsat.Service) ([]lsat.Caveat,
+	ServiceTimeouts(context.Context, ...l402.Service) ([]l402.Caveat,
 		error)
 }
 
-// Config packages all of the required dependencies to instantiate a new LSAT
+// Config packages all of the required dependencies to instantiate a new L402
 // mint.
 type Config struct {
-	// Secrets is our source for LSAT secrets which will be used for
+	// Secrets is our source for L402 secrets which will be used for
 	// verification purposes.
 	Secrets SecretStore
 
 	// Challenger is our source of new challenges to present requesters of
-	// an LSAT with.
+	// an L402 with.
 	Challenger Challenger
 
-	// ServiceLimiter provides us with how we should limit a new LSAT based
+	// ServiceLimiter provides us with how we should limit a new L402 based
 	// on its target services.
 	ServiceLimiter ServiceLimiter
 
@@ -94,27 +94,27 @@ type Config struct {
 	Now func() time.Time
 }
 
-// Mint is an entity that is able to mint and verify LSATs for a set of
+// Mint is an entity that is able to mint and verify L402s for a set of
 // services.
 type Mint struct {
 	cfg Config
 }
 
-// New creates a new LSAT mint backed by its given dependencies.
+// New creates a new L402 mint backed by its given dependencies.
 func New(cfg *Config) *Mint {
 	return &Mint{cfg: *cfg}
 }
 
-// MintLSAT mints a new LSAT for the target services.
-func (m *Mint) MintLSAT(ctx context.Context,
-	services ...lsat.Service) (*macaroon.Macaroon, string, error) {
+// MintL402 mints a new L402 for the target services.
+func (m *Mint) MintL402(ctx context.Context,
+	services ...l402.Service) (*macaroon.Macaroon, string, error) {
 
-	// Let the LSAT value as the price of the most expensive of the
+	// Let the L402 value as the price of the most expensive of the
 	// services.
 	price := maximumPrice(services)
 
 	// We'll start by retrieving a new challenge in the form of a Lightning
-	// payment request to present the requester of the LSAT with.
+	// payment request to present the requester of the L402 with.
 	paymentRequest, paymentHash, err := m.cfg.Challenger.NewChallenge(price)
 	if err != nil {
 		return nil, "", err
@@ -122,7 +122,7 @@ func (m *Mint) MintLSAT(ctx context.Context,
 
 	// TODO(wilmer): remove invoice if any of the operations below fail?
 
-	// We can then proceed to mint the LSAT with a unique identifier that is
+	// We can then proceed to mint the L402 with a unique identifier that is
 	// mapped to a unique secret.
 	id, err := createUniqueIdentifier(paymentHash)
 	if err != nil {
@@ -143,8 +143,8 @@ func (m *Mint) MintLSAT(ctx context.Context,
 	}
 
 	// Include any restrictions that should be immediately applied to the
-	// LSAT.
-	var caveats []lsat.Caveat
+	// L402.
+	var caveats []l402.Caveat
 	if len(services) > 0 {
 		var err error
 		caveats, err = m.caveatsForServices(ctx, services...)
@@ -154,7 +154,7 @@ func (m *Mint) MintLSAT(ctx context.Context,
 			return nil, "", err
 		}
 	}
-	if err := lsat.AddFirstPartyCaveats(mac, caveats...); err != nil {
+	if err := l402.AddFirstPartyCaveats(mac, caveats...); err != nil {
 		// Attempt to revoke the secret to save space.
 		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
 		return nil, "", err
@@ -165,7 +165,7 @@ func (m *Mint) MintLSAT(ctx context.Context,
 
 // maximumPrice determines the necessary price to use for a collection
 // of services.
-func maximumPrice(services []lsat.Service) int64 {
+func maximumPrice(services []l402.Service) int64 {
 	var max int64
 
 	for _, service := range services {
@@ -177,7 +177,7 @@ func maximumPrice(services []lsat.Service) int64 {
 	return max
 }
 
-// createUniqueIdentifier creates a new LSAT identifier bound to a payment hash
+// createUniqueIdentifier creates a new L402 identifier bound to a payment hash
 // and a randomly generated ID.
 func createUniqueIdentifier(paymentHash lntypes.Hash) ([]byte, error) {
 	tokenID, err := generateTokenID()
@@ -185,32 +185,32 @@ func createUniqueIdentifier(paymentHash lntypes.Hash) ([]byte, error) {
 		return nil, err
 	}
 
-	id := &lsat.Identifier{
-		Version:     lsat.LatestVersion,
+	id := &l402.Identifier{
+		Version:     l402.LatestVersion,
 		PaymentHash: paymentHash,
 		TokenID:     tokenID,
 	}
 
 	var buf bytes.Buffer
-	if err := lsat.EncodeIdentifier(&buf, id); err != nil {
+	if err := l402.EncodeIdentifier(&buf, id); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-// generateTokenID generates a new random LSAT ID.
-func generateTokenID() ([lsat.TokenIDSize]byte, error) {
-	var tokenID [lsat.TokenIDSize]byte
+// generateTokenID generates a new random L402 ID.
+func generateTokenID() ([l402.TokenIDSize]byte, error) {
+	var tokenID [l402.TokenIDSize]byte
 	_, err := rand.Read(tokenID[:])
 	return tokenID, err
 }
 
 // caveatsForServices returns all of the caveats that should be applied to an
-// LSAT for the target services.
+// L402 for the target services.
 func (m *Mint) caveatsForServices(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	servicesCaveat, err := lsat.NewServicesCaveat(services...)
+	servicesCaveat, err := l402.NewServicesCaveat(services...)
 	if err != nil {
 		return nil, err
 	}
@@ -231,34 +231,34 @@ func (m *Mint) caveatsForServices(ctx context.Context,
 		return nil, err
 	}
 
-	caveats := []lsat.Caveat{servicesCaveat}
+	caveats := []l402.Caveat{servicesCaveat}
 	caveats = append(caveats, capabilities...)
 	caveats = append(caveats, constraints...)
 	caveats = append(caveats, timeouts...)
 	return caveats, nil
 }
 
-// VerificationParams holds all of the requirements to properly verify an LSAT.
+// VerificationParams holds all of the requirements to properly verify an L402.
 type VerificationParams struct {
-	// Macaroon is the macaroon as part of the LSAT we'll attempt to verify.
+	// Macaroon is the macaroon as part of the L402 we'll attempt to verify.
 	Macaroon *macaroon.Macaroon
 
-	// Preimage is the preimage that should correspond to the LSAT's payment
+	// Preimage is the preimage that should correspond to the L402's payment
 	// hash.
 	Preimage lntypes.Preimage
 
-	// TargetService is the target service a user of an LSAT is attempting
+	// TargetService is the target service a user of an L402 is attempting
 	// to access.
 	TargetService string
 }
 
-// VerifyLSAT attempts to verify an LSAT with the given parameters.
-func (m *Mint) VerifyLSAT(ctx context.Context,
+// VerifyL402 attempts to verify an L402 with the given parameters.
+func (m *Mint) VerifyL402(ctx context.Context,
 	params *VerificationParams) error {
 
 	// We'll first perform a quick check to determine if a valid preimage
 	// was provided.
-	id, err := lsat.DecodeIdentifier(bytes.NewReader(params.Macaroon.Id()))
+	id, err := l402.DecodeIdentifier(bytes.NewReader(params.Macaroon.Id()))
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,7 @@ func (m *Mint) VerifyLSAT(ctx context.Context,
 			id.PaymentHash)
 	}
 
-	// If there was, then we'll ensure the LSAT was minted by us.
+	// If there was, then we'll ensure the L402 was minted by us.
 	secret, err := m.cfg.Secrets.GetSecret(
 		ctx, sha256.Sum256(params.Macaroon.Id()),
 	)
@@ -279,21 +279,21 @@ func (m *Mint) VerifyLSAT(ctx context.Context,
 		return err
 	}
 
-	// With the LSAT verified, we'll now inspect its caveats to ensure the
+	// With the L402 verified, we'll now inspect its caveats to ensure the
 	// target service is authorized.
-	caveats := make([]lsat.Caveat, 0, len(rawCaveats))
+	caveats := make([]l402.Caveat, 0, len(rawCaveats))
 	for _, rawCaveat := range rawCaveats {
-		// LSATs can contain third-party caveats that we're not aware
+		// L402s can contain third-party caveats that we're not aware
 		// of, so just skip those.
-		caveat, err := lsat.DecodeCaveat(rawCaveat)
+		caveat, err := l402.DecodeCaveat(rawCaveat)
 		if err != nil {
 			continue
 		}
 		caveats = append(caveats, caveat)
 	}
-	return lsat.VerifyCaveats(
+	return l402.VerifyCaveats(
 		caveats,
-		lsat.NewServicesSatisfier(params.TargetService),
-		lsat.NewTimeoutSatisfier(params.TargetService, m.cfg.Now),
+		l402.NewServicesSatisfier(params.TargetService),
+		l402.NewTimeoutSatisfier(params.TargetService, m.cfg.Now),
 	)
 }

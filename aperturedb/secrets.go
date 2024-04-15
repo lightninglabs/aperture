@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/lightninglabs/aperture/aperturedb/sqlc"
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightningnetwork/lnd/clock"
 )
@@ -81,11 +81,11 @@ func NewSecretsStore(db BatchedSecretsDB) *SecretsStore {
 // NewSecret creates a new cryptographically random secret which is
 // keyed by the given hash.
 func (s *SecretsStore) NewSecret(ctx context.Context,
-	hash [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
+	hash [sha256.Size]byte) ([l402.SecretSize]byte, error) {
 
-	var secret [lsat.SecretSize]byte
+	var secret [l402.SecretSize]byte
 	if _, err := rand.Read(secret[:]); err != nil {
-		return [lsat.SecretSize]byte{}, err
+		return [l402.SecretSize]byte{}, err
 	}
 
 	var writeTxOpts SecretsDBTxOptions
@@ -103,7 +103,7 @@ func (s *SecretsStore) NewSecret(ctx context.Context,
 	})
 
 	if err != nil {
-		return [lsat.SecretSize]byte{}, fmt.Errorf("unable to insert "+
+		return [l402.SecretSize]byte{}, fmt.Errorf("unable to insert "+
 			"new secret for hash(%x): %w", hash, err)
 	}
 
@@ -114,9 +114,9 @@ func (s *SecretsStore) NewSecret(ctx context.Context,
 // corresponds to the given hash. If there is no secret, then
 // ErrSecretNotFound is returned.
 func (s *SecretsStore) GetSecret(ctx context.Context,
-	hash [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
+	hash [sha256.Size]byte) ([l402.SecretSize]byte, error) {
 
-	var secret [lsat.SecretSize]byte
+	var secret [l402.SecretSize]byte
 	readOpts := NewSecretsDBReadTx()
 	err := s.db.ExecTx(ctx, &readOpts, func(db SecretsDB) error {
 		secretRow, err := db.GetSecretByHash(ctx, hash[:])
@@ -134,7 +134,7 @@ func (s *SecretsStore) GetSecret(ctx context.Context,
 	})
 
 	if err != nil {
-		return [lsat.SecretSize]byte{}, fmt.Errorf("unable to get "+
+		return [l402.SecretSize]byte{}, fmt.Errorf("unable to get "+
 			"secret for hash(%x): %w", hash, err)
 	}
 

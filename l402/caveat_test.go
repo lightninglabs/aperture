@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"errors"
@@ -79,7 +79,7 @@ func TestHasCaveat(t *testing.T) {
 		t.Fatal("found unexpected caveat with unknown condition")
 	}
 
-	// Add two caveats, one in a valid LSAT format and another invalid.
+	// Add two caveats, one in a valid L402 format and another invalid.
 	// We'll test that we're still able to determine the macaroon contains
 	// the valid caveat even though there is one that is invalid.
 	invalidCaveat := []byte("invalid")

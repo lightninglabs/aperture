@@ -6,28 +6,28 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightningnetwork/lnd/lnrpc"
 )
 
-// LsatAuthenticator is an authenticator that uses the LSAT protocol to
+// L402Authenticator is an authenticator that uses the L402 protocol to
 // authenticate requests.
-type LsatAuthenticator struct {
+type L402Authenticator struct {
 	minter  Minter
 	checker InvoiceChecker
 }
 
-// A compile time flag to ensure the LsatAuthenticator satisfies the
+// A compile time flag to ensure the L402Authenticator satisfies the
 // Authenticator interface.
-var _ Authenticator = (*LsatAuthenticator)(nil)
+var _ Authenticator = (*L402Authenticator)(nil)
 
-// NewLsatAuthenticator creates a new authenticator that authenticates requests
-// based on LSAT tokens.
-func NewLsatAuthenticator(minter Minter,
-	checker InvoiceChecker) *LsatAuthenticator {
+// NewL402Authenticator creates a new authenticator that authenticates requests
+// based on L402 tokens.
+func NewL402Authenticator(minter Minter,
+	checker InvoiceChecker) *L402Authenticator {
 
-	return &LsatAuthenticator{
+	return &L402Authenticator{
 		minter:  minter,
 		checker: checker,
 	}
@@ -37,11 +37,11 @@ func NewLsatAuthenticator(minter Minter,
 // to a given backend service.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool {
+func (l *L402Authenticator) Accept(header *http.Header, serviceName string) bool {
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
-	mac, preimage, err := lsat.FromHeader(header)
+	mac, preimage, err := l402.FromHeader(header)
 	if err != nil {
 		log.Debugf("Deny: %v", err)
 		return false
@@ -52,9 +52,9 @@ func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool
 		Preimage:      preimage,
 		TargetService: serviceName,
 	}
-	err = l.minter.VerifyLSAT(context.Background(), verificationParams)
+	err = l.minter.VerifyL402(context.Background(), verificationParams)
 	if err != nil {
-		log.Debugf("Deny: LSAT validation failed: %v", err)
+		log.Debugf("Deny: L402 validation failed: %v", err)
 		return false
 	}
 
@@ -75,24 +75,24 @@ func (l *LsatAuthenticator) Accept(header *http.Header, serviceName string) bool
 // complete.
 //
 // NOTE: This is part of the Authenticator interface.
-func (l *LsatAuthenticator) FreshChallengeHeader(r *http.Request,
+func (l *L402Authenticator) FreshChallengeHeader(r *http.Request,
 	serviceName string, servicePrice int64) (http.Header, error) {
 
-	service := lsat.Service{
+	service := l402.Service{
 		Name:  serviceName,
-		Tier:  lsat.BaseTier,
+		Tier:  l402.BaseTier,
 		Price: servicePrice,
 	}
-	mac, paymentRequest, err := l.minter.MintLSAT(
+	mac, paymentRequest, err := l.minter.MintL402(
 		context.Background(), service,
 	)
 	if err != nil {
-		log.Errorf("Error minting LSAT: %v", err)
+		log.Errorf("Error minting L402: %v", err)
 		return nil, err
 	}
 	macBytes, err := mac.MarshalBinary()
 	if err != nil {
-		log.Errorf("Error serializing LSAT: %v", err)
+		log.Errorf("Error serializing L402: %v", err)
 	}
 
 	str := fmt.Sprintf("LSAT macaroon=\"%s\", invoice=\"%s\"",

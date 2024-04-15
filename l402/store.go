@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"errors"
@@ -15,11 +15,11 @@ var (
 
 	// storeFileName is the name of the file where we store the final,
 	// valid, token to.
-	storeFileName = "lsat.token"
+	storeFileName = "l402.token"
 
 	// storeFileNamePending is the name of the file where we store a pending
 	// token until it was successfully paid for.
-	storeFileNamePending = "lsat.token.pending"
+	storeFileNamePending = "l402.token.pending"
 
 	// errNoReplace is the error that is returned if a new token is
 	// being written to a store that already contains a paid token.
@@ -27,7 +27,7 @@ var (
 		"new token. " + manualRetryHint)
 )
 
-// Store is an interface that allows users to store and retrieve an LSAT token.
+// Store is an interface that allows users to store and retrieve an L402 token.
 type Store interface {
 	// CurrentToken returns the token that is currently contained in the
 	// store or an error if there is none.

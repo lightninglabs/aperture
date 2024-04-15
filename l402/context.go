@@ -1,10 +1,10 @@
-package lsat
+package l402
 
 import (
 	"context"
 )
 
-// ContextKey is the type that we use to identify LSAT specific values in the
+// ContextKey is the type that we use to identify L402 specific values in the
 // request context. We wrap the string inside a struct because of this comment
 // in the context API: "The provided key must be comparable and should not be of
 // type string or any other built-in type to avoid collisions between packages

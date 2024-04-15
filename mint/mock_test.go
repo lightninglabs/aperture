@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
@@ -41,15 +41,15 @@ func (d *mockChallenger) NewChallenge(price int64) (string, lntypes.Hash,
 }
 
 type mockSecretStore struct {
-	secrets map[[sha256.Size]byte][lsat.SecretSize]byte
+	secrets map[[sha256.Size]byte][l402.SecretSize]byte
 }
 
 var _ SecretStore = (*mockSecretStore)(nil)
 
 func (s *mockSecretStore) NewSecret(ctx context.Context,
-	id [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
+	id [sha256.Size]byte) ([l402.SecretSize]byte, error) {
 
-	var secret [lsat.SecretSize]byte
+	var secret [l402.SecretSize]byte
 	if _, err := rand.Read(secret[:]); err != nil {
 		return secret, err
 	}
@@ -58,7 +58,7 @@ func (s *mockSecretStore) NewSecret(ctx context.Context,
 }
 
 func (s *mockSecretStore) GetSecret(ctx context.Context,
-	id [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
+	id [sha256.Size]byte) ([l402.SecretSize]byte, error) {
 
 	secret, ok := s.secrets[id]
 	if !ok {
@@ -76,30 +76,30 @@ func (s *mockSecretStore) RevokeSecret(ctx context.Context,
 
 func newMockSecretStore() *mockSecretStore {
 	return &mockSecretStore{
-		secrets: make(map[[sha256.Size]byte][lsat.SecretSize]byte),
+		secrets: make(map[[sha256.Size]byte][l402.SecretSize]byte),
 	}
 }
 
 type mockServiceLimiter struct {
-	capabilities map[lsat.Service]lsat.Caveat
-	constraints  map[lsat.Service][]lsat.Caveat
-	timeouts     map[lsat.Service]lsat.Caveat
+	capabilities map[l402.Service]l402.Caveat
+	constraints  map[l402.Service][]l402.Caveat
+	timeouts     map[l402.Service]l402.Caveat
 }
 
 var _ ServiceLimiter = (*mockServiceLimiter)(nil)
 
 func newMockServiceLimiter() *mockServiceLimiter {
 	return &mockServiceLimiter{
-		capabilities: make(map[lsat.Service]lsat.Caveat),
-		constraints:  make(map[lsat.Service][]lsat.Caveat),
-		timeouts:     make(map[lsat.Service]lsat.Caveat),
+		capabilities: make(map[l402.Service]l402.Caveat),
+		constraints:  make(map[l402.Service][]l402.Caveat),
+		timeouts:     make(map[l402.Service]l402.Caveat),
 	}
 }
 
 func (l *mockServiceLimiter) ServiceCapabilities(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	res := make([]lsat.Caveat, 0, len(services))
+	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		capabilities, ok := l.capabilities[service]
 		if !ok {
@@ -111,9 +111,9 @@ func (l *mockServiceLimiter) ServiceCapabilities(ctx context.Context,
 }
 
 func (l *mockServiceLimiter) ServiceConstraints(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	res := make([]lsat.Caveat, 0, len(services))
+	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		constraints, ok := l.constraints[service]
 		if !ok {
@@ -125,9 +125,9 @@ func (l *mockServiceLimiter) ServiceConstraints(ctx context.Context,
 }
 
 func (l *mockServiceLimiter) ServiceTimeouts(ctx context.Context,
-	services ...lsat.Service) ([]lsat.Caveat, error) {
+	services ...l402.Service) ([]l402.Caveat, error) {
 
-	res := make([]lsat.Caveat, 0, len(services))
+	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		timeouts, ok := l.timeouts[service]
 		if !ok {

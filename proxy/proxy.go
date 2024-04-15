@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"google.golang.org/grpc/codes"
 )
 
@@ -300,12 +300,12 @@ func (p *Proxy) director(req *http.Request) {
 
 		// Make sure we always forward the authorization in the correct/
 		// default format so the backend knows what to do with it.
-		mac, preimage, err := lsat.FromHeader(&req.Header)
+		mac, preimage, err := l402.FromHeader(&req.Header)
 		if err == nil {
 			// It could be that there is no auth information because
 			// none is needed for this particular request. So we
 			// only continue if no error is set.
-			err := lsat.SetHeader(&req.Header, mac, preimage)
+			err := l402.SetHeader(&req.Header, mac, preimage)
 			if err != nil {
 				log.Errorf("could not set header: %v", err)
 			}
