@@ -154,7 +154,7 @@ func runHTTPTest(t *testing.T, tc *testCase) {
 	require.Equal(t, "402 Payment Required", resp.Status)
 
 	authHeader := resp.Header.Get("Www-Authenticate")
-	require.Contains(t, authHeader, "LSAT")
+	require.Regexp(t, "(LSAT|L402)", authHeader)
 	_ = resp.Body.Close()
 
 	// Make sure that if we query an URL that is on the whitelist, we don't
@@ -317,10 +317,10 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 		Header: map[string][]string{},
 	}, "", 0)
 	capturedHeader := captureMetadata.Get("WWW-Authenticate")
-	require.Len(t, capturedHeader, 1)
+	require.Len(t, capturedHeader, 2)
 	require.Equal(
-		t, expectedHeaderContent.Get("WWW-Authenticate"),
-		capturedHeader[0],
+		t, expectedHeaderContent.Values("WWW-Authenticate"),
+		capturedHeader,
 	)
 
 	// Make sure that if we query an URL that is on the whitelist, we don't

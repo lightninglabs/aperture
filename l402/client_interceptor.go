@@ -66,7 +66,7 @@ var (
 	// authHeaderRegex is the regular expression the payment challenge must
 	// match for us to be able to parse the macaroon and invoice.
 	authHeaderRegex = regexp.MustCompile(
-		"LSAT macaroon=\"(.*?)\", invoice=\"(.*?)\"",
+		"(LSAT|L402) macaroon=\"(.*?)\", invoice=\"(.*?)\"",
 	)
 
 	// errPaymentFailedTerminally is signaled by the payment tracking method
@@ -338,19 +338,26 @@ func (i *ClientInterceptor) payL402Token(ctx context.Context, md *metadata.MD) (
 
 	// First parse the authentication header that was stored in the
 	// metadata.
-	authHeader := md.Get(AuthHeader)
-	if len(authHeader) == 0 {
+	authHeaders := md.Get(AuthHeader)
+	if len(authHeaders) == 0 {
 		return nil, fmt.Errorf("auth header not found in response")
 	}
-	matches := authHeaderRegex.FindStringSubmatch(authHeader[0])
-	if len(matches) != 3 {
+	// Find the first WWW-Authenticate header, matching authHeaderRegex.
+	var matches []string
+	for _, authHeader := range authHeaders {
+		matches = authHeaderRegex.FindStringSubmatch(authHeader)
+		if len(matches) == 4 {
+			break
+		}
+	}
+	if len(matches) != 4 {
 		return nil, fmt.Errorf("invalid auth header "+
-			"format: %s", authHeader[0])
+			"format: %s", authHeaders[0])
 	}
 
 	// Decode the base64 macaroon and the invoice so we can store the
 	// information in our store later.
-	macBase64, invoiceStr := matches[1], matches[2]
+	macBase64, invoiceStr := matches[2], matches[3]
 	macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 	if err != nil {
 		return nil, fmt.Errorf("base64 decode of macaroon failed: "+
