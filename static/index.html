@@ -83,7 +83,7 @@
       }
     });
   }
-  
+
   function payInvoice() {
     if (window.WebLN) {
       WebLN.requestProvider()
@@ -102,7 +102,7 @@
       alert("Joule not installed or failed to load WebLN library.");
     }
   }
-  
+
   function addPreimage() {
     let preimage = prompt("Enter hex encoded preimage");
     authorization = "LSAT " + lastMacaroon + ":" + preimage;
@@ -112,7 +112,7 @@
 
   $(document).ready(() => {
     const host = document.location.host;
-    
+
     $('#reload-lnd').on('click', () => loadJSON('//alice.' + host + '/v1/getinfo', $('#getinfo-lnd'))).click();
     $('#reload-bos').on('click', () => loadJSON('//' + host + '/availability/v1/btc.json', $('#bos-scores'))).click();
     $('#pay').on('click', () => payInvoice());
