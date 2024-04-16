@@ -103,9 +103,12 @@ func (l *L402Authenticator) FreshChallengeHeader(r *http.Request,
 		log.Errorf("Error serializing L402: %v", err)
 	}
 
+	header := http.Header{
+		"Content-Type": []string{"application/grpc"},
+	}
+
 	str := fmt.Sprintf("macaroon=\"%s\", invoice=\"%s\"",
 		base64.StdEncoding.EncodeToString(macBytes), paymentRequest)
-	header := r.Header
 
 	// Old loop software (via ClientInterceptor code of aperture) looks
 	// for "LSAT" in the first instance of WWW-Authenticate header, so

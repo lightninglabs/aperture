@@ -34,7 +34,10 @@ func (a MockAuthenticator) Accept(header *http.Header, _ string) bool {
 func (a MockAuthenticator) FreshChallengeHeader(r *http.Request,
 	_ string, _ int64) (http.Header, error) {
 
-	header := r.Header
+	header := http.Header{
+		"Content-Type": []string{"application/grpc"},
+	}
+
 	str := "macaroon=\"AGIAJEemVQUTEyNCR0exk7ek9" +
 		"0Cg==\", invoice=\"lnbc1500n1pw5kjhmpp5fu6xhthlt2vucm" +
 		"zkx6c7wtlh2r625r30cyjsfqhu8rsx4xpz5lwqdpa2fjkzep6yptk" +
@@ -44,5 +47,6 @@ func (a MockAuthenticator) FreshChallengeHeader(r *http.Request,
 		"y3ngqjcym5a\""
 	header.Set("WWW-Authenticate", lsatAuthScheme+" "+str)
 	header.Add("WWW-Authenticate", l402AuthScheme+" "+str)
+
 	return header, nil
 }

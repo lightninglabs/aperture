@@ -398,8 +398,6 @@ func addCorsHeaders(header http.Header) {
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 	serviceName string, servicePrice int64) {
 
-	addCorsHeaders(r.Header)
-
 	header, err := p.authenticator.FreshChallengeHeader(
 		r, serviceName, servicePrice,
 	)
@@ -411,6 +409,8 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 		)
 		return
 	}
+
+	addCorsHeaders(header)
 
 	for name, value := range header {
 		w.Header().Set(name, value[0])
