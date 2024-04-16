@@ -311,7 +311,7 @@ func (a *Aperture) Start(errChan chan error) error {
 		authCfg := a.cfg.Authenticator
 		genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
 			return &lnrpc.Invoice{
-				Memo:  "LSAT",
+				Memo:  "L402",
 				Value: price,
 			}, nil
 		}
