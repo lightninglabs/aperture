@@ -53,10 +53,10 @@
   let lastInvoice = null;
 
   function parseInvoice(invoice) {
-    const rex = /LSAT macaroon="(.*?)", invoice="(.*?)"/i;
+    const rex = /(LSAT|L402) macaroon="(.*?)", invoice="(.*?)"/i;
     parts = invoice.match(rex);
-    lastMacaroon = parts[1];
-    lastInvoice = parts[2];
+    lastMacaroon = parts[2];
+    lastInvoice = parts[3];
   }
 
   function loadJSON(url, elem) {
@@ -90,7 +90,7 @@
         .then((provider) => {
           provider.sendPayment(lastInvoice)
             .then((response) => {
-              authorization = "LSAT " + lastMacaroon + ":" + response.preimage;
+              authorization = "L402 " + lastMacaroon + ":" + response.preimage;
               $('#reload-bos').click();
               $('#reload-lnd').click();
             });
@@ -105,7 +105,7 @@
 
   function addPreimage() {
     let preimage = prompt("Enter hex encoded preimage");
-    authorization = "LSAT " + lastMacaroon + ":" + preimage;
+    authorization = "L402 " + lastMacaroon + ":" + preimage;
     $('#reload-bos').click();
     $('#reload-lnd').click();
   }
