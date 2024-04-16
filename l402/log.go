@@ -6,7 +6,7 @@ import (
 )
 
 // Subsystem defines the sub system name of this package.
-const Subsystem = "LSAT"
+const Subsystem = "L402"
 
 // log is a logger that is initialized with no output filters.  This
 // means the package will not perform any logging by default until the caller
