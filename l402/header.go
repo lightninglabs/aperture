@@ -56,9 +56,6 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		for _, authHeader := range authHeaders {
 			log.Debugf("Trying to authorize with header value "+
 				"[%s].", authHeader)
-			if !authRegex.MatchString(authHeader) {
-				continue
-			}
 			matches = authRegex.FindStringSubmatch(authHeader)
 			if len(matches) != 4 {
 				continue
