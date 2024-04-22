@@ -69,6 +69,37 @@ func NewFileStore(storeDir string) (*FileStore, error) {
 		}
 	}
 
+	// If token file and pending token file exist under old names and
+	// do not exist under current names, rename them.
+	renames := []struct {
+		oldName, newName string
+	}{
+		{
+			oldName: "lsat.token",
+			newName: storeFileName,
+		},
+		{
+			oldName: "lsat.token.pending",
+			newName: storeFileNamePending,
+		},
+	}
+	for _, rename := range renames {
+		oldPath := filepath.Join(storeDir, rename.oldName)
+		newPath := filepath.Join(storeDir, rename.newName)
+		if _, err := os.Stat(newPath); !errors.Is(err, os.ErrNotExist) {
+			// New file already exists, skipping.
+			continue
+		}
+		if _, err := os.Stat(oldPath); err != nil {
+			// Failed to stat old file, skipping.
+			continue
+		}
+		if err := os.Rename(oldPath, newPath); err != nil {
+			return nil, fmt.Errorf("failed to rename %s to %s: %w",
+				oldPath, newPath, err)
+		}
+	}
+
 	return &FileStore{
 		fileName:        filepath.Join(storeDir, storeFileName),
 		fileNamePending: filepath.Join(storeDir, storeFileNamePending),
