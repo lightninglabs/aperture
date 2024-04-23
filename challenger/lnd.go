@@ -13,7 +13,7 @@ import (
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
-// LndChallenger is a challenger that uses an lnd backend to create new LSAT
+// LndChallenger is a challenger that uses an lnd backend to create new L402
 // payment challenges.
 type LndChallenger struct {
 	client        InvoiceClient
@@ -247,7 +247,7 @@ func (l *LndChallenger) Stop() {
 	l.wg.Wait()
 }
 
-// NewChallenge creates a new LSAT payment challenge, returning a payment
+// NewChallenge creates a new L402 payment challenge, returning a payment
 // request (invoice) and the corresponding payment hash.
 //
 // NOTE: This is part of the mint.Challenger interface.

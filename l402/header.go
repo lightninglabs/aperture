@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"encoding/base64"
@@ -14,27 +14,29 @@ import (
 
 const (
 	// HeaderAuthorization is the HTTP header field name that is used to
-	// send the LSAT by REST clients.
+	// send the L402 by REST clients.
 	HeaderAuthorization = "Authorization"
 
 	// HeaderMacaroonMD is the HTTP header field name that is used to send
-	// the LSAT by certain REST and gRPC clients.
+	// the L402 by certain REST and gRPC clients.
 	HeaderMacaroonMD = "Grpc-Metadata-Macaroon"
 
 	// HeaderMacaroon is the HTTP header field name that is used to send the
-	// LSAT by our own gRPC clients.
+	// L402 by our own gRPC clients.
 	HeaderMacaroon = "Macaroon"
 )
 
 var (
-	authRegex  = regexp.MustCompile("LSAT (.*?):([a-f0-9]{64})")
-	authFormat = "LSAT %s:%s"
+	authRegex        = regexp.MustCompile("(LSAT|L402) (.*?):([a-f0-9]{64})")
+	authFormatLegacy = "LSAT %s:%s"
+	authFormat       = "L402 %s:%s"
 )
 
 // FromHeader tries to extract authentication information from HTTP headers.
-// There are two supported formats that can be sent in three different header
+// There are two supported formats that can be sent in four different header
 // fields:
-//  1. Authorization: LSAT <macBase64>:<preimageHex>
+//  0. Authorization: LSAT <macBase64>:<preimageHex>
+//  1. Authorization: L402 <macBase64>:<preimageHex>
 //  2. Grpc-Metadata-Macaroon: <macHex>
 //  3. Macaroon: <macHex>
 //
@@ -49,21 +51,24 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 	case header.Get(HeaderAuthorization) != "":
 		// Parse the content of the header field and check that it is in
 		// the correct format.
-		authHeader = header.Get(HeaderAuthorization)
-		log.Debugf("Trying to authorize with header value [%s].",
-			authHeader)
-		if !authRegex.MatchString(authHeader) {
-			return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
-				"auth header format: %s", authHeader)
+		var matches []string
+		authHeaders := header.Values(HeaderAuthorization)
+		for _, authHeader := range authHeaders {
+			log.Debugf("Trying to authorize with header value "+
+				"[%s].", authHeader)
+			matches = authRegex.FindStringSubmatch(authHeader)
+			if len(matches) != 4 {
+				continue
+			}
 		}
-		matches := authRegex.FindStringSubmatch(authHeader)
-		if len(matches) != 3 {
+
+		if len(matches) != 4 {
 			return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
 				"auth header format: %s", authHeader)
 		}
 
 		// Decode the content of the two parts of the header value.
-		macBase64, preimageHex := matches[1], matches[2]
+		macBase64, preimageHex := matches[2], matches[3]
 		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 		if err != nil {
 			return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
@@ -126,7 +131,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 }
 
 // SetHeader sets the provided authentication elements as the default/standard
-// HTTP header for the LSAT protocol.
+// HTTP header for the L402 protocol.
 func SetHeader(header *http.Header, mac *macaroon.Macaroon,
 	preimage fmt.Stringer) error {
 
@@ -134,10 +139,17 @@ func SetHeader(header *http.Header, mac *macaroon.Macaroon,
 	if err != nil {
 		return err
 	}
-	value := fmt.Sprintf(
-		authFormat, base64.StdEncoding.EncodeToString(macBytes),
-		preimage.String(),
-	)
-	header.Set(HeaderAuthorization, value)
+	macStr := base64.StdEncoding.EncodeToString(macBytes)
+	preimageStr := preimage.String()
+
+	// Send "Authorization: LSAT..." header before sending
+	// "Authorization: L402" header to be compatible with old aperture.
+	// TODO: remove this after aperture is upgraded everywhere.
+	legacyValue := fmt.Sprintf(authFormatLegacy, macStr, preimageStr)
+	header.Set(HeaderAuthorization, legacyValue)
+
+	value := fmt.Sprintf(authFormat, macStr, preimageStr)
+	header.Add(HeaderAuthorization, value)
+
 	return nil
 }

@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"errors"
@@ -20,10 +20,10 @@ var (
 		"\"condition=value\"")
 )
 
-// Caveat is a predicate that can be applied to an LSAT in order to restrict its
-// use in some form. Caveats are evaluated during LSAT verification after the
-// LSAT's signature is verified. The predicate of each caveat must hold true in
-// order to successfully validate an LSAT.
+// Caveat is a predicate that can be applied to an L402 in order to restrict its
+// use in some form. Caveats are evaluated during L402 verification after the
+// L402's signature is verified. The predicate of each caveat must hold true in
+// order to successfully validate an L402.
 type Caveat struct {
 	// Condition serves as a way to identify a caveat and how to satisfy it.
 	Condition string
@@ -92,11 +92,11 @@ func HasCaveat(m *macaroon.Macaroon, cond string) (string, bool) {
 	return *value, true
 }
 
-// VerifyCaveats determines whether every relevant caveat of an LSAT holds true.
+// VerifyCaveats determines whether every relevant caveat of an L402 holds true.
 // A caveat is considered relevant if a satisfier is provided for it, which is
 // what we'll use as their evaluation.
 //
-// NOTE: The caveats provided should be in the same order as in the LSAT to
+// NOTE: The caveats provided should be in the same order as in the L402 to
 // ensure the correctness of each satisfier's SatisfyPrevious.
 func VerifyCaveats(caveats []Caveat, satisfiers ...Satisfier) error {
 	// Construct a set of our satisfiers to determine which caveats we know

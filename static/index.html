@@ -1,6 +1,6 @@
 <html>
 <head>
-    <title>LSAT proxy demo page</title>
+    <title>L402 proxy demo page</title>
     <style>
         .row:after {
             content: "";
@@ -53,10 +53,10 @@
   let lastInvoice = null;
 
   function parseInvoice(invoice) {
-    const rex = /LSAT macaroon="(.*?)", invoice="(.*?)"/i;
+    const rex = /(LSAT|L402) macaroon="(.*?)", invoice="(.*?)"/i;
     parts = invoice.match(rex);
-    lastMacaroon = parts[1];
-    lastInvoice = parts[2];
+    lastMacaroon = parts[2];
+    lastInvoice = parts[3];
   }
 
   function loadJSON(url, elem) {
@@ -83,14 +83,14 @@
       }
     });
   }
-  
+
   function payInvoice() {
     if (window.WebLN) {
       WebLN.requestProvider()
         .then((provider) => {
           provider.sendPayment(lastInvoice)
             .then((response) => {
-              authorization = "LSAT " + lastMacaroon + ":" + response.preimage;
+              authorization = "L402 " + lastMacaroon + ":" + response.preimage;
               $('#reload-bos').click();
               $('#reload-lnd').click();
             });
@@ -102,17 +102,17 @@
       alert("Joule not installed or failed to load WebLN library.");
     }
   }
-  
+
   function addPreimage() {
     let preimage = prompt("Enter hex encoded preimage");
-    authorization = "LSAT " + lastMacaroon + ":" + preimage;
+    authorization = "L402 " + lastMacaroon + ":" + preimage;
     $('#reload-bos').click();
     $('#reload-lnd').click();
   }
 
   $(document).ready(() => {
     const host = document.location.host;
-    
+
     $('#reload-lnd').on('click', () => loadJSON('//alice.' + host + '/v1/getinfo', $('#getinfo-lnd'))).click();
     $('#reload-bos').on('click', () => loadJSON('//' + host + '/availability/v1/btc.json', $('#bos-scores'))).click();
     $('#pay').on('click', () => payInvoice());

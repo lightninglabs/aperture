@@ -10,7 +10,7 @@ import (
 )
 
 // LNCChallenger is a challenger that uses LNC to connect to an lnd backend to
-// create new LSAT payment challenges.
+// create new L402 payment challenges.
 type LNCChallenger struct {
 	lndChallenger *LndChallenger
 	nodeConn      *lnc.NodeConn
@@ -61,7 +61,7 @@ func (l *LNCChallenger) Stop() {
 	l.lndChallenger.Stop()
 }
 
-// NewChallenge creates a new LSAT payment challenge, returning a payment
+// NewChallenge creates a new L402 payment challenge, returning a payment
 // request (invoice) and the corresponding payment hash.
 //
 // NOTE: This is part of the mint.Challenger interface.

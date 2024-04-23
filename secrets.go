@@ -8,18 +8,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 var (
-	// secretsPrefix is the key we'll use to prefix all LSAT identifiers
+	// secretsPrefix is the key we'll use to prefix all L402 identifiers
 	// with when storing secrets in an etcd cluster.
 	secretsPrefix = "secrets"
 )
 
-// idKey returns the full key to store in the database for an LSAT identifier.
+// idKey returns the full key to store in the database for an L402 identifier.
 // The identifier is hex-encoded in order to prevent conflicts with the etcd key
 // delimeter.
 //
@@ -32,7 +32,7 @@ func idKey(id [sha256.Size]byte) string {
 	)
 }
 
-// secretStore is a store of LSAT secrets backed by an etcd cluster.
+// secretStore is a store of L402 secrets backed by an etcd cluster.
 type secretStore struct {
 	*clientv3.Client
 }
@@ -40,7 +40,7 @@ type secretStore struct {
 // A compile-time constraint to ensure secretStore implements mint.SecretStore.
 var _ mint.SecretStore = (*secretStore)(nil)
 
-// newSecretStore instantiates a new LSAT secrets store backed by an etcd
+// newSecretStore instantiates a new L402 secrets store backed by an etcd
 // cluster.
 func newSecretStore(client *clientv3.Client) *secretStore {
 	return &secretStore{Client: client}
@@ -49,9 +49,9 @@ func newSecretStore(client *clientv3.Client) *secretStore {
 // NewSecret creates a new cryptographically random secret which is keyed by the
 // given hash.
 func (s *secretStore) NewSecret(ctx context.Context,
-	id [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
+	id [sha256.Size]byte) ([l402.SecretSize]byte, error) {
 
-	var secret [lsat.SecretSize]byte
+	var secret [l402.SecretSize]byte
 	if _, err := rand.Read(secret[:]); err != nil {
 		return secret, err
 	}
@@ -63,21 +63,21 @@ func (s *secretStore) NewSecret(ctx context.Context,
 // GetSecret returns the cryptographically random secret that corresponds to the
 // given hash. If there is no secret, then mint.ErrSecretNotFound is returned.
 func (s *secretStore) GetSecret(ctx context.Context,
-	id [sha256.Size]byte) ([lsat.SecretSize]byte, error) {
+	id [sha256.Size]byte) ([l402.SecretSize]byte, error) {
 
 	resp, err := s.Get(ctx, idKey(id))
 	if err != nil {
-		return [lsat.SecretSize]byte{}, err
+		return [l402.SecretSize]byte{}, err
 	}
 	if len(resp.Kvs) == 0 {
-		return [lsat.SecretSize]byte{}, mint.ErrSecretNotFound
+		return [l402.SecretSize]byte{}, mint.ErrSecretNotFound
 	}
-	if len(resp.Kvs[0].Value) != lsat.SecretSize {
-		return [lsat.SecretSize]byte{}, fmt.Errorf("invalid secret "+
+	if len(resp.Kvs[0].Value) != l402.SecretSize {
+		return [l402.SecretSize]byte{}, fmt.Errorf("invalid secret "+
 			"size %v", len(resp.Kvs[0].Value))
 	}
 
-	var secret [lsat.SecretSize]byte
+	var secret [l402.SecretSize]byte
 	copy(secret[:], resp.Kvs[0].Value)
 	return secret, nil
 }

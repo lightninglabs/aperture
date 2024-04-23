@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"context"
@@ -44,12 +44,12 @@ const (
 	AuthHeader = "WWW-Authenticate"
 
 	// DefaultMaxCostSats is the default maximum amount in satoshis that we
-	// are going to pay for an LSAT automatically. Does not include routing
+	// are going to pay for an L402 automatically. Does not include routing
 	// fees.
 	DefaultMaxCostSats = 1000
 
 	// DefaultMaxRoutingFeeSats is the default maximum routing fee in
-	// satoshis that we are going to pay to acquire an LSAT token.
+	// satoshis that we are going to pay to acquire an L402 token.
 	DefaultMaxRoutingFeeSats = 10
 
 	// PaymentTimeout is the maximum time we allow a payment to take before
@@ -66,7 +66,7 @@ var (
 	// authHeaderRegex is the regular expression the payment challenge must
 	// match for us to be able to parse the macaroon and invoice.
 	authHeaderRegex = regexp.MustCompile(
-		"LSAT macaroon=\"(.*?)\", invoice=\"(.*?)\"",
+		"(LSAT|L402) macaroon=\"(.*?)\", invoice=\"(.*?)\"",
 	)
 
 	// errPaymentFailedTerminally is signaled by the payment tracking method
@@ -76,7 +76,7 @@ var (
 		"failure state")
 )
 
-// ClientInterceptor is a gRPC client interceptor that can handle LSAT
+// ClientInterceptor is a gRPC client interceptor that can handle L402
 // authentication challenges with embedded payment requests. It uses a
 // connection to lnd to automatically pay for an authentication token.
 type ClientInterceptor struct {
@@ -90,7 +90,7 @@ type ClientInterceptor struct {
 }
 
 // NewInterceptor creates a new gRPC client interceptor that uses the provided
-// lnd connection to automatically acquire and pay for LSAT tokens, unless the
+// lnd connection to automatically acquire and pay for L402 tokens, unless the
 // indicated store already contains a usable token.
 func NewInterceptor(lnd *lndclient.LndServices, store Store,
 	rpcCallTimeout time.Duration, maxCost,
@@ -140,7 +140,7 @@ func (i *ClientInterceptor) UnaryInterceptor(ctx context.Context, method string,
 	}
 
 	// Try executing the call now. If anything goes wrong, we only handle
-	// the LSAT error message that comes in the form of a gRPC status error.
+	// the L402 error message that comes in the form of a gRPC status error.
 	rpcCtx, cancel := context.WithTimeout(ctx, i.callTimeout)
 	defer cancel()
 	err = invoker(rpcCtx, method, req, reply, cc, iCtx.opts...)
@@ -155,7 +155,7 @@ func (i *ClientInterceptor) UnaryInterceptor(ctx context.Context, method string,
 		return err
 	}
 
-	// Execute the same request again, now with the LSAT
+	// Execute the same request again, now with the L402
 	// token added as an RPC credential.
 	rpcCtx2, cancel2 := context.WithTimeout(ctx, i.callTimeout)
 	defer cancel2()
@@ -188,7 +188,7 @@ func (i *ClientInterceptor) StreamInterceptor(ctx context.Context,
 	}
 
 	// Try establishing the stream now. If anything goes wrong, we only
-	// handle the LSAT error message that comes in the form of a gRPC status
+	// handle the L402 error message that comes in the form of a gRPC status
 	// error. The context of a stream will be used for the whole lifetime of
 	// it, so we can't really clamp down on the initial call with a timeout.
 	stream, err := streamer(ctx, desc, cc, method, iCtx.opts...)
@@ -203,7 +203,7 @@ func (i *ClientInterceptor) StreamInterceptor(ctx context.Context,
 		return nil, err
 	}
 
-	// Execute the same request again, now with the LSAT token added
+	// Execute the same request again, now with the L402 token added
 	// as an RPC credential.
 	return streamer(ctx, desc, cc, method, iCtx.opts...)
 }
@@ -240,7 +240,7 @@ func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	// this call. We also never send a pending payment to the server since
 	// we know it's not valid.
 	case !iCtx.token.isPending():
-		if err = i.addLsatCredentials(iCtx); err != nil {
+		if err = i.addL402Credentials(iCtx); err != nil {
 			log.Errorf("Adding macaroon to request failed: %v", err)
 			return nil, fmt.Errorf("adding macaroon failed: %v",
 				err)
@@ -250,8 +250,8 @@ func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	// We need a way to extract the response headers sent by the server.
 	// This can only be done through the experimental grpc.Trailer call
 	// option. We execute the request and inspect the error. If it's the
-	// LSAT specific payment required error, we might execute the same
-	// method again later with the paid LSAT token.
+	// L402 specific payment required error, we might execute the same
+	// method again later with the paid L402 token.
 	iCtx.opts = append(iCtx.opts, grpc.Trailer(iCtx.metadata))
 	return iCtx, nil
 }
@@ -262,8 +262,8 @@ func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 	switch {
 	// Resume/track a pending payment if it was interrupted for some reason.
 	case iCtx.token != nil && iCtx.token.isPending():
-		log.Infof("Payment of LSAT token is required, resuming/" +
-			"tracking previous payment from pending LSAT token")
+		log.Infof("Payment of L402 token is required, resuming/" +
+			"tracking previous payment from pending L402 token")
 		err := i.trackPayment(iCtx.mainCtx, iCtx.token)
 
 		// If the payment failed for good, it will never come back to a
@@ -277,9 +277,9 @@ func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 			}
 
 			// Let's try again by paying for the new token.
-			log.Infof("Retrying payment of LSAT token invoice")
+			log.Infof("Retrying payment of L402 token invoice")
 			var err error
-			iCtx.token, err = i.payLsatToken(
+			iCtx.token, err = i.payL402Token(
 				iCtx.mainCtx, iCtx.metadata,
 			)
 			if err != nil {
@@ -295,27 +295,27 @@ func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 	// We don't have a token yet, try to get a new one.
 	case iCtx.token == nil:
 		// We don't have a token yet, get a new one.
-		log.Infof("Payment of LSAT token is required, paying invoice")
+		log.Infof("Payment of L402 token is required, paying invoice")
 		var err error
-		iCtx.token, err = i.payLsatToken(iCtx.mainCtx, iCtx.metadata)
+		iCtx.token, err = i.payL402Token(iCtx.mainCtx, iCtx.metadata)
 		if err != nil {
 			return err
 		}
 
 	// We have a token and it's valid, nothing more to do here.
 	default:
-		log.Debugf("Found valid LSAT token to add to request")
+		log.Debugf("Found valid L402 token to add to request")
 	}
 
-	if err := i.addLsatCredentials(iCtx); err != nil {
+	if err := i.addL402Credentials(iCtx); err != nil {
 		log.Errorf("Adding macaroon to request failed: %v", err)
 		return fmt.Errorf("adding macaroon failed: %v", err)
 	}
 	return nil
 }
 
-// addLsatCredentials adds an LSAT token to the given intercept context.
-func (i *ClientInterceptor) addLsatCredentials(iCtx *interceptContext) error {
+// addL402Credentials adds an L402 token to the given intercept context.
+func (i *ClientInterceptor) addL402Credentials(iCtx *interceptContext) error {
 	if iCtx.token == nil {
 		return fmt.Errorf("cannot add nil token to context")
 	}
@@ -330,27 +330,34 @@ func (i *ClientInterceptor) addLsatCredentials(iCtx *interceptContext) error {
 	return nil
 }
 
-// payLsatToken reads the payment challenge from the response metadata and tries
-// to pay the invoice encoded in them, returning a paid LSAT token if
+// payL402Token reads the payment challenge from the response metadata and tries
+// to pay the invoice encoded in them, returning a paid L402 token if
 // successful.
-func (i *ClientInterceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
+func (i *ClientInterceptor) payL402Token(ctx context.Context, md *metadata.MD) (
 	*Token, error) {
 
 	// First parse the authentication header that was stored in the
 	// metadata.
-	authHeader := md.Get(AuthHeader)
-	if len(authHeader) == 0 {
+	authHeaders := md.Get(AuthHeader)
+	if len(authHeaders) == 0 {
 		return nil, fmt.Errorf("auth header not found in response")
 	}
-	matches := authHeaderRegex.FindStringSubmatch(authHeader[0])
-	if len(matches) != 3 {
+	// Find the first WWW-Authenticate header, matching authHeaderRegex.
+	var matches []string
+	for _, authHeader := range authHeaders {
+		matches = authHeaderRegex.FindStringSubmatch(authHeader)
+		if len(matches) == 4 {
+			break
+		}
+	}
+	if len(matches) != 4 {
 		return nil, fmt.Errorf("invalid auth header "+
-			"format: %s", authHeader[0])
+			"format: %s", authHeaders[0])
 	}
 
 	// Decode the base64 macaroon and the invoice so we can store the
 	// information in our store later.
-	macBase64, invoiceStr := matches[1], matches[2]
+	macBase64, invoiceStr := matches[2], matches[3]
 	macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 	if err != nil {
 		return nil, fmt.Errorf("base64 decode of macaroon failed: "+
@@ -364,7 +371,7 @@ func (i *ClientInterceptor) payLsatToken(ctx context.Context, md *metadata.MD) (
 	// Check that the charged amount does not exceed our maximum cost.
 	maxCostMsat := lnwire.NewMSatFromSatoshis(i.maxCost)
 	if invoice.MilliSat != nil && *invoice.MilliSat > maxCostMsat {
-		return nil, fmt.Errorf("cannot pay for LSAT automatically, "+
+		return nil, fmt.Errorf("cannot pay for L402 automatically, "+
 			"cost of %d msat exceeds configured max cost of %d "+
 			"msat", *invoice.MilliSat, maxCostMsat)
 	}

@@ -6,7 +6,7 @@ non-custodial on/off ramp for the Lightning Network.
 
 Aperture is a HTTP 402 reverse proxy that supports proxying requests for gRPC
 (HTTP/2) and REST (HTTP/1 and HTTP/2) backends using the [L402 Protocol
-Standard](https://lsat.tech/). L402 is short for: the Lightning HTTP 402
+Standard][l402]. L402 is short for: the Lightning HTTP 402
 protocol.  L402 combines HTTP 402, macaroons, and the Lightning Network to
 create a new standard for authentication and paid services on the web.
 
@@ -22,6 +22,8 @@ system allows one to automate pricing on the fly and allows for a number of
 novel constructs such as automated tier upgrades. In another light, this can be
 viewed as a global HTTP 402 reverse proxy at the load balancing level for web
 services and APIs.
+
+[l402]: https://github.com/lightninglabs/L402
 
 ## Installation / Setup
 

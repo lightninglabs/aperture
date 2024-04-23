@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -17,13 +17,13 @@ type mockMint struct {
 
 var _ auth.Minter = (*mockMint)(nil)
 
-func (m *mockMint) MintLSAT(_ context.Context,
-	services ...lsat.Service) (*macaroon.Macaroon, string, error) {
+func (m *mockMint) MintL402(_ context.Context,
+	services ...l402.Service) (*macaroon.Macaroon, string, error) {
 
 	return nil, "", nil
 }
 
-func (m *mockMint) VerifyLSAT(_ context.Context, p *mint.VerificationParams) error {
+func (m *mockMint) VerifyL402(_ context.Context, p *mint.VerificationParams) error {
 	return nil
 }
 

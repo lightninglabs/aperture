@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"fmt"
@@ -18,19 +18,19 @@ type Satisfier struct {
 	// condition can be used multiple times as long as they enforce more
 	// permissions than the previous.
 	//
-	// For example, we have a caveat that only allows us to use an LSAT for
+	// For example, we have a caveat that only allows us to use an L402 for
 	// 7 more days. We can add another caveat that only allows for 3 more
 	// days of use and lend it to another party.
 	SatisfyPrevious func(previous Caveat, current Caveat) error
 
-	// SatisfyFinal satisfies the final caveat of an LSAT. If multiple
+	// SatisfyFinal satisfies the final caveat of an L402. If multiple
 	// caveats with the same condition exist, this will only be executed
 	// once all previous caveats are also satisfied.
 	SatisfyFinal func(Caveat) error
 }
 
 // NewServicesSatisfier implements a satisfier to determine whether the target
-// service is authorized for a given LSAT.
+// service is authorized for a given L402.
 //
 // TODO(wilmer): Add tier verification?
 func NewServicesSatisfier(targetService string) Satisfier {
@@ -80,7 +80,7 @@ func NewServicesSatisfier(targetService string) Satisfier {
 }
 
 // NewCapabilitiesSatisfier implements a satisfier to determine whether the
-// target capability for a service is authorized for a given LSAT.
+// target capability for a service is authorized for a given L402.
 func NewCapabilitiesSatisfier(service string,
 	targetCapability string) Satisfier {
 
@@ -120,7 +120,7 @@ func NewCapabilitiesSatisfier(service string,
 	}
 }
 
-// NewTimeoutSatisfier checks if an LSAT is expired or not. The Satisfier takes
+// NewTimeoutSatisfier checks if an L402 is expired or not. The Satisfier takes
 // a service name to set as the condition prefix and currentTimestamp to
 // compare against the expiration(s) in the caveats. The expiration time is
 // retrieved from the caveat values themselves. The satisfier will also make
@@ -174,7 +174,7 @@ func NewTimeoutSatisfier(service string, now func() time.Time) Satisfier {
 			}
 
 			return fmt.Errorf("not authorized to access " +
-				"service. LSAT has expired")
+				"service. L402 has expired")
 		},
 	}
 }

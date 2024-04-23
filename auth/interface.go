@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -30,14 +30,14 @@ type Authenticator interface {
 	FreshChallengeHeader(*http.Request, string, int64) (http.Header, error)
 }
 
-// Minter is an entity that is able to mint and verify LSATs for a set of
+// Minter is an entity that is able to mint and verify L402s for a set of
 // services.
 type Minter interface {
-	// MintLSAT mints a new LSAT for the target services.
-	MintLSAT(context.Context, ...lsat.Service) (*macaroon.Macaroon, string, error)
+	// MintL402 mints a new L402 for the target services.
+	MintL402(context.Context, ...l402.Service) (*macaroon.Macaroon, string, error)
 
-	// VerifyLSAT attempts to verify an LSAT with the given parameters.
-	VerifyLSAT(context.Context, *mint.VerificationParams) error
+	// VerifyL402 attempts to verify an L402 with the given parameters.
+	VerifyL402(context.Context, *mint.VerificationParams) error
 }
 
 // InvoiceChecker is an entity that is able to check the status of an invoice,

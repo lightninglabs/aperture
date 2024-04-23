@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"errors"

@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"os"
@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/stretchr/testify/require"
 )
 
-// TestStore tests the basic functionality of the file based store.
+// TestFileStore tests the basic functionality of the file based store.
 func TestFileStore(t *testing.T) {
 	t.Parallel()
 
-	tempDirName, err := os.MkdirTemp("", "lsatstore")
+	tempDirName, err := os.MkdirTemp("", "l402store")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,4 +128,72 @@ func TestFileStore(t *testing.T) {
 		t.Fatalf("unexpected error. got %v, expected %v", err,
 			errNoReplace)
 	}
+}
+
+// TestFileStorePendingMigration tests migration from lsat.token.pending
+// to l402.token.pending.
+func TestFileStorePendingMigration(t *testing.T) {
+	t.Parallel()
+
+	tempDirName := t.TempDir()
+
+	pendingToken := &Token{
+		Preimage: zeroPreimage,
+		baseMac:  makeMac(),
+	}
+
+	store, err := NewFileStore(tempDirName)
+	require.NoError(t, err)
+
+	// Write a pending token.
+	require.NoError(t, store.StoreToken(pendingToken))
+
+	// Rename file on disk to lsat.token.pending to emulate
+	// a pre-migration state.
+	newPath := filepath.Join(tempDirName, storeFileNamePending)
+	oldPath := filepath.Join(tempDirName, "lsat.token.pending")
+	require.NoError(t, os.Rename(newPath, oldPath))
+
+	// Open the same directory again.
+	store1, err := NewFileStore(tempDirName)
+	require.NoError(t, err)
+
+	// Read the token and compare its value.
+	token, err := store1.CurrentToken()
+	require.NoError(t, err)
+	require.Equal(t, pendingToken.baseMac, token.baseMac)
+}
+
+// TestFileStoreMigration tests migration from lsat.token to l402.token.
+func TestFileStoreMigration(t *testing.T) {
+	t.Parallel()
+
+	tempDirName := t.TempDir()
+
+	paidPreimage := lntypes.Preimage{1, 2, 3, 4, 5}
+	paidToken := &Token{
+		Preimage: paidPreimage,
+		baseMac:  makeMac(),
+	}
+
+	store, err := NewFileStore(tempDirName)
+	require.NoError(t, err)
+
+	// Write a token.
+	require.NoError(t, store.StoreToken(paidToken))
+
+	// Rename file on disk to lsat.token.pending to emulate
+	// a pre-migration state.
+	newPath := filepath.Join(tempDirName, storeFileName)
+	oldPath := filepath.Join(tempDirName, "lsat.token")
+	require.NoError(t, os.Rename(newPath, oldPath))
+
+	// Open the same directory again.
+	store1, err := NewFileStore(tempDirName)
+	require.NoError(t, err)
+
+	// Read the token and compare its value.
+	token, err := store1.CurrentToken()
+	require.NoError(t, err)
+	require.Equal(t, paidToken.baseMac, token.baseMac)
 }

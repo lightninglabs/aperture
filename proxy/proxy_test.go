@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/proxy"
 	proxytest "github.com/lightninglabs/aperture/proxy/testdata"
 	"github.com/lightningnetwork/lnd/cert"
@@ -87,7 +87,7 @@ func (s *helloServer) SayHelloNoAuth(_ context.Context,
 }
 
 // TestProxyHTTP tests that the proxy can forward HTTP requests to a backend
-// service and handle LSAT authentication correctly.
+// service and handle L402 authentication correctly.
 func TestProxyHTTP(t *testing.T) {
 	testCases := []*testCase{{
 		name: "no whitelist",
@@ -108,7 +108,7 @@ func TestProxyHTTP(t *testing.T) {
 }
 
 // TestProxyHTTP tests that the proxy can forward HTTP requests to a backend
-// service and handle LSAT authentication correctly.
+// service and handle L402 authentication correctly.
 func runHTTPTest(t *testing.T, tc *testCase) {
 	// Create a list of services to proxy between.
 	services := []*proxy.Service{{
@@ -154,7 +154,7 @@ func runHTTPTest(t *testing.T, tc *testCase) {
 	require.Equal(t, "402 Payment Required", resp.Status)
 
 	authHeader := resp.Header.Get("Www-Authenticate")
-	require.Contains(t, authHeader, "LSAT")
+	require.Regexp(t, "(LSAT|L402)", authHeader)
 	_ = resp.Body.Close()
 
 	// Make sure that if we query an URL that is on the whitelist, we don't
@@ -196,7 +196,7 @@ func runHTTPTest(t *testing.T, tc *testCase) {
 }
 
 // TestProxyHTTP tests that the proxy can forward gRPC requests to a backend
-// service and handle LSAT authentication correctly.
+// service and handle L402 authentication correctly.
 func TestProxyGRPC(t *testing.T) {
 	testCases := []*testCase{{
 		name: "no whitelist",
@@ -234,7 +234,7 @@ func TestProxyGRPC(t *testing.T) {
 }
 
 // TestProxyHTTP tests that the proxy can forward gRPC requests to a backend
-// service and handle LSAT authentication correctly.
+// service and handle L402 authentication correctly.
 func runGRPCTest(t *testing.T, tc *testCase) {
 	// Since gRPC only really works over TLS, we need to generate a
 	// certificate and key pair first.
@@ -309,18 +309,18 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 		grpc.Trailer(&captureMetadata),
 	)
 	require.Error(t, err)
-	require.True(t, lsat.IsPaymentRequired(err))
+	require.True(t, l402.IsPaymentRequired(err))
 
-	// We expect the WWW-Authenticate header field to be set to an LSAT
+	// We expect the WWW-Authenticate header field to be set to an L402
 	// auth response.
 	expectedHeaderContent, _ := mockAuth.FreshChallengeHeader(&http.Request{
 		Header: map[string][]string{},
 	}, "", 0)
 	capturedHeader := captureMetadata.Get("WWW-Authenticate")
-	require.Len(t, capturedHeader, 1)
+	require.Len(t, capturedHeader, 2)
 	require.Equal(
-		t, expectedHeaderContent.Get("WWW-Authenticate"),
-		capturedHeader[0],
+		t, expectedHeaderContent.Values("WWW-Authenticate"),
+		capturedHeader,
 	)
 
 	// Make sure that if we query an URL that is on the whitelist, we don't

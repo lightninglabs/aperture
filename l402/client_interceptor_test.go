@@ -1,4 +1,4 @@
-package lsat
+package l402
 
 import (
 	"context"
@@ -23,7 +23,7 @@ type interceptTestCase struct {
 	name                string
 	initialPreimage     *lntypes.Preimage
 	interceptor         *ClientInterceptor
-	resetCb             func()
+	resetCb             func(addL402 bool)
 	expectLndCall       bool
 	expectSecondLndCall bool
 	sendPaymentCb       func(*testing.T, test.PaymentChannelMessage)
@@ -73,17 +73,19 @@ var (
 	testMacHex      = hex.EncodeToString(testMacBytes)
 	paidPreimage    = lntypes.Preimage{1, 2, 3, 4, 5}
 	backendErr      error
-	backendAuth     = ""
+	backendAuth     = []string{}
 	callMD          map[string]string
 	numBackendCalls = 0
 	overallWg       sync.WaitGroup
 	backendWg       sync.WaitGroup
 
 	testCases = []interceptTestCase{{
-		name:                "no auth required happy path",
-		initialPreimage:     nil,
-		interceptor:         interceptor,
-		resetCb:             func() { resetBackend(nil, "") },
+		name:            "no auth required happy path",
+		initialPreimage: nil,
+		interceptor:     interceptor,
+		resetCb: func(addL402 bool) {
+			resetBackend(nil, []string{})
+		},
 		expectLndCall:       false,
 		expectToken:         false,
 		expectBackendCalls:  1,
@@ -93,10 +95,10 @@ var (
 		name:            "auth required, no token yet",
 		initialPreimage: nil,
 		interceptor:     interceptor,
-		resetCb: func() {
+		resetCb: func(addL402 bool) {
 			resetBackend(
 				status.New(GRPCErrCode, GRPCErrMessage).Err(),
-				makeAuthHeader(testMacBytes),
+				makeAuthHeaders(testMacBytes, addL402),
 			)
 		},
 		expectLndCall: true,
@@ -107,7 +109,7 @@ var (
 
 			// The next call to the "backend" shouldn't return an
 			// error.
-			resetBackend(nil, "")
+			resetBackend(nil, []string{})
 			msg.Done <- lndclient.PaymentResult{
 				Preimage: paidPreimage,
 				PaidAmt:  123,
@@ -124,10 +126,12 @@ var (
 		expectMacaroonCall1: false,
 		expectMacaroonCall2: true,
 	}, {
-		name:                "auth required, has token",
-		initialPreimage:     &paidPreimage,
-		interceptor:         interceptor,
-		resetCb:             func() { resetBackend(nil, "") },
+		name:            "auth required, has token",
+		initialPreimage: &paidPreimage,
+		interceptor:     interceptor,
+		resetCb: func(addL402 bool) {
+			resetBackend(nil, []string{})
+		},
 		expectLndCall:       false,
 		expectToken:         true,
 		expectBackendCalls:  1,
@@ -137,10 +141,10 @@ var (
 		name:            "auth required, has pending token",
 		initialPreimage: &zeroPreimage,
 		interceptor:     interceptor,
-		resetCb: func() {
+		resetCb: func(addL402 bool) {
 			resetBackend(
 				status.New(GRPCErrCode, GRPCErrMessage).Err(),
-				makeAuthHeader(testMacBytes),
+				makeAuthHeaders(testMacBytes, addL402),
 			)
 		},
 		expectLndCall: true,
@@ -154,7 +158,7 @@ var (
 
 			// The next call to the "backend" shouldn't return an
 			// error.
-			resetBackend(nil, "")
+			resetBackend(nil, []string{})
 			msg.Updates <- lndclient.PaymentStatus{
 				State:    lnrpc.Payment_SUCCEEDED,
 				Preimage: paidPreimage,
@@ -168,10 +172,10 @@ var (
 		name:            "auth required, has pending but expired token",
 		initialPreimage: &zeroPreimage,
 		interceptor:     interceptor,
-		resetCb: func() {
+		resetCb: func(addL402 bool) {
 			resetBackend(
 				status.New(GRPCErrCode, GRPCErrMessage).Err(),
-				makeAuthHeader(testMacBytes),
+				makeAuthHeaders(testMacBytes, addL402),
 			)
 		},
 		expectLndCall:       true,
@@ -183,7 +187,7 @@ var (
 
 			// The next call to the "backend" shouldn't return an
 			// error.
-			resetBackend(nil, "")
+			resetBackend(nil, []string{})
 			msg.Done <- lndclient.PaymentResult{
 				Preimage: paidPreimage,
 				PaidAmt:  123,
@@ -195,7 +199,7 @@ var (
 
 			// The next call to the "backend" shouldn't return an
 			// error.
-			resetBackend(nil, "")
+			resetBackend(nil, []string{})
 			msg.Updates <- lndclient.PaymentStatus{
 				State: lnrpc.Payment_FAILED,
 			}
@@ -211,15 +215,15 @@ var (
 			&lnd.LndServices, store, testTimeout, 100,
 			DefaultMaxRoutingFeeSats, false,
 		),
-		resetCb: func() {
+		resetCb: func(addL402 bool) {
 			resetBackend(
 				status.New(GRPCErrCode, GRPCErrMessage).Err(),
-				makeAuthHeader(testMacBytes),
+				makeAuthHeaders(testMacBytes, addL402),
 			)
 		},
 		expectLndCall: false,
 		expectToken:   false,
-		expectInterceptErr: "cannot pay for LSAT automatically, cost " +
+		expectInterceptErr: "cannot pay for L402 automatically, cost " +
 			"of 500000 msat exceeds configured max cost of " +
 			"100000 msat",
 		expectBackendCalls:  1,
@@ -230,7 +234,7 @@ var (
 
 // resetBackend is used by the test cases to define the behaviour of the
 // simulated backend and reset its starting conditions.
-func resetBackend(expectedErr error, expectedAuth string) {
+func resetBackend(expectedErr error, expectedAuth []string) {
 	backendErr = expectedErr
 	backendAuth = expectedAuth
 	callMD = nil
@@ -252,9 +256,9 @@ func invoker(opts []grpc.CallOption) error {
 
 		// Should we simulate an auth header response?
 		trailer, ok := opt.(grpc.TrailerCallOption)
-		if ok && backendAuth != "" {
+		if ok && len(backendAuth) != 0 {
 			trailer.TrailerAddr.Set(
-				AuthHeader, backendAuth,
+				AuthHeader, backendAuth...,
 			)
 		}
 	}
@@ -262,7 +266,7 @@ func invoker(opts []grpc.CallOption) error {
 	return backendErr
 }
 
-// TestUnaryInterceptor tests that the interceptor can handle LSAT protocol
+// TestUnaryInterceptor tests that the interceptor can handle L402 protocol
 // responses for unary calls and pay the token.
 func TestUnaryInterceptor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -284,13 +288,16 @@ func TestUnaryInterceptor(t *testing.T) {
 				ctx, "", nil, nil, nil, unaryInvoker, nil,
 			)
 		}
-		t.Run(tc.name, func(t *testing.T) {
-			testInterceptor(t, tc, intercept)
+		t.Run(tc.name+" with LSAT header only", func(t *testing.T) {
+			testInterceptor(t, tc, false, intercept)
+		})
+		t.Run(tc.name+" with LSAT+L402 headers", func(t *testing.T) {
+			testInterceptor(t, tc, true, intercept)
 		})
 	}
 }
 
-// TestStreamInterceptor tests that the interceptor can handle LSAT protocol
+// TestStreamInterceptor tests that the interceptor can handle L402 protocol
 // responses in streams and pay the token.
 func TestStreamInterceptor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -314,18 +321,21 @@ func TestStreamInterceptor(t *testing.T) {
 			)
 			return err
 		}
-		t.Run(tc.name, func(t *testing.T) {
-			testInterceptor(t, tc, intercept)
+		t.Run(tc.name+" with LSAT header only", func(t *testing.T) {
+			testInterceptor(t, tc, false, intercept)
+		})
+		t.Run(tc.name+" with LSAT+L402 headers", func(t *testing.T) {
+			testInterceptor(t, tc, true, intercept)
 		})
 	}
 }
 
-func testInterceptor(t *testing.T, tc interceptTestCase,
+func testInterceptor(t *testing.T, tc interceptTestCase, addL402 bool,
 	intercept func() error) {
 
 	// Initial condition and simulated backend call.
 	store.token = makeToken(tc.initialPreimage)
-	tc.resetCb()
+	tc.resetCb(addL402)
 	numBackendCalls = 0
 	backendWg.Add(1)
 	overallWg.Add(1)
@@ -434,13 +444,19 @@ func serializeMac(mac *macaroon.Macaroon) []byte {
 	return macBytes
 }
 
-func makeAuthHeader(macBytes []byte) string {
+func makeAuthHeaders(macBytes []byte, addL402 bool) []string {
 	// Testnet invoice over 500 sats.
 	invoice := "lntb5u1p0pskpmpp5jzw9xvdast2g5lm5tswq6n64t2epe3f4xav43dyd" +
 		"239qr8h3yllqdqqcqzpgsp5m8sfjqgugthk66q3tr4gsqr5rh740jrq9x4l0" +
 		"kvj5e77nmwqvpnq9qy9qsq72afzu7sfuppzqg3q2pn49hlh66rv7w60h2rua" +
 		"hx857g94s066yzxcjn4yccqc79779sd232v9ewluvu0tmusvht6r99rld8xs" +
 		"k287cpyac79r"
-	return fmt.Sprintf("LSAT macaroon=\"%s\", invoice=\"%s\"",
+	str := fmt.Sprintf("macaroon=\"%s\", invoice=\"%s\"",
 		base64.StdEncoding.EncodeToString(macBytes), invoice)
+	values := []string{"LSAT " + str}
+	if addL402 {
+		values = append(values, "L402 "+str)
+	}
+
+	return values
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/lightninglabs/aperture/auth"
-	"github.com/lightninglabs/aperture/lsat"
+	"github.com/lightninglabs/aperture/l402"
 	"gopkg.in/macaroon.v2"
 )
 
@@ -21,8 +21,8 @@ func createDummyMacHex(preimage string) string {
 	if err != nil {
 		panic(err)
 	}
-	preimageCaveat := lsat.Caveat{Condition: lsat.PreimageKey, Value: preimage}
-	err = lsat.AddFirstPartyCaveats(dummyMac, preimageCaveat)
+	preimageCaveat := l402.Caveat{Condition: l402.PreimageKey, Value: preimage}
+	err = l402.AddFirstPartyCaveats(dummyMac, preimageCaveat)
 	if err != nil {
 		panic(err)
 	}
@@ -33,9 +33,9 @@ func createDummyMacHex(preimage string) string {
 	return hex.EncodeToString(macBytes)
 }
 
-// TestLsatAuthenticator tests that the authenticator properly handles auth
+// TestL402Authenticator tests that the authenticator properly handles auth
 // headers and the tokens contained in them.
-func TestLsatAuthenticator(t *testing.T) {
+func TestL402Authenticator(t *testing.T) {
 	var (
 		testPreimage = "49349dfea4abed3cd14f6d356afa83de" +
 			"9787b609f088c8df09bacc7b4bd21b39"
@@ -65,21 +65,21 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "empty auth header",
 				header: &http.Header{
-					lsat.HeaderAuthorization: []string{},
+					l402.HeaderAuthorization: []string{},
 				},
 				result: false,
 			},
 			{
 				id: "zero length auth header",
 				header: &http.Header{
-					lsat.HeaderAuthorization: []string{""},
+					l402.HeaderAuthorization: []string{""},
 				},
 				result: false,
 			},
 			{
 				id: "invalid auth header",
 				header: &http.Header{
-					lsat.HeaderAuthorization: []string{
+					l402.HeaderAuthorization: []string{
 						"foo",
 					},
 				},
@@ -88,22 +88,44 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "invalid macaroon metadata header",
 				header: &http.Header{
-					lsat.HeaderMacaroonMD: []string{"foo"},
+					l402.HeaderMacaroonMD: []string{"foo"},
 				},
 				result: false,
 			},
 			{
 				id: "invalid macaroon header",
 				header: &http.Header{
-					lsat.HeaderMacaroon: []string{"foo"},
+					l402.HeaderMacaroon: []string{"foo"},
 				},
 				result: false,
 			},
 			{
-				id: "valid auth header",
+				id: "valid auth header (both LSAT and L402)",
 				header: &http.Header{
-					lsat.HeaderAuthorization: []string{
+					l402.HeaderAuthorization: []string{
 						"LSAT " + testMacBase64 + ":" +
+							testPreimage,
+						"L402 " + testMacBase64 + ":" +
+							testPreimage,
+					},
+				},
+				result: true,
+			},
+			{
+				id: "valid auth header (LSAT only)",
+				header: &http.Header{
+					l402.HeaderAuthorization: []string{
+						"LSAT " + testMacBase64 + ":" +
+							testPreimage,
+					},
+				},
+				result: true,
+			},
+			{
+				id: "valid auth header (L402 only)",
+				header: &http.Header{
+					l402.HeaderAuthorization: []string{
+						"L402 " + testMacBase64 + ":" +
 							testPreimage,
 					},
 				},
@@ -112,7 +134,7 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "valid macaroon metadata header",
 				header: &http.Header{
-					lsat.HeaderMacaroonMD: []string{
+					l402.HeaderMacaroonMD: []string{
 						testMacHex,
 					}},
 				result: true,
@@ -120,7 +142,7 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "valid macaroon header",
 				header: &http.Header{
-					lsat.HeaderMacaroon: []string{
+					l402.HeaderMacaroon: []string{
 						testMacHex,
 					},
 				},
@@ -129,7 +151,7 @@ func TestLsatAuthenticator(t *testing.T) {
 			{
 				id: "valid macaroon header, wrong invoice state",
 				header: &http.Header{
-					lsat.HeaderMacaroon: []string{
+					l402.HeaderMacaroon: []string{
 						testMacHex,
 					},
 				},
@@ -140,7 +162,7 @@ func TestLsatAuthenticator(t *testing.T) {
 	)
 
 	c := &mockChecker{}
-	a := auth.NewLsatAuthenticator(&mockMint{}, c)
+	a := auth.NewL402Authenticator(&mockMint{}, c)
 	for _, testCase := range headerTests {
 		c.err = testCase.checkErr
 		result := a.Accept(testCase.header, "test")
