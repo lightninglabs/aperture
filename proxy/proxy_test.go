@@ -55,7 +55,9 @@ type testCase struct {
 }
 
 // helloServer is a simple server that implements the GreeterServer interface.
-type helloServer struct{}
+type helloServer struct {
+	proxytest.UnimplementedGreeterServer
+}
 
 // SayHello returns a simple string that also contains a string from the
 // request.
