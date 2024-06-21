@@ -6,7 +6,7 @@ set -e
 function generate() {
   echo "Generating root gRPC server protos"
 
-  PROTOS="prices.proto"
+  PROTOS="*.proto"
 
   # For each of the sub-servers, we then generate their protos, but a restricted
   # set as they don't yet require REST proxies, or swagger docs.
@@ -19,6 +19,11 @@ function generate() {
       --go_out . --go_opt paths=source_relative \
       --go-grpc_out . --go-grpc_opt paths=source_relative \
       "${file}"
+
+    # Stop here if we don't need to generate anything REST.
+    if [[ "$1" == "skip_rest" ]]; then
+      return
+    fi
 
     # Generate the REST reverse proxy.
     annotationsFile=${file//proto/yaml}
@@ -71,6 +76,11 @@ function format() {
 pushd pricesrpc
 format
 generate
+popd
+
+pushd proxy/testdata
+format
+generate skip_rest
 popd
 
 if [[ "$COMPILE_MOBILE" == "1" ]]; then
