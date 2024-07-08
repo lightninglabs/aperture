@@ -46,7 +46,7 @@ function generate() {
   # Generate the JSON/WASM client stubs.
   falafel=$(which falafel)
   pkg="pricesrpc"
-  opts="package_name=$pkg,js_stubs=1,build_tags=// +build js"
+  opts="package_name=$pkg,js_stubs=1,build_tags=//go:build js"
   protoc -I/usr/local/include -I. -I.. \
     --plugin=protoc-gen-custom=$falafel\
     --custom_out=. \
@@ -56,7 +56,7 @@ function generate() {
   PACKAGES=""
   for package in $PACKAGES; do
 
-    opts="package_name=$package,manual_import=$manual_import,js_stubs=1,build_tags=// +build js"
+    opts="package_name=$package,manual_import=$manual_import,js_stubs=1,build_tags=//go:build js"
     pushd $package
     protoc -I/usr/local/include -I. -I.. \
       --plugin=protoc-gen-custom=$falafel\
