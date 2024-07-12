@@ -1,6 +1,8 @@
 module github.com/lightninglabs/aperture
 
-go 1.19
+go 1.22
+
+toolchain go1.22.3
 
 require (
 	github.com/btcsuite/btcd v0.24.1-0.20240123000108-62e6af035ec5
