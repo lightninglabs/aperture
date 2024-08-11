@@ -41,11 +41,14 @@ func (l *L402Authenticator) Accept(header *http.Header, serviceName string) bool
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
-	mac, preimage, err := l402.FromHeader(header)
+	macs, preimage, err := l402.FromHeader(header)
 	if err != nil {
 		log.Debugf("Deny: %v", err)
 		return false
 	}
+
+	// TODO: Be able to accept multiple macaroons
+	mac := macs[0]
 
 	verificationParams := &mint.VerificationParams{
 		Macaroon:      mac,
