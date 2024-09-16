@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -32,9 +33,11 @@ var (
 )
 
 func init() {
-	logWriter := build.NewRotatingLogWriter()
-	SetupLoggers(logWriter, signal.Interceptor{})
-	_ = build.ParseAndSetDebugLevels("trace,PRXY=warn", logWriter)
+	logMgr = build.NewSubLoggerManager(
+		build.NewConsoleHandler(os.Stdout),
+	)
+	SetupLoggers(logMgr, signal.Interceptor{})
+	_ = build.ParseAndSetDebugLevels("trace,PRXY=warn", logMgr)
 }
 
 func TestHashMailServerReturnStream(t *testing.T) {
