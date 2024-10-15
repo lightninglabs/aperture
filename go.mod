@@ -5,8 +5,8 @@ go 1.22.6
 toolchain go1.22.7
 
 require (
-	github.com/btcsuite/btcd v0.24.2-beta.rc1.0.20240625142744-cc26860b4026
-	github.com/btcsuite/btcd/btcec/v2 v2.3.3
+	github.com/btcsuite/btcd v0.24.3-0.20240921052913-67b8efd3ba53
+	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/btcsuite/btcd/btcutil v1.1.5
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
@@ -21,8 +21,8 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/lightninglabs/lightning-node-connect v0.2.5-alpha
 	github.com/lightninglabs/lightning-node-connect/hashmailrpc v1.0.2
-	github.com/lightninglabs/lndclient v0.17.4-4
-	github.com/lightningnetwork/lnd v0.18.0-beta.rc4.0.20240918100428-838a32d13ca5
+	github.com/lightninglabs/lndclient v0.18.4-0
+	github.com/lightningnetwork/lnd v0.18.3-beta.rc3.0.20241011124628-ca3bde901eb8
 	github.com/lightningnetwork/lnd/cert v1.2.2
 	github.com/lightningnetwork/lnd/clock v1.1.1
 	github.com/lightningnetwork/lnd/tlv v1.2.6

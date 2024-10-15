@@ -627,7 +627,7 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	}
 
 	err := logWriter.InitLogRotator(
-		logFile, build.Gzip, defaultMaxLogFileSize, defaultMaxLogFiles,
+		logFile, defaultMaxLogFileSize, defaultMaxLogFiles,
 	)
 	if err != nil {
 		return err
