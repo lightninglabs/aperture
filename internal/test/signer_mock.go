@@ -53,6 +53,14 @@ func (s *mockSigner) SignMessage(ctx context.Context, msg []byte,
 	return s.lnd.Signature, nil
 }
 
+func (s *mockSigner) SignOutputRawKeyLocator(ctx context.Context,
+	tx *wire.MsgTx,
+	signDescriptors []*lndclient.SignDescriptor,
+	prevOutputs []*wire.TxOut) ([][]byte, error) {
+
+	return [][]byte{s.lnd.Signature}, nil
+}
+
 func (s *mockSigner) VerifyMessage(ctx context.Context, msg, sig []byte,
 	pubkey [33]byte, opts ...lndclient.VerifyMessageOption) (bool, error) {
 

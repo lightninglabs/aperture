@@ -1,7 +1,7 @@
 package aperture
 
 import (
-	"github.com/btcsuite/btclog"
+	"github.com/btcsuite/btclog/v2"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
 	"github.com/lightninglabs/aperture/l402"
@@ -20,10 +20,9 @@ var (
 )
 
 // SetupLoggers initializes all package-global logger variables.
-func SetupLoggers(root *build.RotatingLogWriter, intercept signal.Interceptor) {
+func SetupLoggers(root *build.SubLoggerManager, intercept signal.Interceptor) {
 	genLogger := genSubLogger(root, intercept)
 
-	logWriter = root
 	log = build.NewSubLogger(Subsystem, genLogger)
 
 	lnd.SetSubLogger(root, Subsystem, log)
@@ -38,7 +37,7 @@ func SetupLoggers(root *build.RotatingLogWriter, intercept signal.Interceptor) {
 
 // genSubLogger creates a logger for a subsystem. We provide an instance of
 // a signal.Interceptor to be able to shutdown in the case of a critical error.
-func genSubLogger(root *build.RotatingLogWriter,
+func genSubLogger(root *build.SubLoggerManager,
 	interceptor signal.Interceptor) func(string) btclog.Logger {
 
 	// Create a shutdown function which will request shutdown from our

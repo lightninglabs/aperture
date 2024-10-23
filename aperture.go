@@ -619,7 +619,10 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	}
 
 	// Now initialize the logger and set the log level.
-	SetupLoggers(logWriter, interceptor)
+	sugLogMgr := build.NewSubLoggerManager(
+		build.NewDefaultLogHandlers(cfg.Logging, logWriter)...,
+	)
+	SetupLoggers(sugLogMgr, interceptor)
 
 	// Use our default data dir unless a base dir is set.
 	logFile := filepath.Join(apertureDataDir, defaultLogFilename)
@@ -628,12 +631,13 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	}
 
 	err := logWriter.InitLogRotator(
-		logFile, defaultMaxLogFileSize, defaultMaxLogFiles,
+		cfg.Logging.File, logFile,
 	)
 	if err != nil {
 		return err
 	}
-	return build.ParseAndSetDebugLevels(cfg.DebugLevel, logWriter)
+
+	return build.ParseAndSetDebugLevels(cfg.DebugLevel, sugLogMgr)
 }
 
 // getTLSConfig returns a TLS configuration for either a self-signed certificate

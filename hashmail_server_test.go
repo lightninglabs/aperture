@@ -7,9 +7,11 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btclog/v2"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/lntest/wait"
@@ -32,9 +34,12 @@ var (
 )
 
 func init() {
-	logWriter := build.NewRotatingLogWriter()
-	SetupLoggers(logWriter, signal.Interceptor{})
-	_ = build.ParseAndSetDebugLevels("trace,PRXY=warn", logWriter)
+	logMgr := build.NewSubLoggerManager(btclog.NewDefaultHandler(os.Stdout))
+	SetupLoggers(logMgr, signal.Interceptor{})
+	err := build.ParseAndSetDebugLevels("trace,PRXY=warn", logMgr)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func TestHashMailServerReturnStream(t *testing.T) {
