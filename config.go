@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightningnetwork/lnd/build"
 )
 
 var (
@@ -219,6 +220,13 @@ type Config struct {
 	// WriteTimeout is the maximum amount of time to wait for a response to
 	// be fully written.
 	WriteTimeout time.Duration `long:"writetimeout" description:"The maximum amount of time to wait for a response to be fully written."`
+
+	// Logging controls various aspects of aperture logging.
+	Logging *build.LogConfig `group:"logging" namespace:"logging"`
+
+	// LogCompressor sets the compression algorithm to use when rotating
+	// logs.
+	LogCompressor string `long:"logcompressor" description:"Compression algorithm to use when rotating logs." choice:"gzip" choice:"zstd"`
 }
 
 func (c *Config) validate() error {
@@ -235,7 +243,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// DefaultConfig returns the default configuration for a sqlite backend.
+// DefaultSqliteConfig returns the default configuration for a sqlite backend.
 func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 	return &aperturedb.SqliteConfig{
 		SkipMigrations:   false,
@@ -257,5 +265,7 @@ func NewConfig() *Config {
 		IdleTimeout:     defaultIdleTimeout,
 		ReadTimeout:     defaultReadTimeout,
 		WriteTimeout:    defaultWriteTimeout,
+		Logging:         build.DefaultLogConfig(),
+		LogCompressor:   build.Gzip,
 	}
 }

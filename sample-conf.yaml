@@ -215,3 +215,12 @@ hashmail:
 prometheus:
   enabled: true
   listenaddr: "localhost:9000"
+
+# Console and file logger settings.
+logging:
+  console:
+    disable: false
+    call-site: short
+  file:
+    disable: true
+    call-site: long
