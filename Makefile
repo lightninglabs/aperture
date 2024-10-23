@@ -58,7 +58,7 @@ build:
 
 install:
 	@$(call print, "Installing aperture.")
-	$(GOINSTALL) $(PKG)/cmd/aperture
+	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
 
 docker-tools:
 	@$(call print, "Building tools docker image.")
