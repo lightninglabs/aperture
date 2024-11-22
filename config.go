@@ -43,7 +43,7 @@ type EtcdConfig struct {
 }
 
 type AuthConfig struct {
-	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet"`
+	Network string `long:"network" description:"The network LND is connected to." choice:"regtest" choice:"simnet" choice:"testnet" choice:"mainnet" choice:"signet"`
 
 	Disable bool `long:"disable" description:"Whether to disable auth."`
 
