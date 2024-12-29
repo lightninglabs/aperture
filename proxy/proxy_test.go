@@ -113,7 +113,7 @@ func TestProxyHTTP(t *testing.T) {
 	}
 }
 
-// TestProxyHTTP tests that the proxy can forward HTTP requests to a backend
+// runHTTPTest tests that the proxy can forward HTTP requests to a backend
 // service and handle L402 authentication correctly.
 func runHTTPTest(t *testing.T, tc *testCase, method string) {
 	// Create a list of services to proxy between.
@@ -217,7 +217,7 @@ func runHTTPTest(t *testing.T, tc *testCase, method string) {
 	require.EqualValues(t, len(bodyBytes), resp.ContentLength)
 }
 
-// TestProxyHTTP tests that the proxy can forward gRPC requests to a backend
+// TestProxyGRPC tests that the proxy can forward gRPC requests to a backend
 // service and handle L402 authentication correctly.
 func TestProxyGRPC(t *testing.T) {
 	testCases := []*testCase{{
@@ -255,7 +255,7 @@ func TestProxyGRPC(t *testing.T) {
 	}
 }
 
-// TestProxyHTTP tests that the proxy can forward gRPC requests to a backend
+// runGRPCTest tests that the proxy can forward gRPC requests to a backend
 // service and handle L402 authentication correctly.
 func runGRPCTest(t *testing.T, tc *testCase) {
 	// Since gRPC only really works over TLS, we need to generate a
