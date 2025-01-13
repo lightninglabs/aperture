@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+)
+
+const (
+	// invoiceQueryPageSize is the maximum number of invoices that will be
+	// queried in a single request.
+	invoiceQueryPageSize = 1000
 )
 
 // LndChallenger is a challenger that uses an lnd backend to create new L402
@@ -74,7 +79,7 @@ func NewLndChallenger(client InvoiceClient,
 
 // Start starts the challenger's main work which is to keep track of all
 // invoices and their states. For that the backing lnd node is queried for all
-// invoices on startup and the a subscription to all subsequent invoice updates
+// invoices on startup and a subscription to all subsequent invoice updates
 // is created.
 func (l *LndChallenger) Start() error {
 	// These are the default values for the subscription. In case there are
@@ -84,49 +89,64 @@ func (l *LndChallenger) Start() error {
 	addIndex := uint64(0)
 	settleIndex := uint64(0)
 
-	// Get a list of all existing invoices on startup and add them to our
-	// cache. We need to keep track of all invoices, even quite old ones to
-	// make sure tokens are valid. But to save space we only keep track of
-	// an invoice's state.
+	log.Debugf("Starting LND challenger")
+	// Paginate through all existing invoices on startup and add them to our
+	// cache. We need to keep track of all invoices to ensure tokens are
+	// valid.
 	ctx := l.clientCtx()
-	invoiceResp, err := l.client.ListInvoices(
-		ctx, &lnrpc.ListInvoiceRequest{
-			NumMaxInvoices: math.MaxUint64,
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	// Advance our indices to the latest known one so we'll only receive
-	// updates for new invoices and/or newly settled invoices.
-	l.invoicesMtx.Lock()
-	for _, invoice := range invoiceResp.Invoices {
-		// Some invoices like AMP invoices may not have a payment hash
-		// populated.
-		if invoice.RHash == nil {
-			continue
-		}
-
-		if invoice.AddIndex > addIndex {
-			addIndex = invoice.AddIndex
-		}
-		if invoice.SettleIndex > settleIndex {
-			settleIndex = invoice.SettleIndex
-		}
-		hash, err := lntypes.MakeHash(invoice.RHash)
+	indexOffset := uint64(0)
+	for {
+		log.Debugf("Querying invoices from index %d", indexOffset)
+		invoiceResp, err := l.client.ListInvoices(
+			ctx, &lnrpc.ListInvoiceRequest{
+				IndexOffset:    indexOffset,
+				NumMaxInvoices: invoiceQueryPageSize,
+			},
+		)
 		if err != nil {
-			l.invoicesMtx.Unlock()
-			return fmt.Errorf("error parsing invoice hash: %v", err)
+			return err
 		}
 
-		// Don't track the state of canceled or expired invoices.
-		if invoiceIrrelevant(invoice) {
-			continue
+		// If there are no more invoices, stop pagination.
+		if len(invoiceResp.Invoices) == 0 {
+			break
 		}
-		l.invoiceStates[hash] = invoice.State
+
+		// Lock the mutex to safely update the invoice states.
+		l.invoicesMtx.Lock()
+		for _, invoice := range invoiceResp.Invoices {
+			// Skip invoices that do not have a payment hash
+			// populated.
+			if invoice.RHash == nil {
+				continue
+			}
+
+			if invoice.AddIndex > addIndex {
+				addIndex = invoice.AddIndex
+			}
+			if invoice.SettleIndex > settleIndex {
+				settleIndex = invoice.SettleIndex
+			}
+			hash, err := lntypes.MakeHash(invoice.RHash)
+			if err != nil {
+				l.invoicesMtx.Unlock()
+				return fmt.Errorf("error parsing invoice "+
+					"hash: %v", err)
+			}
+
+			// Skip tracking the state of canceled or expired
+			// invoices.
+			if invoiceIrrelevant(invoice) {
+				continue
+			}
+			l.invoiceStates[hash] = invoice.State
+		}
+		l.invoicesMtx.Unlock()
+
+		// Update the index offset for the next batch.
+		indexOffset = invoiceResp.LastIndexOffset
 	}
-	l.invoicesMtx.Unlock()
+	log.Debugf("Finished querying invoices")
 
 	// We need to be able to cancel any subscription we make.
 	ctxc, cancel := context.WithCancel(l.clientCtx())
