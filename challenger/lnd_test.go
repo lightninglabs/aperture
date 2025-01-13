@@ -49,11 +49,21 @@ type mockInvoiceClient struct {
 
 // ListInvoices returns a paginated list of all invoices known to lnd.
 func (m *mockInvoiceClient) ListInvoices(_ context.Context,
-	_ *lnrpc.ListInvoiceRequest,
+	r *lnrpc.ListInvoiceRequest,
 	_ ...grpc.CallOption) (*lnrpc.ListInvoiceResponse, error) {
 
+	if r.IndexOffset >= uint64(len(m.invoices)) {
+		return &lnrpc.ListInvoiceResponse{}, nil
+	}
+
+	endIndex := r.IndexOffset + r.NumMaxInvoices
+	if endIndex > uint64(len(m.invoices)) {
+		endIndex = uint64(len(m.invoices))
+	}
+
 	return &lnrpc.ListInvoiceResponse{
-		Invoices: m.invoices,
+		Invoices:        m.invoices[r.IndexOffset:endIndex],
+		LastIndexOffset: endIndex,
 	}, nil
 }
 
