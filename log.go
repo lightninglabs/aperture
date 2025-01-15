@@ -3,6 +3,7 @@ package aperture
 import (
 	"github.com/btcsuite/btclog"
 	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/challenger"
 	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lndclient"
@@ -30,6 +31,7 @@ func SetupLoggers(root *build.RotatingLogWriter, intercept signal.Interceptor) {
 	lnd.AddSubLogger(root, l402.Subsystem, intercept, l402.UseLogger)
 	lnd.AddSubLogger(root, proxy.Subsystem, intercept, proxy.UseLogger)
 	lnd.AddSubLogger(root, "LNDC", intercept, lndclient.UseLogger)
+	lnd.AddSubLogger(root, "CHLGR", intercept, challenger.UseLogger)
 }
 
 // genSubLogger creates a logger for a subsystem. We provide an instance of
