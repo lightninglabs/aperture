@@ -336,7 +336,8 @@ func (a *Aperture) Start(errChan chan error) error {
 			}
 
 			a.challenger, err = challenger.NewLNCChallenger(
-				session, lncStore, genInvoiceReq, errChan,
+				session, lncStore, a.cfg.InvoiceBatchSize,
+				genInvoiceReq, errChan,
 			)
 			if err != nil {
 				return fmt.Errorf("unable to start lnc "+
@@ -359,8 +360,8 @@ func (a *Aperture) Start(errChan chan error) error {
 			}
 
 			a.challenger, err = challenger.NewLndChallenger(
-				client, genInvoiceReq, context.Background,
-				errChan,
+				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
+				context.Background, errChan,
 			)
 			if err != nil {
 				return err

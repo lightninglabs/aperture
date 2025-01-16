@@ -12,14 +12,15 @@ import (
 )
 
 var (
-	apertureDataDir        = btcutil.AppDataDir("aperture", false)
-	defaultConfigFilename  = "aperture.yaml"
-	defaultTLSKeyFilename  = "tls.key"
-	defaultTLSCertFilename = "tls.cert"
-	defaultLogLevel        = "info"
-	defaultLogFilename     = "aperture.log"
-	defaultMaxLogFiles     = 3
-	defaultMaxLogFileSize  = 10
+	apertureDataDir         = btcutil.AppDataDir("aperture", false)
+	defaultConfigFilename   = "aperture.yaml"
+	defaultTLSKeyFilename   = "tls.key"
+	defaultTLSCertFilename  = "tls.cert"
+	defaultLogLevel         = "info"
+	defaultLogFilename      = "aperture.log"
+	defaultMaxLogFiles      = 3
+	defaultMaxLogFileSize   = 10
+	defaultInvoiceBatchSize = 100000
 
 	defaultSqliteDatabaseFileName = "aperture.db"
 
@@ -219,6 +220,10 @@ type Config struct {
 	// WriteTimeout is the maximum amount of time to wait for a response to
 	// be fully written.
 	WriteTimeout time.Duration `long:"writetimeout" description:"The maximum amount of time to wait for a response to be fully written."`
+
+	// InvoiceBatchSize is the number of invoices to fetch in a single
+	// request.
+	InvoiceBatchSize int `long:"invoicebatchsize" description:"The number of invoices to fetch in a single request."`
 }
 
 func (c *Config) validate() error {
@@ -230,6 +235,10 @@ func (c *Config) validate() error {
 
 	if c.ListenAddr == "" {
 		return fmt.Errorf("missing listen address for server")
+	}
+
+	if c.InvoiceBatchSize <= 0 {
+		return fmt.Errorf("invoice batch size must be greater than 0")
 	}
 
 	return nil
@@ -246,16 +255,17 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
-		DatabaseBackend: "etcd",
-		Etcd:            &EtcdConfig{},
-		Sqlite:          DefaultSqliteConfig(),
-		Postgres:        &aperturedb.PostgresConfig{},
-		Authenticator:   &AuthConfig{},
-		Tor:             &TorConfig{},
-		HashMail:        &HashMailConfig{},
-		Prometheus:      &PrometheusConfig{},
-		IdleTimeout:     defaultIdleTimeout,
-		ReadTimeout:     defaultReadTimeout,
-		WriteTimeout:    defaultWriteTimeout,
+		DatabaseBackend:  "etcd",
+		Etcd:             &EtcdConfig{},
+		Sqlite:           DefaultSqliteConfig(),
+		Postgres:         &aperturedb.PostgresConfig{},
+		Authenticator:    &AuthConfig{},
+		Tor:              &TorConfig{},
+		HashMail:         &HashMailConfig{},
+		Prometheus:       &PrometheusConfig{},
+		IdleTimeout:      defaultIdleTimeout,
+		ReadTimeout:      defaultReadTimeout,
+		WriteTimeout:     defaultWriteTimeout,
+		InvoiceBatchSize: defaultInvoiceBatchSize,
 	}
 }
