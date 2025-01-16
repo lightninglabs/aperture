@@ -12,16 +12,11 @@ import (
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
-const (
-	// invoiceQueryPageSize is the maximum number of invoices that will be
-	// queried in a single request.
-	invoiceQueryPageSize = 1000
-)
-
 // LndChallenger is a challenger that uses an lnd backend to create new L402
 // payment challenges.
 type LndChallenger struct {
 	client        InvoiceClient
+	batchSize     int
 	clientCtx     func() context.Context
 	genInvoiceReq InvoiceRequestGenerator
 
@@ -42,7 +37,7 @@ var _ Challenger = (*LndChallenger)(nil)
 
 // NewLndChallenger creates a new challenger that uses the given connection to
 // an lnd backend to create payment challenges.
-func NewLndChallenger(client InvoiceClient,
+func NewLndChallenger(client InvoiceClient, batchSize int,
 	genInvoiceReq InvoiceRequestGenerator,
 	ctxFunc func() context.Context,
 	errChan chan<- error) (*LndChallenger, error) {
@@ -60,6 +55,7 @@ func NewLndChallenger(client InvoiceClient,
 	invoicesMtx := &sync.Mutex{}
 	challenger := &LndChallenger{
 		client:        client,
+		batchSize:     batchSize,
 		clientCtx:     ctxFunc,
 		genInvoiceReq: genInvoiceReq,
 		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
@@ -100,7 +96,7 @@ func (l *LndChallenger) Start() error {
 		invoiceResp, err := l.client.ListInvoices(
 			ctx, &lnrpc.ListInvoiceRequest{
 				IndexOffset:    indexOffset,
-				NumMaxInvoices: invoiceQueryPageSize,
+				NumMaxInvoices: uint64(l.batchSize),
 			},
 		)
 		if err != nil {
