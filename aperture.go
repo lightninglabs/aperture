@@ -202,7 +202,7 @@ func (a *Aperture) Start(errChan chan error) error {
 
 	// Enable http profiling and validate profile port number if requested.
 	if a.cfg.Profile != 0 {
-		if a.cfg.Profile < 1024 || a.cfg.Profile > 65535 {
+		if a.cfg.Profile < 1024 {
 			return fmt.Errorf("the profile port must be between " +
 				"1024 and 65535")
 		}

@@ -58,7 +58,6 @@ func TestServicesCaveatSerialization(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		success := t.Run(test.name, func(t *testing.T) {
 			services, err := decodeServicesCaveatValue(test.value)
 			if !errors.Is(err, test.err) {

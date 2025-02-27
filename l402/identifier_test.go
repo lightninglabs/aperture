@@ -44,7 +44,6 @@ func TestIdentifierSerialization(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		success := t.Run(test.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			err := EncodeIdentifier(&buf, &test.id)

@@ -18,8 +18,6 @@ var (
 	defaultTLSCertFilename  = "tls.cert"
 	defaultLogLevel         = "info"
 	defaultLogFilename      = "aperture.log"
-	defaultMaxLogFiles      = 3
-	defaultMaxLogFileSize   = 10
 	defaultInvoiceBatchSize = 100000
 
 	defaultSqliteDatabaseFileName = "aperture.db"
