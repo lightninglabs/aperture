@@ -19,12 +19,7 @@ env:
 
   # If you change this value, please change it in the following files as well:
   # /Dockerfile
-  #
-  # Don't bump this until go 1.19 is out (which should include a fix for
-  # https://github.com/golang/go/issues/51799). There was a race condition
-  # introduced with go 1.16.10 that causes the unit tests to fail (could also
-  # happen in production).
-  GO_VERSION: 1.22.6
+  GO_VERSION: 1.23.6
 
 jobs:
   ########################
