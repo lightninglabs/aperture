@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
@@ -42,7 +43,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protojson"
-	"gopkg.in/yaml.v2"
 )
 
 const (
