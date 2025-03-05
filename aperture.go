@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
@@ -42,7 +43,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protojson"
-	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -202,7 +202,7 @@ func (a *Aperture) Start(errChan chan error) error {
 
 	// Enable http profiling and validate profile port number if requested.
 	if a.cfg.Profile != 0 {
-		if a.cfg.Profile < 1024 || a.cfg.Profile > 65535 {
+		if a.cfg.Profile < 1024 {
 			return fmt.Errorf("the profile port must be between " +
 				"1024 and 65535")
 		}
@@ -619,7 +619,10 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	}
 
 	// Now initialize the logger and set the log level.
-	SetupLoggers(logWriter, interceptor)
+	sugLogMgr := build.NewSubLoggerManager(
+		build.NewDefaultLogHandlers(cfg.Logging, logWriter)...,
+	)
+	SetupLoggers(sugLogMgr, interceptor)
 
 	// Use our default data dir unless a base dir is set.
 	logFile := filepath.Join(apertureDataDir, defaultLogFilename)
@@ -628,12 +631,13 @@ func setupLogging(cfg *Config, interceptor signal.Interceptor) error {
 	}
 
 	err := logWriter.InitLogRotator(
-		logFile, defaultMaxLogFileSize, defaultMaxLogFiles,
+		cfg.Logging.File, logFile,
 	)
 	if err != nil {
 		return err
 	}
-	return build.ParseAndSetDebugLevels(cfg.DebugLevel, logWriter)
+
+	return build.ParseAndSetDebugLevels(cfg.DebugLevel, sugLogMgr)
 }
 
 // getTLSConfig returns a TLS configuration for either a self-signed certificate

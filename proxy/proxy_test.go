@@ -101,8 +101,6 @@ func TestProxyHTTP(t *testing.T) {
 	}}
 
 	for _, tc := range testCases {
-		tc := tc
-
 		t.Run(tc.name+" GET", func(t *testing.T) {
 			runHTTPTest(t, tc, "GET")
 		})
@@ -236,8 +234,6 @@ func TestProxyGRPC(t *testing.T) {
 	}}
 
 	for _, tc := range testCases {
-		tc := tc
-
 		t.Run(tc.name, func(t *testing.T) {
 			runGRPCTest(t, tc)
 		})

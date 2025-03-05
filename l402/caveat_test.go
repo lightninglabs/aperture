@@ -39,7 +39,6 @@ func TestCaveatSerialization(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		success := t.Run(test.name, func(t *testing.T) {
 			caveat, err := DecodeCaveat(test.caveatStr)
 			if !errors.Is(err, test.err) {
@@ -185,7 +184,6 @@ func TestVerifyCaveats(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		success := t.Run(test.name, func(t *testing.T) {
 			err := VerifyCaveats(test.caveats, test.satisfiers...)
 			if test.shouldFail && err == nil {

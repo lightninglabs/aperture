@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightningnetwork/lnd/build"
 )
 
 var (
@@ -18,8 +19,6 @@ var (
 	defaultTLSCertFilename  = "tls.cert"
 	defaultLogLevel         = "info"
 	defaultLogFilename      = "aperture.log"
-	defaultMaxLogFiles      = 3
-	defaultMaxLogFileSize   = 10
 	defaultInvoiceBatchSize = 100000
 
 	defaultSqliteDatabaseFileName = "aperture.db"
@@ -224,6 +223,9 @@ type Config struct {
 	// InvoiceBatchSize is the number of invoices to fetch in a single
 	// request.
 	InvoiceBatchSize int `long:"invoicebatchsize" description:"The number of invoices to fetch in a single request."`
+
+	// Logging controls various aspects of aperture logging.
+	Logging *build.LogConfig `group:"logging" namespace:"logging"`
 }
 
 func (c *Config) validate() error {
@@ -244,7 +246,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// DefaultConfig returns the default configuration for a sqlite backend.
+// DefaultSqliteConfig returns the default configuration for a sqlite backend.
 func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 	return &aperturedb.SqliteConfig{
 		SkipMigrations:   false,
@@ -267,5 +269,6 @@ func NewConfig() *Config {
 		ReadTimeout:      defaultReadTimeout,
 		WriteTimeout:     defaultWriteTimeout,
 		InvoiceBatchSize: defaultInvoiceBatchSize,
+		Logging:          build.DefaultLogConfig(),
 	}
 }

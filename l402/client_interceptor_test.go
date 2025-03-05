@@ -282,7 +282,6 @@ func TestUnaryInterceptor(t *testing.T) {
 
 	// Run through the test cases.
 	for _, tc := range testCases {
-		tc := tc
 		intercept := func() error {
 			return tc.interceptor.UnaryInterceptor(
 				ctx, "", nil, nil, nil, unaryInvoker, nil,
@@ -314,7 +313,6 @@ func TestStreamInterceptor(t *testing.T) {
 
 	// Run through the test cases.
 	for _, tc := range testCases {
-		tc := tc
 		intercept := func() error {
 			_, err := tc.interceptor.StreamInterceptor(
 				ctx, nil, nil, "", streamInvoker,
