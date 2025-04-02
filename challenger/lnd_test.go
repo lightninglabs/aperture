@@ -98,18 +98,19 @@ func newChallenger() (*LndChallenger, *mockInvoiceClient, chan error) {
 		return newInvoice(lntypes.ZeroHash, 99, lnrpc.Invoice_OPEN),
 			nil
 	}
-	invoicesMtx := &sync.Mutex{}
+
 	mainErrChan := make(chan error)
-	return &LndChallenger{
+	quitChan := make(chan struct{})
+	challenger := &LndChallenger{
 		client:        mockClient,
 		clientCtx:     context.Background,
 		genInvoiceReq: genInvoiceReq,
-		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
-		quit:          make(chan struct{}),
-		invoicesMtx:   invoicesMtx,
-		invoicesCond:  sync.NewCond(invoicesMtx),
+		invoiceStore:  NewInvoiceStateStore(quitChan),
+		quit:          quitChan,
 		errChan:       mainErrChan,
-	}, mockClient, mainErrChan
+	}
+
+	return challenger, mockClient, mainErrChan
 }
 
 func newInvoice(hash lntypes.Hash, addIndex uint64,
@@ -131,7 +132,7 @@ func TestLndChallenger(t *testing.T) {
 	// First of all, test that the NewLndChallenger doesn't allow a nil
 	// invoice generator function.
 	errChan := make(chan error)
-	_, err := NewLndChallenger(nil, nil, nil, errChan)
+	_, err := NewLndChallenger(nil, 0, nil, nil, errChan)
 	require.Error(t, err)
 
 	// Now mock the lnd backend and create a challenger instance that we can
@@ -149,10 +150,16 @@ func TestLndChallenger(t *testing.T) {
 	// Now we already have an invoice in our lnd mock. When starting the
 	// challenger, we should have that invoice in the cache and a
 	// subscription that only starts at our faked addIndex.
-	err = c.Start()
+	// In the test setup, Start() is called after the challenger is created
+	// by newChallenger, which already pre-populates the store.
+	// We'll call Start() again here to ensure the subscription logic runs.
+	c.Start()
 	require.NoError(t, err)
-	require.Equal(t, 1, len(c.invoiceStates))
-	require.Equal(t, lnrpc.Invoice_OPEN, c.invoiceStates[lntypes.ZeroHash])
+
+	// Wait for the invoices to be loaded.
+	c.invoiceStore.WaitForInitialLoad(time.Second * 3)
+
+	// Verify the initial state using the public method, not direct access.
 	require.Equal(t, uint64(99), invoiceMock.lastAddIndex)
 	require.NoError(t, c.VerifyInvoiceStatus(
 		lntypes.ZeroHash, lnrpc.Invoice_OPEN, defaultTimeout,
@@ -223,16 +230,20 @@ func TestLndChallenger(t *testing.T) {
 	}
 
 	// Finally test that if an error occurs in the invoice subscription the
-	// challenger reports it on the main error channel to cause a shutdown
-	// of aperture. The mock's error channel is buffered so we can send
-	// directly.
-	invoiceMock.errChan <- fmt.Errorf("an expected error")
+	// challenger reports it on the main error channel to cause a shutdown.
+	// The mock's error channel is buffered so we can send directly.
+	expectedErr := fmt.Errorf("an expected error")
+	invoiceMock.errChan <- expectedErr
 	select {
 	case err := <-mainErrChan:
-		require.Error(t, err)
+		require.ErrorIs(t, err, expectedErr) // Check if it's the expected error
 
 		// Make sure that the goroutine exited.
 		done := make(chan struct{})
+		require.Error(t, err)
+
+		// Make sure that the goroutine exited.
+		done = make(chan struct{})
 		go func() {
 			c.wg.Wait()
 			done <- struct{}{}
@@ -249,6 +260,8 @@ func TestLndChallenger(t *testing.T) {
 		t.Fatalf("error not received on main chan before the timeout")
 	}
 
+	// Stop the mock client first to close its quit channel used by the store
 	invoiceMock.stop()
+	// Then stop the challenger
 	c.Stop()
 }

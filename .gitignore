@@ -16,3 +16,5 @@ cmd/aperture/aperture
 
 # misc
 .vscode
+.aider*
+CONVENTIONS.md
