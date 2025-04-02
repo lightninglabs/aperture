@@ -1,13 +1,24 @@
 package challenger
 
 import (
+	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic" // Import atomic package
+	"sync/atomic"
 	"time"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+)
+
+var (
+	// errConditionTimeout is returned by waitForCondition when the
+	// condition is not met before the timeout expires.
+	errConditionTimeout = errors.New("condition not met before timeout")
+
+	// ErrShutdown is returned when the challenger is shutting down and a
+	// wait operation is aborted.
+	ErrShutdown = errors.New("challenger shutting down")
 )
 
 // InvoiceStateStore manages the state of invoices in a thread-safe manner and
@@ -16,7 +27,7 @@ type InvoiceStateStore struct {
 	// states holds the last known state for invoices.
 	states map[lntypes.Hash]lnrpc.Invoice_InvoiceState
 
-	// mtx guards access to states and initialLoadComplete.
+	// mtx guards access to states.
 	mtx sync.Mutex
 
 	// cond is used to signal waiters when states is updated or when the
@@ -24,7 +35,7 @@ type InvoiceStateStore struct {
 	cond *sync.Cond
 
 	// initialLoadComplete is true once the initial fetching of all
-	// historical invoices is done. Use atomic for lock-free reads/writes.
+	// historical invoices is done.
 	initialLoadComplete atomic.Bool
 
 	// quit channel signals the store that the challenger is shutting down.
@@ -81,8 +92,8 @@ func (s *InvoiceStateStore) DeleteState(hash lntypes.Hash) {
 }
 
 // GetState retrieves the current state for a given invoice hash.
-func (s *InvoiceStateStore) GetState(hash lntypes.Hash,
-) (lnrpc.Invoice_InvoiceState, bool) {
+func (s *InvoiceStateStore) GetState(
+	hash lntypes.Hash) (lnrpc.Invoice_InvoiceState, bool) {
 
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -94,13 +105,12 @@ func (s *InvoiceStateStore) GetState(hash lntypes.Hash,
 // MarkInitialLoadComplete sets the initialLoadComplete flag to true atomically
 // and broadcasts on the condition variable to wake up any waiting goroutines.
 func (s *InvoiceStateStore) MarkInitialLoadComplete() {
-	// Check atomically first to potentially avoid locking and broadcasting.
+	// Check atomically first to potentially avoid locking and
+	// broadcasting.
 	if s.initialLoadComplete.Load() {
-		// Already marked so we can return early.
 		return
 	}
 
-	// Grab the lock now to ensure we can use the condition variable safely.
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
@@ -120,225 +130,191 @@ func (s *InvoiceStateStore) IsInitialLoadComplete() bool {
 	return s.initialLoadComplete.Load()
 }
 
-// waitForCondition blocks until the provided condition function returns true, a
-// timeout occurs, or the quit signal is received. The mutex `s.mtx` MUST be
-// held by the caller when calling this function. The mutex will be unlocked
-// while waiting and re-locked before returning. It returns an error if the
-// timeout is reached or the quit signal is received.
+// waitForCondition blocks until the provided condition function returns true,
+// a timeout occurs, or the quit signal is received. The condition function is
+// called under the store's mutex. This method manages all locking internally
+// and the caller should NOT hold the mutex.
+//
+// Returns errConditionTimeout if the timeout fires before the condition is met,
+// or ErrShutdown if the quit channel is closed.
 func (s *InvoiceStateStore) waitForCondition(condition func() bool,
-	timeout time.Duration, timeoutMsg string) error {
+	timeout time.Duration) error {
 
-	// Check condition immediately before waiting.
-	if condition() {
-		return nil
-	}
+	var (
+		wg             sync.WaitGroup
+		doneChan       = make(chan struct{})
+		timeoutReached bool
+		conditionMet   bool
+	)
 
-	// Start the timeout timer.
+	// Use an explicit timer so we can stop it if the condition is met
+	// before the timeout fires, avoiding a resource leak.
 	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 
-	// Channel to signal when the condition is met or quit signal is
-	// received.
-	waitDone := make(chan struct{})
-
-	// Goroutine to wait on the condition variable.
+	// Spawn a goroutine that will signal timeout. This ensures the
+	// waiter goroutine doesn't block forever if the condition is never
+	// met.
+	wg.Add(1)
 	go func() {
-		// Re-acquire lock for cond.Wait
-		s.mtx.Lock()
-		for !condition() {
-			// Check quit signal before waiting indefinitely.
-			select {
-			case <-s.quit:
-				s.mtx.Unlock()
-				close(waitDone)
-				return
-			default:
-			}
+		defer wg.Done()
 
-			// Wait for the condition to be signaled.
-			s.cond.Wait()
+		select {
+		case <-doneChan:
+			// Condition was met before timeout. Stop the timer
+			// to release its resources.
+			timer.Stop()
+			return
+
+		case <-timer.C:
+			// Timeout reached.
+
+		case <-s.quit:
+			// Shutdown signal.
+			timer.Stop()
 		}
+
+		s.mtx.Lock()
+		timeoutReached = true
+		s.cond.Broadcast()
 		s.mtx.Unlock()
-		close(waitDone)
 	}()
 
-	// Unlock to allow the waiting goroutine to acquire it. We expect the
-	// caller to already have held the lock.
-	s.mtx.Unlock()
+	// Spawn the main waiter goroutine that blocks on the condition
+	// variable.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 
-	// Wait for either the condition to be met, timeout, or quit signal.
-	var errResult error
-	select {
-	case <-waitDone:
-		// Condition met or quit signal received by waiter.
-		if !timer.Stop() {
-			// Timer already fired and channel might contain value,
-			// drain it. Use a select to prevent blocking if the
-			// channel is empty.
-			select {
-			case <-timer.C:
-			default:
-			}
+		s.mtx.Lock()
+		for !condition() && !timeoutReached {
+			s.cond.Wait()
 		}
+		conditionMet = condition()
+		s.mtx.Unlock()
 
-		// Re-check quit signal after waitDone is closed.
+		close(doneChan)
+	}()
+
+	// Wait for both goroutines to complete.
+	wg.Wait()
+
+	if !conditionMet {
 		select {
 		case <-s.quit:
-			log.Warnf("waitForCondition: Shutdown signal received " +
-				"while condition was being met.")
-
-			errResult = fmt.Errorf("challenger shutting down")
-
+			return ErrShutdown
 		default:
-			// Condition was met successfully.
-			errResult = nil
+			return errConditionTimeout
 		}
-
-	case <-timer.C:
-		// Timeout expired.
-		log.Warnf("waitForCondition: %s (timeout: %v)", timeoutMsg,
-			timeout)
-		errResult = fmt.Errorf("%s", timeoutMsg)
-
-		// We need to signal the waiting goroutine to stop, best way is via
-		// quit channel, but we don't control that. The waiting goroutine will
-		// eventually see the condition is true (if it changes later) or hit the
-		// quit signal.
-
-	case <-s.quit:
-		// Shutdown signal received while waiting for timer/condition.
-		log.Warnf("waitForCondition: Shutdown signal received.")
-
-		timer.Stop()
-		errResult = fmt.Errorf("challenger shutting down")
 	}
 
-	// Re-acquire lock before returning, as expected by the caller.
-	s.mtx.Lock()
-	return errResult
+	return nil
 }
 
-// WaitForState blocks until the specified invoice hash reaches the desiredState
-// or a timeout occurs. It first waits for the initial historical invoice load
-// to complete if necessary. initialLoadTimeout applies only if waiting for the
-// initial load. requestTimeout applies when waiting for the specific invoice
-// state change.
+// WaitForState blocks until the specified invoice hash reaches the
+// desiredState or a timeout occurs. It first waits for the initial historical
+// invoice load to complete if necessary. initialLoadTimeout applies only if
+// waiting for the initial load. requestTimeout applies when waiting for the
+// specific invoice state change.
 func (s *InvoiceStateStore) WaitForState(hash lntypes.Hash,
-	desiredState lnrpc.Invoice_InvoiceState, initialLoadTimeout time.Duration,
+	desiredState lnrpc.Invoice_InvoiceState,
+	initialLoadTimeout time.Duration,
 	requestTimeout time.Duration) error {
 
 	// Check to see if we need to wait for the initial load to complete.
 	if !s.initialLoadComplete.Load() {
-		log.Debugf("WaitForState: Initial load not complete, waiting "+
-			"up to %v for hash %v...",
+		log.Debugf("WaitForState: Initial load not complete, "+
+			"waiting up to %v for hash %v...",
 			initialLoadTimeout, hash)
 
-		initialLoadCondition := func() bool {
-			return s.initialLoadComplete.Load()
-		}
-
-		timeoutMsg := fmt.Sprintf("timed out waiting for initial "+
-			"invoice load after %v", initialLoadTimeout)
-
 		err := s.waitForCondition(
-			initialLoadCondition, initialLoadTimeout, timeoutMsg,
+			func() bool {
+				return s.initialLoadComplete.Load()
+			},
+			initialLoadTimeout,
 		)
 		if err != nil {
-			log.Warnf("WaitForState: Error waiting for initial "+
-				"load for hash %v: %v", hash, err)
+			if errors.Is(err, errConditionTimeout) {
+				return fmt.Errorf("timed out waiting for "+
+					"initial invoice load after %v",
+					initialLoadTimeout)
+			}
+
+			log.Warnf("WaitForState: Error waiting for "+
+				"initial load for hash %v: %v", hash, err)
 			return err
 		}
 
-		log.Debugf("WaitForState: Initial load completed for hash %v",
-			hash)
+		log.Debugf("WaitForState: Initial load completed for "+
+			"hash %v", hash)
 	}
 
-	// We'll first check to see if the state is already where we need it to
-	// be.
-	currentState, hasInvoice := s.states[hash]
-	if hasInvoice && currentState == desiredState {
-		log.Debugf("WaitForState: Hash %v already in desired state %v.",
-			hash, desiredState)
-		return nil
-	}
-
-	// If not, then we'll wait in the background for the condition to be
-	// met.
+	// Wait for the invoice to reach the desired state. The condition
+	// function is checked under the mutex, so there's no TOCTOU gap
+	// between checking and waiting.
 	log.Debugf("WaitForState: Waiting up to %v for hash %v to reach "+
 		"state %v...", requestTimeout, hash, desiredState)
 
-	specificStateCondition := func() bool {
-		// Re-check state within the condition function under lock.
-		st, exists := s.states[hash]
-		return exists && st == desiredState
-	}
-
-	timeoutMsg := fmt.Sprintf("timed out waiting for state %v after %v",
-		desiredState, requestTimeout)
-
-	// We'll wait for the invoice to reach the desired state.
 	err := s.waitForCondition(
-		specificStateCondition, requestTimeout, timeoutMsg,
+		func() bool {
+			st, exists := s.states[hash]
+			return exists && st == desiredState
+		},
+		requestTimeout,
 	)
 	if err != nil {
-		// If we timed out, provide a more specific error message based
-		// on the final state.
-		finalState, finalExists := s.states[hash]
-		if err.Error() == timeoutMsg {
-			log.Warnf("WaitForState: Timed out after %v waiting "+
-				"for hash %v state %v. Final state: %v, "+
-				"exists: %v", requestTimeout, hash,
-				desiredState, finalState, finalExists)
-
+		// If we timed out, provide a more specific error message
+		// based on the final state.
+		if errors.Is(err, errConditionTimeout) {
+			finalState, finalExists := s.GetState(hash)
 			if !finalExists {
 				return fmt.Errorf("no active or settled "+
 					"invoice found for hash=%v after "+
 					"timeout", hash)
 			}
 
-			return fmt.Errorf("invoice status %v not %v before "+
-				"timeout for hash=%v", finalState,
-				desiredState, hash)
+			return fmt.Errorf("invoice status not correct "+
+				"before timeout, hash=%v, status=%v",
+				hash, finalState)
 		}
 
-		// Otherwise, it was likely a shutdown error.
-		log.Warnf("WaitForState: Error waiting for specific "+
-			"state for hash %v: %v", hash, err)
 		return err
 	}
 
-	// Condition was met successfully.
 	log.Debugf("WaitForState: Hash %v reached desired state %v.",
 		hash, desiredState)
+
 	return nil
 }
 
 // WaitForInitialLoad blocks until the initial historical invoice load has
 // completed, or a timeout occurs.
-func (s *InvoiceStateStore) WaitForInitialLoad(timeout time.Duration) error {
-	// Check if already complete.
+func (s *InvoiceStateStore) WaitForInitialLoad(
+	timeout time.Duration) error {
+
 	if s.initialLoadComplete.Load() {
 		return nil
 	}
 
-	log.Debugf("WaitForInitialLoad: Initial load not complete, waiting up to %v...",
-		timeout)
+	log.Debugf("WaitForInitialLoad: Initial load not complete, "+
+		"waiting up to %v...", timeout)
 
-	initialLoadCondition := func() bool {
-		// Atomic read, no lock needed for this condition check.
-		return s.initialLoadComplete.Load()
-	}
-	timeoutMsg := fmt.Sprintf("timed out waiting for initial invoice load after %v", timeout)
-
-	s.mtx.Lock()
-
-	// Wait for the condition using the helper.
-	err := s.waitForCondition(initialLoadCondition, timeout, timeoutMsg)
+	err := s.waitForCondition(
+		func() bool {
+			return s.initialLoadComplete.Load()
+		},
+		timeout,
+	)
 	if err != nil {
+		if errors.Is(err, errConditionTimeout) {
+			return fmt.Errorf("timed out waiting for initial "+
+				"invoice load after %v", timeout)
+		}
+
 		log.Warnf("WaitForInitialLoad: Error waiting: %v", err)
-		return err // Return error (timeout or shutdown)
+		return err
 	}
 
 	log.Debugf("WaitForInitialLoad: Initial load completed.")
+
 	return nil
 }
