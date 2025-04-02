@@ -23,6 +23,7 @@ require (
 	github.com/lightninglabs/lightning-node-connect/hashmailrpc v1.0.4-0.20250610182311-2f1d46ef18b7
 	github.com/lightninglabs/lightning-node-connect/mailbox v1.0.2-0.20250610182311-2f1d46ef18b7
 	github.com/lightninglabs/lndclient v0.20.0-6
+	github.com/lightninglabs/neutrino/cache v1.1.2
 	github.com/lightningnetwork/lnd v0.20.0-beta
 	github.com/lightningnetwork/lnd/cert v1.2.2
 	github.com/lightningnetwork/lnd/clock v1.1.1
@@ -42,6 +43,7 @@ require (
 	gopkg.in/macaroon-bakery.v2 v2.1.0
 	gopkg.in/macaroon.v2 v2.1.0
 	modernc.org/sqlite v1.29.10
+	pgregory.net/rapid v1.2.0
 )
 
 require (
@@ -120,7 +122,6 @@ require (
 	github.com/lightninglabs/gozmq v0.0.0-20191113021534-d20a764486bf // indirect
 	github.com/lightninglabs/lightning-node-connect/gbn v1.0.2-0.20250610182311-2f1d46ef18b7 // indirect
 	github.com/lightninglabs/neutrino v0.16.1 // indirect
-	github.com/lightninglabs/neutrino/cache v1.1.2 // indirect
 	github.com/lightningnetwork/lightning-onion v1.2.1-0.20240815225420-8b40adf04ab9 // indirect
 	github.com/lightningnetwork/lnd/fn/v2 v2.0.9 // indirect
 	github.com/lightningnetwork/lnd/healthcheck v1.2.6 // indirect
@@ -201,7 +202,6 @@ require (
 	modernc.org/memory v1.8.0 // indirect
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
-	pgregory.net/rapid v1.2.0 // indirect
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 
