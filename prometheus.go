@@ -3,12 +3,11 @@ package aperture
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
-
-const streamIDLabel = "streamID"
 
 var (
 	// mailboxCount tracks the current number of active mailboxes.
@@ -17,20 +16,30 @@ var (
 		Name:      "mailbox_count",
 	})
 
-	// mailboxReadCount counts each time a mailbox pair is being used.
-	// A session consists of a bidirectional stream each using a mailbox
-	// with an ID that overlaps for the first 63 bytes and differ for the
-	// last bit. So in order to obtain accurate data about a specific
-	// mailbox session, the stream ID that will be recorded is the first
-	// 16 bytes of the session ID and we will only record the odd stream's
-	// reads so that we don't duplicate the data.
-	mailboxReadCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "hashmail",
-			Name:      "mailbox_read_count",
-		}, []string{streamIDLabel},
-	)
+	// activeSessions tracks the active session count for mailbox
+	activeSessions = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "hashmail",
+		Name:      "mailbox_active_sessions",
+		Help:      "Number of active sessions",
+	})
+
+	// standbySessions tracks the standby session count for mailbox
+	standbySessions = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "hashmail",
+		Name:      "mailbox_standby_sessions",
+		Help:      "Number of standby sessions",
+	})
+
+	// inUseSessions tracks the in-use session count for mailbox
+	inUseSessions = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "hashmail",
+		Name:      "mailbox_inuse_sessions",
+		Help:      "Number of in-use sessions",
+	})
 )
+
+// streamActivityTracker handles the calculation of session statistics
+var streamActivityTracker = newStreamActivity()
 
 // PrometheusConfig is the set of configuration data that specifies if
 // Prometheus metric exporting is activated, and if so the listening address of
@@ -55,7 +64,22 @@ func StartPrometheusExporter(cfg *PrometheusConfig) error {
 
 	// Next, we'll register all our metrics.
 	prometheus.MustRegister(mailboxCount)
-	prometheus.MustRegister(mailboxReadCount)
+	prometheus.MustRegister(activeSessions)
+	prometheus.MustRegister(standbySessions)
+	prometheus.MustRegister(inUseSessions)
+
+	// Periodically update session classification metrics from internal tracker
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			active, standby, inuse := streamActivityTracker.ClassifyAndReset()
+			activeSessions.Set(float64(active))
+			standbySessions.Set(float64(standby))
+			inUseSessions.Set(float64(inuse))
+		}
+	}()
 
 	// Finally, we'll launch the HTTP server that Prometheus will use to
 	// scape our metrics.

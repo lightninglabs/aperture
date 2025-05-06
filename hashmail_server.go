@@ -11,7 +11,6 @@ import (
 	"github.com/btcsuite/btclog/v2"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
 	"github.com/lightningnetwork/lnd/tlv"
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,6 +34,11 @@ const (
 	// DefaultBufSize is the default number of bytes that are read in a
 	// single operation.
 	DefaultBufSize = 4096
+
+	// streamTTL is the amount of time that a stream needs to be exist without
+	// reads for it to be considered for pruning. Otherwise, memory will grow
+	// unbounded.
+	streamTTL = 24 * time.Hour
 )
 
 // streamID is the identifier of a stream.
@@ -747,9 +751,7 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 		streamID := newStreamID(desc.StreamId)
 		if streamID.isOdd() {
 			baseID := streamID.baseID()
-			mailboxReadCount.With(prometheus.Labels{
-				streamIDLabel: fmt.Sprintf("%x", baseID),
-			}).Inc()
+			streamActivityTracker.Record(fmt.Sprintf("%x", baseID))
 		}
 
 		err = reader.Send(&hashmailrpc.CipherBox{
@@ -765,6 +767,91 @@ func (h *hashMailServer) RecvStream(desc *hashmailrpc.CipherBoxDesc,
 }
 
 var _ hashmailrpc.HashMailServer = (*hashMailServer)(nil)
+
+// streamActivity tracks per-session read activity for classifying mailbox
+// sessions as active, standby, or in-use. It maintains an in-memory map
+// of stream IDs to counters and timestamps.
+type streamActivity struct {
+	sync.Mutex
+	streams map[string]*activityEntry
+}
+
+// activityEntry holds the read count and last update time for a single mailbox
+// session.
+type activityEntry struct {
+	count      uint64
+	lastUpdate time.Time
+}
+
+// newStreamActivity creates a new streamActivity tracker used to monitor
+// mailbox read activity per stream ID.
+func newStreamActivity() *streamActivity {
+	return &streamActivity{
+		streams: make(map[string]*activityEntry),
+	}
+}
+
+// Record logs a read event for the given base stream ID.
+// It increments the read count and updates the last activity timestamp.
+func (sa *streamActivity) Record(baseID string) {
+	sa.Lock()
+	defer sa.Unlock()
+
+	entry, ok := sa.streams[baseID]
+	if !ok {
+		entry = &activityEntry{}
+		sa.streams[baseID] = entry
+	}
+	entry.count++
+	entry.lastUpdate = time.Now()
+}
+
+// ClassifyAndReset categorizes each tracked stream based on its recent read
+// rate and returns aggregate counts of active, standby, and in-use sessions.
+// A stream is classified as:
+// - In-use:   if read rate ≥ 0.5 reads/sec
+// - Standby:  if 0 < read rate < 0.5 reads/sec
+// - Active:   if read rate > 0 (includes standby and in-use)
+func (sa *streamActivity) ClassifyAndReset() (active, standby, inuse int) {
+	sa.Lock()
+	defer sa.Unlock()
+
+	now := time.Now()
+
+	for baseID, e := range sa.streams {
+		inactiveDuration := now.Sub(e.lastUpdate)
+
+		// Prune if idle for >24h and no new reads.
+		if e.count == 0 && inactiveDuration > streamTTL {
+			delete(sa.streams, baseID)
+			continue
+		}
+
+		elapsed := inactiveDuration.Seconds()
+		if elapsed <= 0 {
+			// Prevent divide-by-zero, treat as 1s interval.
+			elapsed = 1
+		}
+
+		rate := float64(e.count) / elapsed
+
+		switch {
+		case rate >= 0.5:
+			inuse++
+		case rate > 0:
+			standby++
+		}
+		if rate > 0 {
+			active++
+		}
+
+		// Reset for next window.
+		e.count = 0
+		e.lastUpdate = now
+	}
+
+	return active, standby, inuse
+}
 
 // streamStatus keeps track of the occupancy status of a stream's read and
 // write sub-streams. It is initialised with callback functions to call on the
