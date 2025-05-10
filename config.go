@@ -226,6 +226,9 @@ type Config struct {
 
 	// Logging controls various aspects of aperture logging.
 	Logging *build.LogConfig `group:"logging" namespace:"logging"`
+
+	// Blocklist is a list of IPs to deny access to.
+	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
 }
 
 func (c *Config) validate() error {
@@ -270,5 +273,6 @@ func NewConfig() *Config {
 		WriteTimeout:     defaultWriteTimeout,
 		InvoiceBatchSize: defaultInvoiceBatchSize,
 		Logging:          build.DefaultLogConfig(),
+		Blocklist:        []string{},
 	}
 }

@@ -862,7 +862,9 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 		},
 	))
 
-	prxy, err := proxy.New(authenticator, cfg.Services, localServices...)
+	prxy, err := proxy.New(
+		authenticator, cfg.Services, cfg.Blocklist, localServices...,
+	)
 	return prxy, proxyCleanup, err
 }
 

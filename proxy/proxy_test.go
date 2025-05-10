@@ -111,6 +111,72 @@ func TestProxyHTTP(t *testing.T) {
 	}
 }
 
+// TestProxyHTTPBlocklist tests that the proxy can block HTTP requests from
+// a blocked IP.
+func TestProxyHTTPBlocklist(t *testing.T) {
+	services := []*proxy.Service{{
+		Address:    testTargetServiceAddress,
+		HostRegexp: testHostRegexp,
+		PathRegexp: testPathRegexpHTTP,
+		Protocol:   "http",
+		Auth:       "off",
+	}}
+
+	mockAuth := auth.NewMockAuthenticator()
+
+	// Block the IP that will be used in the request.
+	blockedIP := "127.0.0.1"
+	p, err := proxy.New(mockAuth, services, []string{blockedIP})
+	require.NoError(t, err)
+
+	// Start the proxy server.
+	server := &http.Server{
+		Addr:    testProxyAddr,
+		Handler: http.HandlerFunc(p.ServeHTTP),
+	}
+	go func() {
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			t.Errorf("proxy serve error: %v", err)
+		}
+	}()
+	defer closeOrFail(t, server)
+
+	// Start the backend server.
+	backendService := &http.Server{Addr: testTargetServiceAddress}
+	go func() { _ = startBackendHTTP(backendService) }()
+	defer closeOrFail(t, backendService)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Make a request with a spoofed RemoteAddr that matches the blocklist.
+	req, err := http.NewRequest(
+		"GET",
+		fmt.Sprintf("http://%s/http/test", testProxyAddr),
+		nil,
+	)
+	require.NoError(t, err)
+
+	// Create a custom transport to override the local IP — simulate blocked IP.
+	customTransport := &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			lAddr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+			d := net.Dialer{LocalAddr: lAddr}
+			return d.DialContext(context.Background(), "tcp", testProxyAddr)
+		},
+	}
+	client := &http.Client{Transport: customTransport}
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "access denied\n", string(body))
+}
+
 // runHTTPTest tests that the proxy can forward HTTP requests to a backend
 // service and handle L402 authentication correctly.
 func runHTTPTest(t *testing.T, tc *testCase, method string) {
@@ -125,7 +191,7 @@ func runHTTPTest(t *testing.T, tc *testCase, method string) {
 	}}
 
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services)
+	p, err := proxy.New(mockAuth, services, []string{})
 	require.NoError(t, err)
 
 	// Start server that gives requests to the proxy.
@@ -288,7 +354,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 
 	// Create the proxy server and start serving on TLS.
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services)
+	p, err := proxy.New(mockAuth, services, []string{})
 	require.NoError(t, err)
 	server := &http.Server{
 		Addr:      testProxyAddr,

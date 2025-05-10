@@ -61,6 +61,10 @@ authenticator:
   # Set to true to skip verification of the mailbox server's tls cert.
   devserver: false
 
+# List of IPs to block from accessing the proxy.
+blocklist:
+  - "1.1.1.1"
+  - "1.0.0.1"
   
 # The selected database backend. The current default backend is "sqlite". 
 # Aperture also has support for postgres and etcd.
