@@ -19,6 +19,10 @@ debuglevel: "debug"
 autocert: false
 servername: aperture.example.com
 
+# Whether we should verify the invoice status strictly or not. If set to true,
+# then this requires all invoices to be read from disk at start up.
+strictverify: false
+
 # The port on which the pprof profile will be served. If no port is provided,
 # the profile will not be served.
 profile: 9999

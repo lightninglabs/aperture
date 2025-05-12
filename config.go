@@ -20,6 +20,7 @@ var (
 	defaultLogLevel         = "info"
 	defaultLogFilename      = "aperture.log"
 	defaultInvoiceBatchSize = 100000
+	defaultStrictVerify     = false
 
 	defaultSqliteDatabaseFileName = "aperture.db"
 
@@ -224,6 +225,11 @@ type Config struct {
 	// request.
 	InvoiceBatchSize int `long:"invoicebatchsize" description:"The number of invoices to fetch in a single request."`
 
+	// StrictVerify is a flag that indicates whether we should verify the
+	// invoice status strictly or not. If set to true, then this requires
+	// all invoices to be read from disk at start up.
+	StrictVerify bool `long:"strictverify" description:"Whether to verify the invoice status strictly or not."`
+
 	// Logging controls various aspects of aperture logging.
 	Logging *build.LogConfig `group:"logging" namespace:"logging"`
 
@@ -274,5 +280,6 @@ func NewConfig() *Config {
 		InvoiceBatchSize: defaultInvoiceBatchSize,
 		Logging:          build.DefaultLogConfig(),
 		Blocklist:        []string{},
+		StrictVerify:     defaultStrictVerify,
 	}
 }

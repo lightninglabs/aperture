@@ -20,7 +20,7 @@ type LNCChallenger struct {
 // connect to an lnd backend to create payment challenges.
 func NewLNCChallenger(session *lnc.Session, lncStore lnc.Store,
 	invoiceBatchSize int, genInvoiceReq InvoiceRequestGenerator,
-	errChan chan<- error) (*LNCChallenger, error) {
+	errChan chan<- error, strictVerify bool) (*LNCChallenger, error) {
 
 	nodeConn, err := lnc.NewNodeConn(session, lncStore)
 	if err != nil {
@@ -35,7 +35,7 @@ func NewLNCChallenger(session *lnc.Session, lncStore lnc.Store,
 
 	lndChallenger, err := NewLndChallenger(
 		client, invoiceBatchSize, genInvoiceReq, nodeConn.CtxFunc,
-		errChan,
+		errChan, strictVerify,
 	)
 	if err != nil {
 		return nil, err
