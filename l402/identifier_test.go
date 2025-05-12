@@ -3,9 +3,11 @@ package l402
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -65,5 +67,38 @@ func TestIdentifierSerialization(t *testing.T) {
 		if !success {
 			return
 		}
+	}
+}
+
+// TestTokenIDString makes sure that TokenID is logged properly in Printf
+// function family.
+func TestTokenIDString(t *testing.T) {
+	cases := []struct {
+		token        TokenID
+		formatString string
+		wantText     string
+	}{
+		{
+			token:        TokenID{1, 2, 3},
+			formatString: "client %v paid",
+			wantText: "client 01020300000000000000000000000000000" +
+				"00000000000000000000000000000 paid",
+		},
+		{
+			token:        TokenID{1, 2, 3},
+			formatString: "client %s paid",
+			wantText: "client 01020300000000000000000000000000000" +
+				"00000000000000000000000000000 paid",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.formatString, func(t *testing.T) {
+			got := fmt.Sprintf(tc.formatString, tc.token)
+			require.Equal(t, tc.wantText, got)
+
+			got = fmt.Sprintf(tc.formatString, &tc.token)
+			require.Equal(t, tc.wantText, got)
+		})
 	}
 }

@@ -37,7 +37,7 @@ var (
 type TokenID [TokenIDSize]byte
 
 // String returns the hex encoded representation of the token ID as a string.
-func (t *TokenID) String() string {
+func (t TokenID) String() string {
 	return hex.EncodeToString(t[:])
 }
 
