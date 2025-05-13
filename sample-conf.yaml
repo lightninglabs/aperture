@@ -14,18 +14,41 @@ servestatic: false
 # Valid options include: trace, debug, info, warn, error, critical, off.
 debuglevel: "debug"
 
+# Custom path to a config file.
+configfile: "/path/to/your/aperture.yaml"
+
+# Directory to place all of aperture's files in.
+basedir: "/path/to/.aperture"
+
 # Whether the proxy should create a valid certificate through Let's Encrypt for
 # the fully qualifying domain name.
 autocert: false
 servername: aperture.example.com
 
+# Whether to listen on an insecure connection, disabling TLS for incoming
+# connections.
+insecure: false
+
 # Whether we should verify the invoice status strictly or not. If set to true,
 # then this requires all invoices to be read from disk at start up.
 strictverify: false
 
+# The number of invoices to fetch in a single request when interacting with LND.
+invoicebatchsize: 100000
+
 # The port on which the pprof profile will be served. If no port is provided,
 # the profile will not be served.
 profile: 9999
+
+# The maximum amount of time a connection may be idle before being closed.
+# Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+idletimeout: 2m
+
+# The maximum amount of time to wait for a request to be fully read.
+readtimeout: 15s
+
+# The maximum amount of time to wait for a response to be fully written.
+writetimeout: 30s
 
 # Settings for the lnd node used to generate payment requests. All of these
 # options are required.
@@ -80,6 +103,9 @@ sqlite:
     # The full path to the database.
     dbfile: "/path/to/.aperture/aperture.db"
 
+    # Skip applying migrations on startup.
+    skipmigrations: false
+
 # Settings for the postgres instance which the proxy will use to reliably store 
 # and retrieve token information.
 postgres:
@@ -96,6 +122,9 @@ postgres:
     # Whether to require using SSL (mode: require) when connecting to the 
     # server.
     requireSSL: true
+
+    # Skip applying migrations on startup.
+    skipmigrations: false
 
 # Settings for the etcd instance which the proxy will use to reliably store and
 # retrieve token information.
@@ -228,6 +257,10 @@ hashmail:
   enabled: true
   messagerate: 20ms
   messageburstallowance: 1000
+  
+  # The time after the last activity that a mailbox should be removed.
+  # Set to -1s to disable. Valid time units are "ns", "us", "ms", "s", "m", "h".
+  staletimeout: -1s # Example: 5m for 5 minutes, or -1s to disable
 
 # Enable the prometheus metrics exporter so that a prometheus server can scrape
 # the metrics.
@@ -242,6 +275,14 @@ logging:
     disable: false
     callsite: off
     notimestamps: true
+
+    # Log level for console output.
+    # Valid options include: trace, debug, info, warn, error, critical, off.
+    level: "info"
   file:
     disable: false
     callsite: long
+
+    # Log level for file output.
+    # Valid options include: trace, debug, info, warn, error, critical, off.
+    level: "info"
