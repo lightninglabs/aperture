@@ -172,6 +172,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Determine auth level required to access service and dispatch request
 	// accordingly.
 	authLevel := target.AuthRequired(r)
+	skipInvoiceCreation := target.SkipInvoiceCreation(r)
 	switch {
 	case authLevel.IsOn():
 		// Determine if the header contains the authentication
@@ -181,6 +182,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// resources.
 		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
 		if !acceptAuth {
+			if skipInvoiceCreation {
+				addCorsHeaders(w.Header())
+				sendDirectResponse(
+					w, r, http.StatusUnauthorized,
+					"unauthorized",
+				)
+
+				return
+			}
+
 			price, err := target.pricer.GetPrice(r.Context(), r)
 			if err != nil {
 				prefixLog.Errorf("error getting "+
