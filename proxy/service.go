@@ -103,6 +103,15 @@ type Service struct {
 	// /package_name.ServiceName/MethodName
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
 
+	// compiledHostRegexp is the compiled host regex.
+	compiledHostRegexp *regexp.Regexp
+
+	// compiledPathRegexp is the compiled path regex.
+	compiledPathRegexp *regexp.Regexp
+
+	// compiledAuthWhitelistPaths is the compiled auth whitelist paths.
+	compiledAuthWhitelistPaths []*regexp.Regexp
+
 	freebieDB freebie.DB
 	pricer    pricer.Pricer
 }
@@ -123,8 +132,7 @@ func (s *Service) ResourceName(resourcePath string) string {
 // AuthRequired determines the auth level required for a given request.
 func (s *Service) AuthRequired(r *http.Request) auth.Level {
 	// Does the request match any whitelist entry?
-	for _, pathRegexp := range s.AuthWhitelistPaths {
-		pathRegexp := regexp.MustCompile(pathRegexp)
+	for _, pathRegexp := range s.compiledAuthWhitelistPaths {
 		if pathRegexp.MatchString(r.URL.Path) {
 			log.Tracef("Req path [%s] matches whitelist entry "+
 				"[%s].", r.URL.Path, pathRegexp)
@@ -184,15 +192,41 @@ func prepareServices(services []*Service) error {
 			}
 		}
 
+		// Compile the host regex.
+		compiledHostRegexp, err := regexp.Compile(service.HostRegexp)
+		if err != nil {
+			return fmt.Errorf("error compiling host regex: %v", err)
+		}
+		service.compiledHostRegexp = compiledHostRegexp
+
+		// Compile the path regex.
+		if service.PathRegexp != "" {
+			compiledPathRegexp, err := regexp.Compile(
+				service.PathRegexp,
+			)
+			if err != nil {
+				return fmt.Errorf("error compiling path "+
+					"regex: %v", err)
+			}
+			service.compiledPathRegexp = compiledPathRegexp
+		}
+
+		service.compiledAuthWhitelistPaths = make(
+			[]*regexp.Regexp, 0, len(service.AuthWhitelistPaths),
+		)
+
 		// Make sure all whitelist regular expression entries actually
 		// compile so we run into an eventual panic during startup and
 		// not only when the request happens.
 		for _, entry := range service.AuthWhitelistPaths {
-			_, err := regexp.Compile(entry)
+			regExp, err := regexp.Compile(entry)
 			if err != nil {
 				return fmt.Errorf("error validating auth "+
 					"whitelist: %v", err)
 			}
+			service.compiledAuthWhitelistPaths = append(
+				service.compiledAuthWhitelistPaths, regExp,
+			)
 		}
 
 		// If dynamic prices are enabled then use the provided
