@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -366,21 +365,21 @@ func certPool(services []*Service) (*x509.CertPool, error) {
 // expression matching the host and path.
 func matchService(req *http.Request, services []*Service) (*Service, bool) {
 	for _, service := range services {
-		hostRegexp := regexp.MustCompile(service.HostRegexp)
+		hostRegexp := service.compiledHostRegexp
 		if !hostRegexp.MatchString(req.Host) {
 			log.Tracef("Req host [%s] doesn't match [%s].",
 				req.Host, hostRegexp)
 			continue
 		}
 
-		if service.PathRegexp == "" {
+		if service.compiledPathRegexp == nil {
 			log.Debugf("Host [%s] matched pattern [%s] and path "+
 				"expression is empty. Using service [%s].",
 				req.Host, hostRegexp, service.Address)
 			return service, true
 		}
 
-		pathRegexp := regexp.MustCompile(service.PathRegexp)
+		pathRegexp := service.compiledPathRegexp
 		if !pathRegexp.MatchString(req.URL.Path) {
 			log.Tracef("Req path [%s] doesn't match [%s].",
 				req.URL.Path, pathRegexp)
