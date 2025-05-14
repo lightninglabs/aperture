@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -73,18 +74,30 @@ type Proxy struct {
 	localServices []LocalService
 	authenticator auth.Authenticator
 	services      []*Service
+	blocklist     map[string]struct{}
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
 func New(auth auth.Authenticator, services []*Service,
-	localServices ...LocalService) (*Proxy, error) {
+	blocklist []string, localServices ...LocalService) (*Proxy, error) {
+
+	blMap := make(map[string]struct{})
+	for _, ip := range blocklist {
+		parsed := net.ParseIP(ip)
+		if parsed == nil {
+			log.Warnf("Could not parse IP %q in blocklist; skipping", ip)
+			continue
+		}
+		blMap[parsed.String()] = struct{}{}
+	}
 
 	proxy := &Proxy{
 		localServices: localServices,
 		authenticator: auth,
 		services:      services,
+		blocklist:     blMap,
 	}
 	err := proxy.UpdateServices(services)
 	if err != nil {
@@ -105,6 +118,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Referer(), r.UserAgent())
 	}
 	defer logRequest()
+
+	// Blocklist check
+	if _, blocked := p.blocklist[remoteIP.String()]; blocked {
+		log.Debugf("Blocked request from IP: %s", remoteIP)
+		addCorsHeaders(w.Header())
+		sendDirectResponse(w, r, http.StatusForbidden, "access denied")
+		return
+	}
 
 	// For OPTIONS requests we only need to set the CORS headers, not serve
 	// any content;
