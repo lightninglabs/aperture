@@ -151,6 +151,17 @@ services:
     # dynamicprice.enabled is set to true.
     price: 0
 
+    # A list of regular expressions for path that are free of charge.
+    authwhitelistpaths:
+      - '^/freebieservice.*$'
+
+    # A list of regular expressions for path that will skip invoice creation,
+    # but still try to do the l402 authentication. This is useful for streaming
+    # services, as they are not supported to be the initial request to receive
+    # a L402.
+    authskipinvoicecreationpaths:
+      - '^/streamingservice.*$'
+
     # Options to use for connection to the price serving gRPC server.
     dynamicprice:
       # Whether or not a gRPC server is available to query price data from. If

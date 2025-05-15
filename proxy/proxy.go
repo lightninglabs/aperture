@@ -134,6 +134,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the request is a gRPC request, we need to set the Content-Type
+	// header to application/grpc.
+	if strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc) {
+		w.Header().Set(hdrContentType, hdrTypeGrpc)
+	}
+
 	// Requests that can't be matched to a service backend will be
 	// dispatched to the static file server. If the file exists in the
 	// static file folder it will be served, otherwise the static server
@@ -166,6 +172,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Determine auth level required to access service and dispatch request
 	// accordingly.
 	authLevel := target.AuthRequired(r)
+	skipInvoiceCreation := target.SkipInvoiceCreation(r)
 	switch {
 	case authLevel.IsOn():
 		// Determine if the header contains the authentication
@@ -175,6 +182,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// resources.
 		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
 		if !acceptAuth {
+			if skipInvoiceCreation {
+				addCorsHeaders(w.Header())
+				sendDirectResponse(
+					w, r, http.StatusUnauthorized,
+					"unauthorized",
+				)
+
+				return
+			}
+
 			price, err := target.pricer.GetPrice(r.Context(), r)
 			if err != nil {
 				prefixLog.Errorf("error getting "+

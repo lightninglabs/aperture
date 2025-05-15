@@ -103,6 +103,13 @@ type Service struct {
 	// /package_name.ServiceName/MethodName
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
 
+	// AuthSkipInvoiceCreationPaths is an optional list of regular
+	// expressions that are matched against the path of the URL of a
+	// request. If the request URL matches any of those regular
+	// expressions, the call will not try to create an invoice for the
+	// request, but still try to do the l402 authentication.
+	AuthSkipInvoiceCreationPaths []string `long:"authskipinvoicecreationpaths" description:"List of regular expressions for paths that will skip invoice creation'"`
+
 	// compiledHostRegexp is the compiled host regex.
 	compiledHostRegexp *regexp.Regexp
 
@@ -111,6 +118,10 @@ type Service struct {
 
 	// compiledAuthWhitelistPaths is the compiled auth whitelist paths.
 	compiledAuthWhitelistPaths []*regexp.Regexp
+
+	// compiledAuthSkipInvoiceCreationPaths is the compiled auth skip
+	// invoice creation paths.
+	compiledAuthSkipInvoiceCreationPaths []*regexp.Regexp
 
 	freebieDB freebie.DB
 	pricer    pricer.Pricer
@@ -142,6 +153,20 @@ func (s *Service) AuthRequired(r *http.Request) auth.Level {
 
 	// By default we always return the service level auth setting.
 	return s.Auth
+}
+
+// SkipInvoiceCreation determines if an invoice should be created for a
+// given request.
+func (s *Service) SkipInvoiceCreation(r *http.Request) bool {
+	for _, pathRegexp := range s.compiledAuthSkipInvoiceCreationPaths {
+		if pathRegexp.MatchString(r.URL.Path) {
+			log.Tracef("Req path [%s] matches skip  entry "+
+				"[%s].", r.URL.Path, pathRegexp)
+			return true
+		}
+	}
+
+	return false
 }
 
 // prepareServices prepares the backend service configurations to be used by the
@@ -195,7 +220,7 @@ func prepareServices(services []*Service) error {
 		// Compile the host regex.
 		compiledHostRegexp, err := regexp.Compile(service.HostRegexp)
 		if err != nil {
-			return fmt.Errorf("error compiling host regex: %v", err)
+			return fmt.Errorf("error compiling host regex: %w", err)
 		}
 		service.compiledHostRegexp = compiledHostRegexp
 
@@ -206,7 +231,7 @@ func prepareServices(services []*Service) error {
 			)
 			if err != nil {
 				return fmt.Errorf("error compiling path "+
-					"regex: %v", err)
+					"regex: %w", err)
 			}
 			service.compiledPathRegexp = compiledPathRegexp
 		}
@@ -222,10 +247,31 @@ func prepareServices(services []*Service) error {
 			regExp, err := regexp.Compile(entry)
 			if err != nil {
 				return fmt.Errorf("error validating auth "+
-					"whitelist: %v", err)
+					"whitelist: %w", err)
 			}
 			service.compiledAuthWhitelistPaths = append(
 				service.compiledAuthWhitelistPaths, regExp,
+			)
+		}
+
+		service.compiledAuthSkipInvoiceCreationPaths = make(
+			[]*regexp.Regexp, 0, len(
+				service.AuthSkipInvoiceCreationPaths,
+			),
+		)
+
+		// Make sure all skip invoice creation regular expression
+		// entries actually compile so we run into an eventual panic
+		// during startup and not only when the request happens.
+		for _, entry := range service.AuthSkipInvoiceCreationPaths {
+			regExp, err := regexp.Compile(entry)
+			if err != nil {
+				return fmt.Errorf("error validating skip "+
+					"invoice creation whitelist: %w", err)
+			}
+			service.compiledAuthSkipInvoiceCreationPaths = append(
+				service.compiledAuthSkipInvoiceCreationPaths,
+				regExp,
 			)
 		}
 
