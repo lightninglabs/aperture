@@ -25,6 +25,10 @@ type LndChallenger struct {
 	invoicesCancel func()
 	invoicesCond   *sync.Cond
 
+	// strictVerify indicates whether we should verify the invoice states,
+	// or rely on the higher level preimage verification.
+	strictVerify bool
+
 	errChan chan<- error
 
 	quit chan struct{}
@@ -38,9 +42,8 @@ var _ Challenger = (*LndChallenger)(nil)
 // NewLndChallenger creates a new challenger that uses the given connection to
 // an lnd backend to create payment challenges.
 func NewLndChallenger(client InvoiceClient, batchSize int,
-	genInvoiceReq InvoiceRequestGenerator,
-	ctxFunc func() context.Context,
-	errChan chan<- error) (*LndChallenger, error) {
+	genInvoiceReq InvoiceRequestGenerator, ctxFunc func() context.Context,
+	errChan chan<- error, strictVerification bool) (*LndChallenger, error) {
 
 	// Make sure we have a valid context function. This will be called to
 	// create a new context for each call to the lnd client.
@@ -63,6 +66,7 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		invoicesCond:  sync.NewCond(invoicesMtx),
 		quit:          make(chan struct{}),
 		errChan:       errChan,
+		strictVerify:  strictVerification,
 	}
 
 	err := challenger.Start()
@@ -78,6 +82,14 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 // invoices on startup and a subscription to all subsequent invoice updates
 // is created.
 func (l *LndChallenger) Start() error {
+	// If we aren't doing strict verification, then we can just exit here as
+	// we don't need the invoice state.
+	if !l.strictVerify {
+		log.Infof("Skipping invoice state tracking strict_verify=%v",
+			l.strictVerify)
+		return nil
+	}
+
 	// These are the default values for the subscription. In case there are
 	// no invoices yet, this will instruct lnd to just send us all updates.
 	// If there are existing invoices, these indices will be updated to
@@ -302,6 +314,12 @@ func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash,
 // NOTE: This is part of the auth.InvoiceChecker interface.
 func (l *LndChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
 	state lnrpc.Invoice_InvoiceState, timeout time.Duration) error {
+
+	// If we're not doing strict verification, we can skip this check.
+	if !l.strictVerify {
+		log.Tracef("Skipping invoice state check, pay_hash=%v", hash)
+		return nil
+	}
 
 	// Prevent the challenger to be shut down while we're still waiting for
 	// status updates.
