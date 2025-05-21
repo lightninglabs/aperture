@@ -809,9 +809,9 @@ func (sa *streamActivity) Record(baseID string) {
 // ClassifyAndReset categorizes each tracked stream based on its recent read
 // rate and returns aggregate counts of active, standby, and in-use sessions.
 // A stream is classified as:
-// - In-use:   if read rate ≥ 0.5 reads/sec
-// - Standby:  if 0 < read rate < 0.5 reads/sec
-// - Active:   if read rate > 0 (includes standby and in-use)
+// - In-use:   if read rate ≥ 0.5 reads/sec.
+// - Standby:  if 0 < read rate < 0.5 reads/sec.
+// - Active:   if read rate > 0 (includes standby and in-use).
 func (sa *streamActivity) ClassifyAndReset() (active, standby, inuse int) {
 	sa.Lock()
 	defer sa.Unlock()

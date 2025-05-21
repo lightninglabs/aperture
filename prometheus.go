@@ -16,21 +16,21 @@ var (
 		Name:      "mailbox_count",
 	})
 
-	// activeSessions tracks the active session count for mailbox
+	// activeSessions tracks the active session count for mailbox.
 	activeSessions = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "hashmail",
 		Name:      "mailbox_active_sessions",
 		Help:      "Number of active sessions",
 	})
 
-	// standbySessions tracks the standby session count for mailbox
+	// standbySessions tracks the standby session count for mailbox.
 	standbySessions = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "hashmail",
 		Name:      "mailbox_standby_sessions",
 		Help:      "Number of standby sessions",
 	})
 
-	// inUseSessions tracks the in-use session count for mailbox
+	// inUseSessions tracks the in-use session count for mailbox.
 	inUseSessions = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "hashmail",
 		Name:      "mailbox_inuse_sessions",
@@ -38,7 +38,7 @@ var (
 	})
 )
 
-// streamActivityTracker handles the calculation of session statistics
+// streamActivityTracker handles the calculation of session statistics.
 var streamActivityTracker = newStreamActivity()
 
 // PrometheusConfig is the set of configuration data that specifies if
@@ -56,7 +56,9 @@ type PrometheusConfig struct {
 // StartPrometheusExporter registers all relevant metrics with the Prometheus
 // library, then launches the HTTP server that Prometheus will hit to scrape
 // our metrics.
-func StartPrometheusExporter(cfg *PrometheusConfig) error {
+func StartPrometheusExporter(cfg *PrometheusConfig,
+	shutdown <-chan struct{}) error {
+
 	// If we're not active, then there's nothing more to do.
 	if !cfg.Enabled {
 		return nil
@@ -68,16 +70,23 @@ func StartPrometheusExporter(cfg *PrometheusConfig) error {
 	prometheus.MustRegister(standbySessions)
 	prometheus.MustRegister(inUseSessions)
 
-	// Periodically update session classification metrics from internal tracker
+	// Periodically update session classification metrics from internal tracker.
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			active, standby, inuse := streamActivityTracker.ClassifyAndReset()
-			activeSessions.Set(float64(active))
-			standbySessions.Set(float64(standby))
-			inUseSessions.Set(float64(inuse))
+		for {
+			select {
+			case <-ticker.C:
+				active, standby, inuse :=
+					streamActivityTracker.ClassifyAndReset()
+				activeSessions.Set(float64(active))
+				standbySessions.Set(float64(standby))
+				inUseSessions.Set(float64(inuse))
+			case <-shutdown:
+				log.Infof("Shutting down Prometheus session metrics updater")
+				return
+			}
 		}
 	}()
 
