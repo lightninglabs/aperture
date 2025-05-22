@@ -151,7 +151,7 @@ func run() error {
 
 	errChan := make(chan error)
 	a := NewAperture(cfg)
-	if err := a.Start(errChan); err != nil {
+	if err := a.Start(errChan, interceptor.ShutdownChannel()); err != nil {
 		return fmt.Errorf("unable to start aperture: %v", err)
 	}
 
@@ -192,9 +192,9 @@ func NewAperture(cfg *Config) *Aperture {
 }
 
 // Start sets up the proxy server and starts it.
-func (a *Aperture) Start(errChan chan error) error {
+func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// Start the prometheus exporter.
-	err := StartPrometheusExporter(a.cfg.Prometheus)
+	err := StartPrometheusExporter(a.cfg.Prometheus, shutdown)
 	if err != nil {
 		return fmt.Errorf("unable to start the prometheus "+
 			"exporter: %v", err)
