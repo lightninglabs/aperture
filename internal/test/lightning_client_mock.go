@@ -160,9 +160,8 @@ func (h *mockLightningClient) LookupInvoice(_ context.Context,
 }
 
 // ListTransactions returns all known transactions of the backing lnd node.
-func (h *mockLightningClient) ListTransactions(
-	_ context.Context, _ int32, _ int32,
-	_ ...lndclient.ListTransactionsOption) ([]lndclient.Transaction, error) {
+func (h *mockLightningClient) ListTransactions(context.Context, int32, int32,
+	...lndclient.ListTransactionsOption) ([]lndclient.Transaction, error) {
 
 	h.lnd.lock.Lock()
 	txs := h.lnd.Transactions
@@ -172,8 +171,8 @@ func (h *mockLightningClient) ListTransactions(
 }
 
 // ListChannels retrieves all channels of the backing lnd node.
-func (h *mockLightningClient) ListChannels(ctx context.Context,
-	activeOnly, publicOnly bool) ([]lndclient.ChannelInfo, error) {
+func (h *mockLightningClient) ListChannels(context.Context, bool, bool,
+	...lndclient.ListChannelsOption) ([]lndclient.ChannelInfo, error) {
 
 	return h.lnd.Channels, nil
 }
@@ -230,14 +229,18 @@ func (h *mockLightningClient) ListPayments(_ context.Context,
 
 // ChannelBackup retrieves the backup for a particular channel. The
 // backup is returned as an encrypted chanbackup.Single payload.
-func (h *mockLightningClient) ChannelBackup(context.Context, wire.OutPoint) ([]byte, error) {
+func (h *mockLightningClient) ChannelBackup(
+	context.Context, wire.OutPoint) ([]byte, error) {
+
 	return nil, nil
 }
 
 // ChannelBackups retrieves backups for all existing pending open and
 // open channels. The backups are returned as an encrypted
 // chanbackup.Multi payload.
-func (h *mockLightningClient) ChannelBackups(ctx context.Context) ([]byte, error) {
+func (h *mockLightningClient) ChannelBackups(
+	ctx context.Context) ([]byte, error) {
+
 	return nil, nil
 }
 
@@ -259,7 +262,8 @@ func (h *mockLightningClient) OpenChannel(_ context.Context, _ route.Vertex,
 
 // CloseChannel closes the channel provided.
 func (h *mockLightningClient) CloseChannel(_ context.Context, _ *wire.OutPoint,
-	_ bool, _ int32, _ btcutil.Address) (chan lndclient.CloseChannelUpdate,
+	_ bool, _ int32, _ btcutil.Address,
+	_ ...lndclient.CloseChannelOption) (chan lndclient.CloseChannelUpdate,
 	chan error, error) {
 
 	return nil, nil, nil

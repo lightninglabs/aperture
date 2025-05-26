@@ -29,8 +29,8 @@ func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
 	cfg := embed.NewConfig()
 	cfg.Dir = tempDir
 	cfg.Logger = "zap"
-	cfg.LCUrls = []url.URL{{Host: "127.0.0.1:9125"}}
-	cfg.LPUrls = []url.URL{{Host: "127.0.0.1:9126"}}
+	cfg.ListenClientUrls = []url.URL{{Host: "127.0.0.1:9125"}}
+	cfg.ListenPeerUrls = []url.URL{{Host: "127.0.0.1:9126"}}
 
 	etcd, err := embed.StartEtcd(cfg)
 	if err != nil {
@@ -47,7 +47,7 @@ func etcdSetup(t *testing.T) (*clientv3.Client, func()) {
 	}
 
 	client, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.LCUrls[0].Host},
+		Endpoints:   []string{cfg.ListenClientUrls[0].Host},
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
