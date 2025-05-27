@@ -270,7 +270,9 @@ func (l *LndChallenger) readInvoiceStream(
 
 // Stop shuts down the challenger.
 func (l *LndChallenger) Stop() {
-	l.invoicesCancel()
+	if l.invoicesCancel != nil {
+		l.invoicesCancel()
+	}
 	close(l.quit)
 	l.wg.Wait()
 }
