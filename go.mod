@@ -18,8 +18,8 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/lib/pq v1.10.9
-	github.com/lightninglabs/lightning-node-connect/hashmailrpc v1.0.3
-	github.com/lightninglabs/lightning-node-connect/mailbox v1.0.1
+	github.com/lightninglabs/lightning-node-connect/hashmailrpc v1.0.4-0.20250610182311-2f1d46ef18b7
+	github.com/lightninglabs/lightning-node-connect/mailbox v1.0.2-0.20250610182311-2f1d46ef18b7
 	github.com/lightninglabs/lndclient v0.19.0-7
 	github.com/lightningnetwork/lnd v0.19.0-beta
 	github.com/lightningnetwork/lnd/cert v1.2.2
@@ -66,6 +66,7 @@ require (
 	github.com/btcsuite/winsvc v1.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/coder/websocket v1.8.13 // indirect
 	github.com/containerd/continuity v0.3.0 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd v0.0.0-20190719114852-fd7a80b32e1f // indirect
@@ -117,7 +118,7 @@ require (
 	github.com/kkdai/bstream v1.0.0 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/lightninglabs/gozmq v0.0.0-20191113021534-d20a764486bf // indirect
-	github.com/lightninglabs/lightning-node-connect/gbn v1.0.1-0.20250526093308-15b8c0be90a1 // indirect
+	github.com/lightninglabs/lightning-node-connect/gbn v1.0.2-0.20250610182311-2f1d46ef18b7 // indirect
 	github.com/lightninglabs/neutrino v0.16.1 // indirect
 	github.com/lightninglabs/neutrino/cache v1.1.2 // indirect
 	github.com/lightningnetwork/lightning-onion v1.2.1-0.20240712235311-98bd56499dfb // indirect
@@ -200,7 +201,6 @@ require (
 	modernc.org/memory v1.8.0 // indirect
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
-	nhooyr.io/websocket v1.8.7 // indirect
 	pgregory.net/rapid v1.2.0 // indirect
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
