@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
@@ -42,7 +43,7 @@ var (
 //
 // If only the macaroon is sent in header 2 or three then it is expected to have
 // a caveat with the preimage attached to it.
-func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, error) {
+func FromHeader(header *http.Header) (macaroon.Slice, lntypes.Preimage, error) {
 	var authHeader string
 
 	switch {
@@ -71,14 +72,22 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		macBase64, preimageHex := matches[2], matches[3]
 		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
-				"decode of macaroon failed: %v", err)
+			// macBase64 might be multiple macaroons separated by commas,
+			// so we strip them and try again
+			macBase64 = strings.ReplaceAll(macBase64, ",", "")
+			macBytes, err = base64.StdEncoding.DecodeString(macBase64)
+			if err != nil {
+				return nil, lntypes.Preimage{},
+					fmt.Errorf("base64 decode of macaroon failed: %v", err)
+			}
 		}
-		mac := &macaroon.Macaroon{}
+		// macBytes can contain multiple macaroons,
+		// (* macaroon.Slice) knows how to decode them without separators
+		mac := make(macaroon.Slice, 0, 1)
 		err = mac.UnmarshalBinary(macBytes)
 		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
-				"unmarshal macaroon: %v", err)
+			return nil, lntypes.Preimage{},
+				fmt.Errorf("unable to unmarshal macaroon: %v", err)
 		}
 		preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 		if err != nil {
@@ -107,24 +116,31 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 	// extract the preimage.
 	macBytes, err := hex.DecodeString(authHeader)
 	if err != nil {
-		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
-			"macaroon failed: %v", err)
+		return nil, lntypes.Preimage{},
+			fmt.Errorf("hex decode of macaroon failed: %v", err)
 	}
-	mac := &macaroon.Macaroon{}
+	mac := make(macaroon.Slice, 0, 1)
 	err = mac.UnmarshalBinary(macBytes)
 	if err != nil {
 		return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
 			"unmarshal macaroon: %v", err)
 	}
-	preimageHex, ok := HasCaveat(mac, PreimageKey)
-	if !ok {
-		return nil, lntypes.Preimage{}, errors.New("preimage caveat " +
-			"not found")
+	var preimageHex string
+	var ok bool
+	for _, m := range mac {
+		if preimageHex, ok = HasCaveat(m, PreimageKey); ok {
+			break
+		}
 	}
+	if preimageHex == "" || !ok {
+		return nil, lntypes.Preimage{},
+			errors.New("preimage caveat not found")
+	}
+
 	preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 	if err != nil {
-		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
-			"preimage failed: %v", err)
+		return nil, lntypes.Preimage{},
+			fmt.Errorf("hex decode of preimage failed: %v", err)
 	}
 
 	return mac, preimage, nil
@@ -132,7 +148,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 
 // SetHeader sets the provided authentication elements as the default/standard
 // HTTP header for the L402 protocol.
-func SetHeader(header *http.Header, mac *macaroon.Macaroon,
+func SetHeader(header *http.Header, mac macaroon.Slice,
 	preimage fmt.Stringer) error {
 
 	macBytes, err := mac.MarshalBinary()
