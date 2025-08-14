@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -576,13 +577,7 @@ func configFromCert(crt *tls.Certificate, certPool *x509.CertPool) *tls.Config {
 	tlsConf.RootCAs = certPool
 	tlsConf.InsecureSkipVerify = true
 
-	haveNPN := false
-	for _, p := range tlsConf.NextProtos {
-		if p == "h2" {
-			haveNPN = true
-			break
-		}
-	}
+	haveNPN := slices.Contains(tlsConf.NextProtos, "h2")
 	if !haveNPN {
 		tlsConf.NextProtos = append(tlsConf.NextProtos, "h2")
 	}
