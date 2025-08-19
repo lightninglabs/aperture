@@ -366,6 +366,7 @@ func (l *LndChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
 		// Block here until our condition is met or the allowed time is
 		// up. The Wait() will return whenever a signal is broadcast.
 		invoiceState, hasInvoice = l.invoiceStates[hash]
+		//nolint:staticcheck
 		for !(hasInvoice && invoiceState == state) && !timeoutReached {
 			l.invoicesCond.Wait()
 

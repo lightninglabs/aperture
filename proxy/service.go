@@ -200,12 +200,12 @@ func prepareServices(services []*Service) error {
 
 			// There are two supported formats to encode the file
 			// content in: hex and base64.
-			switch {
-			case prefix == filePrefixHex:
+			switch prefix {
+			case filePrefixHex:
 				newValue := hex.EncodeToString(bytes)
 				service.Headers[key] = newValue
 
-			case prefix == filePrefixBase64:
+			case filePrefixBase64:
 				newValue := base64.StdEncoding.EncodeToString(
 					bytes,
 				)
