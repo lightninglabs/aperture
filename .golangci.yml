@@ -1,16 +1,8 @@
+version: "2"
 run:
-  # timeout for analysis
-  timeout: 4m
-
   # Linting uses a lot of memory. Keep it under control by only running a single
   # worker.
   concurrency: 1
-
-linters-settings:
-  gofmt:
-    # simplify code: gofmt with `-s` option, true by default
-    simplify: true
-
 linters:
 
   # Specify an enabled list of linters rather than a disabled list because
@@ -19,27 +11,41 @@ linters:
     - bodyclose
     - copyloopvar
     - dupl
-    - errcheck
     - goconst
     - gocritic
     - gocyclo
-    - gofmt
-    - goimports
-    - gosimple
-    - govet
-    - ineffassign
     - misspell
     - nakedret
     - prealloc
     - staticcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
-    - unused
-
-issues:
-  exclude-rules:
-    - path: internal/test
-      linters:
-        - goconst
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - goconst
+        path: internal/test
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      # simplify code: gofmt with `-s` option, true by default
+      simplify: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
