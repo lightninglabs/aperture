@@ -38,7 +38,7 @@ func newOnionStore(client *clientv3.Client) *onionStore {
 
 // StorePrivateKey stores the given private key.
 func (s *onionStore) StorePrivateKey(privateKey []byte) error {
-	_, err := s.Client.Put(context.Background(), onionPath, string(privateKey))
+	_, err := s.Put(context.Background(), onionPath, string(privateKey))
 	return err
 }
 
@@ -58,6 +58,6 @@ func (s *onionStore) PrivateKey() ([]byte, error) {
 
 // DeletePrivateKey securely removes the private key from the store.
 func (s *onionStore) DeletePrivateKey() error {
-	_, err := s.Client.Delete(context.Background(), onionPath)
+	_, err := s.Delete(context.Background(), onionPath)
 	return err
 }

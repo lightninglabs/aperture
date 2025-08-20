@@ -167,7 +167,7 @@ func NewTestSqliteDB(t *testing.T) *SqliteStore {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		require.NoError(t, sqlDB.DB.Close())
+		require.NoError(t, sqlDB.Close())
 	})
 
 	return sqlDB
