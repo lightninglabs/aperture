@@ -123,6 +123,12 @@ type Service struct {
 	// invoice creation paths.
 	compiledAuthSkipInvoiceCreationPaths []*regexp.Regexp
 
+	// RateLimits configures per-endpoint rate limits for this service.
+	RateLimits []RateLimit `long:"ratelimits" description:"Per-endpoint rate limits" yaml:"ratelimits"`
+
+	// compiledRateLimits holds compiled regexes and limiter instances.
+	compiledRateLimits []*compiledRateLimit
+
 	freebieDB freebie.DB
 	pricer    pricer.Pricer
 }
@@ -234,6 +240,22 @@ func prepareServices(services []*Service) error {
 					"regex: %w", err)
 			}
 			service.compiledPathRegexp = compiledPathRegexp
+		}
+
+		// Compile rate limiters.
+		service.compiledRateLimits = make(
+			[]*compiledRateLimit, 0, len(service.RateLimits),
+		)
+		for i := range service.RateLimits {
+			rl := &service.RateLimits[i]
+			if err := rl.compile(); err != nil {
+				return fmt.Errorf("error compiling rate "+
+					"limit for path %s: %w",
+					rl.PathRegexp, err)
+			}
+			service.compiledRateLimits = append(
+				service.compiledRateLimits, rl.compiled,
+			)
 		}
 
 		service.compiledAuthWhitelistPaths = make(

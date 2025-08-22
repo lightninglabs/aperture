@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
@@ -167,10 +168,47 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply per-endpoint rate limits, if configured.
+	for _, rl := range target.compiledRateLimits {
+		if !rl.re.MatchString(r.URL.Path) {
+			continue
+		}
+
+		// Fast path: allow if a token is available now.
+		if rl.allow() {
+			continue
+		}
+
+		// Otherwise, compute suggested retry delay without consuming
+		// tokens.
+		res := rl.limiter.Reserve()
+		if res.OK() {
+			delay := res.Delay()
+			res.CancelAt(time.Now())
+			if delay > 0 {
+				// As seconds; for sub-second delays we still
+				// send 1 second.
+				secs := int(delay.Seconds())
+				if secs == 0 {
+					secs = 1
+				}
+				w.Header().Set(
+					"Retry-After", strconv.Itoa(secs),
+				)
+			}
+		}
+		addCorsHeaders(w.Header())
+		sendDirectResponse(
+			w, r, http.StatusTooManyRequests, "rate limit exceeded",
+		)
+
+		return
+	}
+
 	resourceName := target.ResourceName(r.URL.Path)
 
-	// Determine auth level required to access service and dispatch request
-	// accordingly.
+	// Determine the auth level required to access service and dispatch the
+	// request  accordingly.
 	authLevel := target.AuthRequired(r)
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
 	switch {
