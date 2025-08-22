@@ -50,3 +50,52 @@ services and APIs.
   compare with `sample-conf.yaml`.
 * Start aperture without any command line parameters (`./aperture`), all configuration
   is done in the `~/.aperture/aperture.yaml` file.
+
+## Per-endpoint rate limiting
+
+Aperture supports per-endpoint rate limiting using a token bucket based on golang.org/x/time/rate.
+Limits are configured per service using regular expressions that match request paths.
+
+Key properties:
+- Scope: per service, per endpoint (path regex).
+- Process local: state is in-memory per Aperture process. In clustered deployments, each instance enforces its own limits.
+- Evaluation: all matching rules are enforced; if any matching rule denies a request, the request is rejected.
+- Protocols: applies to both REST and gRPC requests.
+
+Behavior on limit exceed:
+- HTTP/REST: returns 429 Too Many Requests and sets a Retry-After header (in seconds). Sub-second delays are rounded up to 1 second.
+- gRPC: response uses HTTP/2 headers/trailers with Grpc-Status and Grpc-Message indicating the error (message: "rate limit exceeded").
+- CORS headers are included consistently.
+
+Configuration fields (under a service):
+- pathregex: regular expression matched against the URL path (e.g., "/package.Service/Method").
+- requests: allowed number of requests per window.
+- per: size of the time window (e.g., 1s, 1m). Default: 1s.
+- burst: additional burst capacity. Default: equal to requests.
+
+Example (see sample-conf.yaml for a full example):
+
+```yaml
+services:
+  - name: "service1"
+    hostregexp: '^service1.com$'
+    pathregexp: '^/.*$'
+    address: "127.0.0.1:10009"
+    protocol: https
+
+    # Optional per-endpoint rate limits using a token bucket.
+    ratelimits:
+      - pathregex: '^/looprpc.SwapServer/LoopOutTerms.*$'
+        requests: 5
+        per: 1s
+        burst: 5
+      - pathregex: '^/looprpc.SwapServer/LoopOutQuote.*$'
+        requests: 2
+        per: 1s
+        burst: 2
+```
+
+Notes:
+- If multiple ratelimits match a request path, all must allow the request; the strictest rule will effectively apply.
+- If requests or burst are set to 0 or negative, safe defaults are used (requests defaults to 1; burst defaults to requests).
+- If per is omitted or 0, it defaults to 1s.
