@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"regexp"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -31,8 +32,23 @@ type RateLimit struct {
 }
 
 type compiledRateLimit struct {
-	re      *regexp.Regexp
+	// protects the l402Limiters map.
+	sync.Mutex
+
+	// re is the regular expression used to match the path of the URL.
+	re *regexp.Regexp
+
+	// global limiter is used when no per-L402 key can be derived.
 	limiter *rate.Limiter
+
+	// limiter per L402 key.
+	limit rate.Limit
+
+	// burst is the burst size allowed in addition to steady rate.
+	burst int
+
+	// l402Limiters is a map of per-L402 key limiters.
+	l402Limiters map[string]*rate.Limiter
 }
 
 // compile prepares the regular expression and the limiter.
@@ -57,13 +73,62 @@ func (r *RateLimit) compile() error {
 
 	// rate.Every(per/requests) creates an average rate of requests
 	// per 'per'.
-	lim := rate.NewLimiter(rate.Every(per/time.Duration(requests)), burst)
-	r.compiled = &compiledRateLimit{re: re, limiter: lim}
+	limit := rate.Every(per / time.Duration(requests))
+	lim := rate.NewLimiter(limit, burst)
+	r.compiled = &compiledRateLimit{
+		re:           re,
+		limiter:      lim,
+		limit:        limit,
+		burst:        burst,
+		l402Limiters: make(map[string]*rate.Limiter),
+	}
 
 	return nil
 }
 
-// allow returns true if the rate limit permits an event now.
-func (c *compiledRateLimit) allow() bool {
-	return c.limiter.Allow()
+// allowFor returns true if the rate limit permits an event now for the given
+// key. If the key is empty, the global limiter is used.
+func (c *compiledRateLimit) allowFor(key string) bool {
+	if key == "" {
+		return c.limiter.Allow()
+	}
+	l := c.getOrCreate(key)
+
+	return l.Allow()
+}
+
+// reserveDelay reserves a token on the limiter for the given key and returns
+// the suggested delay. Callers can use the delay to set Retry-After without
+// consuming tokens.
+func (c *compiledRateLimit) reserveDelay(key string) (time.Duration, bool) {
+	var l *rate.Limiter
+	if key == "" {
+		l = c.limiter
+	} else {
+		l = c.getOrCreate(key)
+	}
+
+	res := l.Reserve()
+	if !res.OK() {
+		return 0, false
+	}
+
+	delay := res.Delay()
+	res.CancelAt(time.Now())
+
+	return delay, true
+}
+
+func (c *compiledRateLimit) getOrCreate(key string) *rate.Limiter {
+	c.Lock()
+	defer c.Unlock()
+
+	if l, ok := c.l402Limiters[key]; ok {
+		return l
+	}
+
+	l := rate.NewLimiter(c.limit, c.burst)
+	c.l402Limiters[key] = l
+
+	return l
 }

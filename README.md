@@ -99,3 +99,30 @@ Notes:
 - If multiple ratelimits match a request path, all must allow the request; the strictest rule will effectively apply.
 - If requests or burst are set to 0 or negative, safe defaults are used (requests defaults to 1; burst defaults to requests).
 - If per is omitted or 0, it defaults to 1s.
+
+### L402-scoped rate limiting
+
+In addition to path-based limits, Aperture now enforces rate limits on a 
+per-L402 key basis when an authenticated L402 request is present.
+
+How it works:
+- Key derivation: For requests that include L402 auth headers, Aperture extracts the preimage (via Authorization, Grpc-Metadata-Macaroon, or Macaroon headers) and derives a stable key from the preimage hash. Each unique L402 key gets its own token bucket for every matching rate limit rule.
+- Fallback to global: If no L402 key can be derived (unauthenticated or missing preimage), the rule’s global limiter is used for all such requests.
+- Multiple matching rules: If multiple rate limit entries match a path, each rule is checked independently per L402 key; the request must pass all of them.
+
+Headers recognized for L402 key extraction:
+- Authorization: "L402 <macBase64>:<preimageHex>" (also supports legacy "LSAT ...").
+- Grpc-Metadata-Macaroon: "<macHex>" (preimage is read from macaroon caveat).
+- Macaroon: "<macHex>" (preimage is read from macaroon caveat).
+
+Operational notes:
+- Isolation: Authenticated users (distinct L402 keys) do not interfere with each other’s token buckets. A surge from one key won’t consume tokens of another.
+- Unauthenticated traffic: Shares the global bucket per rule. Heavy unauthenticated traffic can still be throttled by the global limiter.
+- Memory/scale: Per-key limiters are kept in an in-memory map per process and currently do not expire. In high-churn environments with many unique L402 keys, this may grow over time. Consider process restarts or external rate-limiting if necessary.
+- Retry-After: When throttled, Aperture computes a suggested delay without consuming a token and sets Retry-After accordingly (minimum 1s), enabling clients to back off.
+
+Example scenario:
+- Suppose a rule allows 5 rps (burst 5) for path 
+  "^/looprpc.SwapServer/LoopOutQuote.*$". Two different L402 users (A and B)
+  each get their own 5 rps budget. Unauthenticated requests to the same path
+  share one global 5 rps budget.

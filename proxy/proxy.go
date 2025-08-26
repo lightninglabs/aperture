@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
@@ -168,23 +167,25 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply per-endpoint rate limits, if configured.
+	// Apply per-endpoint rate limits, if configured. Determine the L402 key
+	// (preimage hash) if present, otherwise fallback to global limiter.
+	var l402Key string
+	if _, preimage, err := l402.FromHeader(&r.Header); err == nil {
+		l402Key = preimage.Hash().String()
+	}
 	for _, rl := range target.compiledRateLimits {
 		if !rl.re.MatchString(r.URL.Path) {
 			continue
 		}
 
 		// Fast path: allow if a token is available now.
-		if rl.allow() {
+		if rl.allowFor(l402Key) {
 			continue
 		}
 
 		// Otherwise, compute suggested retry delay without consuming
 		// tokens.
-		res := rl.limiter.Reserve()
-		if res.OK() {
-			delay := res.Delay()
-			res.CancelAt(time.Now())
+		if delay, ok := rl.reserveDelay(l402Key); ok {
 			if delay > 0 {
 				// As seconds; for sub-second delays we still
 				// send 1 second.
