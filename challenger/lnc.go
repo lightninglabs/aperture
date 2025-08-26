@@ -41,11 +41,6 @@ func NewLNCChallenger(session *lnc.Session, lncStore lnc.Store,
 		return nil, err
 	}
 
-	err = lndChallenger.Start()
-	if err != nil {
-		return nil, err
-	}
-
 	return &LNCChallenger{
 		lndChallenger: lndChallenger,
 		nodeConn:      nodeConn,
