@@ -2,6 +2,7 @@ package l402
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -109,10 +110,8 @@ func NewCapabilitiesSatisfier(service string,
 		},
 		SatisfyFinal: func(c Caveat) error {
 			capabilities := strings.Split(c.Value, ",")
-			for _, capability := range capabilities {
-				if capability == targetCapability {
-					return nil
-				}
+			if slices.Contains(capabilities, targetCapability) {
+				return nil
 			}
 			return fmt.Errorf("target capability %v not authorized",
 				targetCapability)

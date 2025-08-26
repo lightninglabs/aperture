@@ -56,10 +56,7 @@ func (m *mockInvoiceClient) ListInvoices(_ context.Context,
 		return &lnrpc.ListInvoiceResponse{}, nil
 	}
 
-	endIndex := r.IndexOffset + r.NumMaxInvoices
-	if endIndex > uint64(len(m.invoices)) {
-		endIndex = uint64(len(m.invoices))
-	}
+	endIndex := min(r.IndexOffset+r.NumMaxInvoices, uint64(len(m.invoices)))
 
 	return &lnrpc.ListInvoiceResponse{
 		Invoices:        m.invoices[r.IndexOffset:endIndex],
