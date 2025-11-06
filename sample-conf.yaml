@@ -188,6 +188,19 @@ services:
     authwhitelistpaths:
       - '^/freebieservice.*$'
 
+    # Optional per-endpoint rate limits using a token bucket.
+    # Each entry matches a path regex and defines how many requests are
+    # allowed per time window, with an optional burst.
+    ratelimits:
+      - pathregex: '^/looprpc.SwapServer/LoopOutTerms.*$'
+        requests: 5
+        per: 1s
+        burst: 5
+      - pathregex: '^/looprpc.SwapServer/LoopOutQuote.*$'
+        requests: 2
+        per: 1s
+        burst: 2
+
     # A list of regular expressions for path that will skip invoice creation,
     # but still try to do the l402 authentication. This is useful for streaming
     # services, as they are not supported to be the initial request to receive
