@@ -161,6 +161,10 @@ services:
     # options include: http, https.
     protocol: https
 
+    # Header fields to always pass to the service
+    headers:
+      Authorization: "Bearer key"
+
     # If required, a path to the service's TLS certificate to successfully
     # establish a secure connection.
     tlscertpath: "path-to-optional-tls-cert/tls.cert"
