@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -76,6 +77,23 @@ type Proxy struct {
 	authenticator auth.Authenticator
 	services      []*Service
 	blocklist     map[string]struct{}
+}
+
+// rewriteRequestPath rewrites the request path according to service config.
+func (s *Service) rewriteRequestPath(req *http.Request) {
+	prefix := s.Rewrite.Prefix
+	if prefix == "" {
+		return
+	}
+
+	newPath, err := url.JoinPath(prefix, req.URL.Path)
+	if err != nil {
+		log.Errorf("could not add prefix: %v", err)
+		return
+	}
+
+	req.URL.Path = newPath
+	req.URL.RawPath = ""
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
@@ -376,6 +394,8 @@ func (p *Proxy) director(req *http.Request) {
 		req.Host = target.Address
 		req.URL.Host = target.Address
 		req.URL.Scheme = target.Protocol
+
+		target.rewriteRequestPath(req)
 
 		// Make sure we always forward the authorization in the correct/
 		// default format so the backend knows what to do with it.

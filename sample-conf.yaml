@@ -165,6 +165,9 @@ services:
     headers:
       Authorization: "Bearer key"
 
+    rewrite:
+      prefix: "/path/to/api"
+
     # If required, a path to the service's TLS certificate to successfully
     # establish a secure connection.
     tlscertpath: "path-to-optional-tls-cert/tls.cert"
