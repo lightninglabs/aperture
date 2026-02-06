@@ -823,16 +823,35 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 }
 
 // createProxy creates the proxy with all the services it needs.
-func createProxy(cfg *Config, challenger challenger.Challenger,
+func createProxy(cfg *Config, chall challenger.Challenger,
 	store mint.SecretStore) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
-		Challenger:     challenger,
+		Challenger:     chall,
 		Secrets:        store,
 		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
 		Now:            time.Now,
 	})
-	authenticator := auth.NewL402Authenticator(minter, challenger)
+	lnAuth := auth.NewL402Authenticator(minter, chall)
+
+	// Create PoW authenticator if any service uses PoW authentication.
+	var powAuth auth.Authenticator
+	difficulties := make(map[string]uint32)
+	for _, svc := range cfg.Services {
+		if svc.IsPoW() {
+			difficulties[svc.Name] = svc.PowDifficulty
+		}
+	}
+	if len(difficulties) > 0 {
+		powChallenger := challenger.NewPoWChallenger(0)
+		powMinter := mint.New(&mint.Config{
+			Challenger:     powChallenger,
+			Secrets:        store,
+			ServiceLimiter: newStaticServiceLimiter(cfg.Services),
+			Now:            time.Now,
+		})
+		powAuth = auth.NewPoWAuthenticator(powMinter, difficulties)
+	}
 
 	// By default the static file server only returns 404 answers for
 	// security reasons. Serving files from the staticRoot directory has to
@@ -871,7 +890,8 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 	))
 
 	prxy, err := proxy.New(
-		authenticator, cfg.Services, cfg.Blocklist, localServices...,
+		lnAuth, powAuth, cfg.Services, cfg.Blocklist,
+		localServices...,
 	)
 	return prxy, proxyCleanup, err
 }
