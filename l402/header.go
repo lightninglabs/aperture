@@ -30,6 +30,10 @@ var (
 	authRegex        = regexp.MustCompile("(LSAT|L402) (.*?):([a-f0-9]{64})")
 	authFormatLegacy = "LSAT %s:%s"
 	authFormat       = "L402 %s:%s"
+
+	// macOnlyRegex matches Authorization headers with either a preimage
+	// or the "POW" sentinel, extracting just the macaroon portion.
+	macOnlyRegex = regexp.MustCompile("(LSAT|L402) (.*?):([a-f0-9]{64}|POW)")
 )
 
 // FromHeader tries to extract authentication information from HTTP headers.
@@ -128,6 +132,77 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 	}
 
 	return mac, preimage, nil
+}
+
+// MacaroonFromHeader extracts just the macaroon from any supported header
+// format without requiring or validating a preimage or PoW proof. This is
+// useful for PoW authentication and rate limiting where only the macaroon
+// identity is needed.
+func MacaroonFromHeader(header *http.Header) (*macaroon.Macaroon, error) {
+	switch {
+	case header.Get(HeaderAuthorization) != "":
+		var matches []string
+		authHeaders := header.Values(HeaderAuthorization)
+		for _, authHeader := range authHeaders {
+			matches = macOnlyRegex.FindStringSubmatch(authHeader)
+			if len(matches) == 4 {
+				break
+			}
+		}
+
+		if len(matches) != 4 {
+			return nil, fmt.Errorf("invalid auth header format")
+		}
+
+		macBase64 := matches[2]
+		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
+		if err != nil {
+			return nil, fmt.Errorf("base64 decode of macaroon "+
+				"failed: %v", err)
+		}
+		mac := &macaroon.Macaroon{}
+		err = mac.UnmarshalBinary(macBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unable to unmarshal "+
+				"macaroon: %v", err)
+		}
+		return mac, nil
+
+	case header.Get(HeaderMacaroonMD) != "":
+		macBytes, err := hex.DecodeString(
+			header.Get(HeaderMacaroonMD),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("hex decode of macaroon "+
+				"failed: %v", err)
+		}
+		mac := &macaroon.Macaroon{}
+		err = mac.UnmarshalBinary(macBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unable to unmarshal "+
+				"macaroon: %v", err)
+		}
+		return mac, nil
+
+	case header.Get(HeaderMacaroon) != "":
+		macBytes, err := hex.DecodeString(
+			header.Get(HeaderMacaroon),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("hex decode of macaroon "+
+				"failed: %v", err)
+		}
+		mac := &macaroon.Macaroon{}
+		err = mac.UnmarshalBinary(macBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unable to unmarshal "+
+				"macaroon: %v", err)
+		}
+		return mac, nil
+
+	default:
+		return nil, fmt.Errorf("no auth header provided")
+	}
 }
 
 // SetHeader sets the provided authentication elements as the default/standard
