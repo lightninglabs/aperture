@@ -136,7 +136,7 @@ func TestProxyHTTPBlocklist(t *testing.T) {
 
 	// Block the IP that will be used in the request.
 	blockedIP := "127.0.0.1"
-	p, err := proxy.New(mockAuth, services, []string{blockedIP})
+	p, err := proxy.New(mockAuth, nil, services, []string{blockedIP})
 	require.NoError(t, err)
 
 	// Start the proxy server.
@@ -202,7 +202,7 @@ func runHTTPTest(t *testing.T, tc *testCase, method string) {
 	}}
 
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, []string{})
+	p, err := proxy.New(mockAuth, nil, services, []string{})
 	require.NoError(t, err)
 
 	// Start server that gives requests to the proxy.
@@ -397,7 +397,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 
 	// Create the proxy server and start serving on TLS.
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, []string{})
+	p, err := proxy.New(mockAuth, nil, services, []string{})
 	require.NoError(t, err)
 	server := &http.Server{
 		Addr:      testProxyAddr,
