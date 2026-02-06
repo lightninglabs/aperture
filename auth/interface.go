@@ -38,6 +38,9 @@ type Minter interface {
 
 	// VerifyL402 attempts to verify an L402 with the given parameters.
 	VerifyL402(context.Context, *mint.VerificationParams) error
+
+	// VerifyL402PoW verifies a PoW-authenticated L402.
+	VerifyL402PoW(context.Context, *mint.PoWVerificationParams) error
 }
 
 // InvoiceChecker is an entity that is able to check the status of an invoice,
