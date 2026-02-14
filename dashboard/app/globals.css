@@ -1,0 +1,103 @@
+@import url("https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&family=Work+Sans:wght@300;500;600&display=swap");
+@import "tailwindcss";
+
+/* ── Base ──────────────────────────────────────────────── */
+html,
+body {
+  background-color: #101727;
+  color: #f5f5f5;
+  width: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif;
+}
+
+/* ── Links ─────────────────────────────────────────────── */
+a {
+  color: #f5f5f5;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #ffffff;
+  text-decoration: none;
+}
+
+/* ── Selection ─────────────────────────────────────────── */
+::selection {
+  background: rgba(93, 95, 239, 0.3);
+  color: #fff;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #101727;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #384770;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2e3a5c;
+}
+
+/* ── Animations ──────────────────────────────────────── */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Staggered entrance for grid children */
+.animate-in > * {
+  animation: fade-in-up 0.4s ease-out both;
+}
+.animate-in > *:nth-child(1) { animation-delay: 0ms; }
+.animate-in > *:nth-child(2) { animation-delay: 50ms; }
+.animate-in > *:nth-child(3) { animation-delay: 100ms; }
+.animate-in > *:nth-child(4) { animation-delay: 150ms; }
+.animate-in > *:nth-child(5) { animation-delay: 200ms; }
+.animate-in > *:nth-child(6) { animation-delay: 250ms; }
+
+/* Section entrance */
+.section-in {
+  animation: fade-in-up 0.4s ease-out both;
+}
+
+/* Button hover glow for primary */
+button:focus-visible {
+  outline: 2px solid rgba(93, 95, 239, 0.6);
+  outline-offset: 2px;
+}
