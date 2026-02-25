@@ -37,7 +37,13 @@ func (m MacaroonCredential) GetRequestMetadata(_ context.Context,
 	}
 
 	md := make(map[string]string)
-	md["macaroon"] = hex.EncodeToString(macBytes)
+	macHex := hex.EncodeToString(macBytes)
+
+	// Send the token under the current spec key "token" per bLIP-0026.
+	// The legacy "macaroon" key is also sent for backwards compatibility
+	// with servers that have not yet upgraded.
+	md["token"] = macHex
+	md["macaroon"] = macHex
 	return md, nil
 }
 
