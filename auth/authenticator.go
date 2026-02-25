@@ -101,20 +101,33 @@ func (l *L402Authenticator) FreshChallengeHeader(serviceName string,
 	macBytes, err := mac.MarshalBinary()
 	if err != nil {
 		log.Errorf("Error serializing L402: %v", err)
+		return nil, err
 	}
 
 	header := http.Header{
 		"Content-Type": []string{"application/grpc"},
 	}
 
-	str := fmt.Sprintf("macaroon=\"%s\", invoice=\"%s\"",
-		base64.StdEncoding.EncodeToString(macBytes), paymentRequest)
+	macBase64 := base64.StdEncoding.EncodeToString(macBytes)
 
-	// Old loop software (via ClientInterceptor code of aperture) looks
-	// for "LSAT" in the first instance of WWW-Authenticate header, so
-	// legacy header must go first not to break backward compatibility.
-	lsatValue := lsatAuthScheme + " " + str
-	l402Value := l402AuthScheme + " " + str
+	// The current L402 challenge format uses "token=" as the key name
+	// per the bLIP-0026 spec, with a "version=" parameter for forward
+	// compatibility.
+	l402Str := fmt.Sprintf(
+		"version=\"0\", token=\"%s\", invoice=\"%s\"",
+		macBase64, paymentRequest,
+	)
+
+	// Legacy LSAT header uses the old "macaroon=" key name. Old loop
+	// software (via ClientInterceptor code of aperture) looks for "LSAT"
+	// in the first instance of WWW-Authenticate header, so the legacy
+	// header must go first not to break backward compatibility.
+	legacyStr := fmt.Sprintf(
+		"macaroon=\"%s\", invoice=\"%s\"",
+		macBase64, paymentRequest,
+	)
+	lsatValue := lsatAuthScheme + " " + legacyStr
+	l402Value := l402AuthScheme + " " + l402Str
 	header.Set("WWW-Authenticate", lsatValue)
 	log.Debugf("Created new challenge header: [%s]", lsatValue)
 	header.Add("WWW-Authenticate", l402Value)
