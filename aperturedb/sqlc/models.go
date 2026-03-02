@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+type L402Transaction struct {
+	ID             int32
+	TokenID        []byte
+	PaymentHash    []byte
+	ServiceName    string
+	PriceSats      int32
+	State          string
+	CreatedAt      time.Time
+	SettledAt      sql.NullTime
+	IdentifierHash []byte
+}
+
 type LncSession struct {
 	ID                 int32
 	PassphraseWords    string

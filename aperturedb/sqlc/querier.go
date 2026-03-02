@@ -9,15 +9,29 @@ import (
 )
 
 type Querier interface {
+	CountL402Transactions(ctx context.Context) (int64, error)
+	CountL402TransactionsByService(ctx context.Context, serviceName string) (int64, error)
+	DeleteL402TransactionByTokenID(ctx context.Context, tokenID []byte) (int64, error)
 	DeleteOnionPrivateKey(ctx context.Context) error
 	DeleteSecretByHash(ctx context.Context, hash []byte) (int64, error)
+	GetL402RevenueByService(ctx context.Context) ([]GetL402RevenueByServiceRow, error)
+	GetL402RevenueByServiceAndDateRange(ctx context.Context, arg GetL402RevenueByServiceAndDateRangeParams) ([]GetL402RevenueByServiceAndDateRangeRow, error)
+	GetL402TotalRevenue(ctx context.Context) (interface{}, error)
+	GetL402TransactionByIdentifierHash(ctx context.Context, identifierHash []byte) (L402Transaction, error)
+	GetL402TransactionsByPaymentHash(ctx context.Context, paymentHash []byte) ([]L402Transaction, error)
 	GetSecretByHash(ctx context.Context, hash []byte) ([]byte, error)
 	GetSession(ctx context.Context, passphraseEntropy []byte) (LncSession, error)
+	InsertL402Transaction(ctx context.Context, arg InsertL402TransactionParams) (int32, error)
 	InsertSecret(ctx context.Context, arg InsertSecretParams) (int32, error)
 	InsertSession(ctx context.Context, arg InsertSessionParams) error
+	ListL402Transactions(ctx context.Context, arg ListL402TransactionsParams) ([]L402Transaction, error)
+	ListL402TransactionsByDateRange(ctx context.Context, arg ListL402TransactionsByDateRangeParams) ([]L402Transaction, error)
+	ListL402TransactionsByService(ctx context.Context, arg ListL402TransactionsByServiceParams) ([]L402Transaction, error)
+	ListL402TransactionsByState(ctx context.Context, arg ListL402TransactionsByStateParams) ([]L402Transaction, error)
 	SelectOnionPrivateKey(ctx context.Context) ([]byte, error)
 	SetExpiry(ctx context.Context, arg SetExpiryParams) error
 	SetRemotePubKey(ctx context.Context, arg SetRemotePubKeyParams) error
+	UpdateL402TransactionState(ctx context.Context, arg UpdateL402TransactionStateParams) error
 	UpsertOnion(ctx context.Context, arg UpsertOnionParams) error
 }
 
