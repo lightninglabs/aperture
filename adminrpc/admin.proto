@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package adminrpc;
+
+option go_package = "github.com/lightninglabs/aperture/adminrpc";
+
+service Admin {
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  rpc CreateService(CreateServiceRequest) returns (Service);
+  rpc UpdateService(UpdateServiceRequest) returns (Service);
+  rpc DeleteService(DeleteServiceRequest) returns (DeleteServiceResponse);
+  rpc ListTransactions(ListTransactionsRequest)
+      returns (ListTransactionsResponse);
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+}
+
+message GetInfoRequest {}
+
+message GetInfoResponse {
+  string network = 1;
+  string listen_addr = 2;
+  bool insecure = 3;
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse { string status = 1; }
+
+message ListServicesRequest {}
+
+message ListServicesResponse { repeated Service services = 1; }
+
+message Service {
+  string name = 1;
+  string address = 2;
+  string protocol = 3;
+  string host_regexp = 4;
+  string path_regexp = 5;
+  int64 price = 6;
+  string auth = 7;
+}
+
+message CreateServiceRequest {
+  string name = 1;
+  string address = 2;
+  string protocol = 3;
+  string host_regexp = 4;
+  string path_regexp = 5;
+  int64 price = 6;
+  string auth = 7;
+}
+
+message UpdateServiceRequest {
+  string name = 1;
+  string address = 2;
+  string protocol = 3;
+  string host_regexp = 4;
+  string path_regexp = 5;
+  int64 price = 6;
+  string auth = 7;
+}
+
+message DeleteServiceRequest { string name = 1; }
+
+message DeleteServiceResponse { string status = 1; }
+
+message ListTransactionsRequest {
+  string service = 1;
+  string state = 2;
+  string start_date = 3;
+  string end_date = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message ListTransactionsResponse { repeated Transaction transactions = 1; }
+
+message Transaction {
+  int32 id = 1;
+  string token_id = 2;
+  string payment_hash = 3;
+  string service_name = 4;
+  int32 price_sats = 5;
+  string state = 6;
+  string created_at = 7;
+  string settled_at = 8;
+}
+
+message ListTokensRequest {}
+
+message ListTokensResponse { repeated Transaction tokens = 1; }
+
+message RevokeTokenRequest { string token_id = 1; }
+
+message RevokeTokenResponse { string status = 1; }
+
+message GetStatsRequest {
+  string from = 1;
+  string to = 2;
+}
+
+message GetStatsResponse {
+  int64 total_revenue_sats = 1;
+  int64 transaction_count = 2;
+  repeated ServiceRevenue service_breakdown = 3;
+}
+
+message ServiceRevenue {
+  string service_name = 1;
+  int64 total_revenue_sats = 2;
+}
