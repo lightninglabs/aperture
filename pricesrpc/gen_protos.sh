@@ -83,6 +83,10 @@ format
 generate skip_rest
 popd
 
+pushd adminrpc
+./gen_protos.sh
+popd
+
 if [[ "$COMPILE_MOBILE" == "1" ]]; then
   pushd mobile
   ./gen_bindings.sh $FALAFEL_VERSION

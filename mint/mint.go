@@ -75,6 +75,17 @@ type ServiceLimiter interface {
 		error)
 }
 
+// TransactionStore is an optional store that records L402 transaction data
+// for analytics and admin dashboard purposes.
+type TransactionStore interface {
+	// RecordTransaction persists a new pending L402 transaction.
+	// The identifierHash is the SHA-256 hash of the encoded macaroon
+	// identifier bytes, used to link transactions to secrets.
+	RecordTransaction(ctx context.Context, tokenID []byte,
+		paymentHash []byte, serviceName string,
+		priceSats int64, identifierHash []byte) error
+}
+
 // Config packages all of the required dependencies to instantiate a new L402
 // mint.
 type Config struct {
@@ -92,6 +103,10 @@ type Config struct {
 
 	// Now returns the current time.
 	Now func() time.Time
+
+	// TransactionStore is an optional store for recording L402 transaction
+	// data. If nil, transaction logging is disabled.
+	TransactionStore TransactionStore
 }
 
 // Mint is an entity that is able to mint and verify L402s for a set of
@@ -158,6 +173,32 @@ func (m *Mint) MintL402(ctx context.Context,
 		// Attempt to revoke the secret to save space.
 		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
 		return nil, "", err
+	}
+
+	// If a transaction store is configured, record the transaction.
+	// We log-and-continue on error so that a logging failure never
+	// prevents a successful mint.
+	if m.cfg.TransactionStore != nil {
+		macID, idErr := l402.DecodeIdentifier(
+			bytes.NewReader(mac.Id()),
+		)
+		if idErr == nil {
+			serviceName := ""
+			if len(services) > 0 {
+				serviceName = services[0].Name
+			}
+
+			// Compute the identifier hash to link the
+			// transaction to the secrets table.
+			macIDHash := sha256.Sum256(mac.Id())
+
+			// nolint:errcheck
+			_ = m.cfg.TransactionStore.RecordTransaction(
+				ctx, macID.TokenID[:],
+				macID.PaymentHash[:], serviceName,
+				price, macIDHash[:],
+			)
+		}
 	}
 
 	return mac, paymentRequest, nil

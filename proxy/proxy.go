@@ -71,8 +71,17 @@ func (l *localService) IsHandling(r *http.Request) bool {
 // a challenge to the client or forwards the request to another server and
 // proxies the response back to the client.
 type Proxy struct {
-	proxyBackend  *httputil.ReverseProxy
+	proxyBackend *httputil.ReverseProxy
+
+	// priorityLocalServices are checked before proxy service matching.
+	// Use this for local endpoints that must not be intercepted by
+	// broad proxy path patterns.
+	priorityLocalServices []LocalService
+
+	// localServices are checked after proxy service matching fails.
+	// The static file server is typically the catch-all here.
 	localServices []LocalService
+
 	authenticator auth.Authenticator
 	services      []*Service
 	blocklist     map[string]struct{}
@@ -82,7 +91,8 @@ type Proxy struct {
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
 func New(auth auth.Authenticator, services []*Service,
-	blocklist []string, localServices ...LocalService) (*Proxy, error) {
+	blocklist []string, priorityLocalServices []LocalService,
+	localServices ...LocalService) (*Proxy, error) {
 
 	blMap := make(map[string]struct{})
 	for _, ip := range blocklist {
@@ -95,10 +105,11 @@ func New(auth auth.Authenticator, services []*Service,
 	}
 
 	proxy := &Proxy{
-		localServices: localServices,
-		authenticator: auth,
-		services:      services,
-		blocklist:     blMap,
+		priorityLocalServices: priorityLocalServices,
+		localServices:         localServices,
+		authenticator:         auth,
+		services:              services,
+		blocklist:             blMap,
 	}
 	err := proxy.UpdateServices(services)
 	if err != nil {
@@ -140,6 +151,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// header to application/grpc.
 	if strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc) {
 		w.Header().Set(hdrContentType, hdrTypeGrpc)
+	}
+
+	// Priority local services are checked before proxy service matching
+	// so that endpoints like the admin API are not intercepted by broad
+	// proxy path patterns (e.g. "^/api/.*$").
+	for _, ls := range p.priorityLocalServices {
+		if ls.IsHandling(r) {
+			prefixLog.Debugf("Dispatching request %s to "+
+				"priority local service.", r.URL.Path)
+			ls.ServeHTTP(w, r)
+			return
+		}
 	}
 
 	// Requests that can't be matched to a service backend will be
@@ -335,6 +358,8 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 			InsecureSkipVerify: true,
 		},
 	}
+
+	p.services = services
 
 	p.proxyBackend = &httputil.ReverseProxy{
 		Director:  p.director,

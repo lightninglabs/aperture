@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"errors"
@@ -20,6 +21,8 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
+	"github.com/lightninglabs/aperture/admin"
+	"github.com/lightninglabs/aperture/adminrpc"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
@@ -32,6 +35,7 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -78,6 +82,18 @@ const (
 	// hashMailRESTPrefix is the prefix a REST request URI has when it is
 	// meant for the hashmailrpc server to be handled.
 	hashMailRESTPrefix = "/v1/lightning-node-connect/hashmail"
+
+	// adminGRPCPrefix is the prefix a gRPC request URI has when it is
+	// meant for the admin server to be handled.
+	adminGRPCPrefix = "/adminrpc.Admin/"
+
+	// adminRESTPrefix is the prefix a REST request URI has when it is
+	// meant for the admin REST API to be handled.
+	adminRESTPrefix = "/api/admin/"
+
+	// defaultAdminMacaroonFilename is the default filename for the admin
+	// macaroon.
+	defaultAdminMacaroonFilename = "admin.macaroon"
 
 	// invoiceMacaroonName is the name of the invoice macaroon belonging
 	// to the target lnd node.
@@ -178,6 +194,7 @@ type Aperture struct {
 	torHTTPServer *http.Server
 	proxy         *proxy.Proxy
 	proxyCleanup  func()
+	adminCleanup  func()
 
 	wg   sync.WaitGroup
 	quit chan struct{}
@@ -223,6 +240,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		secretStore mint.SecretStore
 		onionStore  tor.OnionStore
 		lncStore    lnc.Store
+		txnStore    *aperturedb.L402TransactionsStore
 	)
 
 	// Connect to the chosen database backend.
@@ -249,27 +267,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				err)
 		}
 		a.db = db.DB
-
-		dbSecretTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.SecretsDB {
-				return db.WithTx(tx)
-			},
-		)
-		secretStore = aperturedb.NewSecretsStore(dbSecretTxer)
-
-		dbOnionTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.OnionDB {
-				return db.WithTx(tx)
-			},
-		)
-		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
-
-		dbLNCTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.LNCSessionsDB {
-				return db.WithTx(tx)
-			},
-		)
-		lncStore = aperturedb.NewLNCSessionsStore(dbLNCTxer)
+		secretStore, onionStore, lncStore, txnStore =
+			initSQLStores(db.BaseDB)
 
 	case "sqlite":
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
@@ -278,27 +277,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				err)
 		}
 		a.db = db.DB
-
-		dbSecretTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.SecretsDB {
-				return db.WithTx(tx)
-			},
-		)
-		secretStore = aperturedb.NewSecretsStore(dbSecretTxer)
-
-		dbOnionTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.OnionDB {
-				return db.WithTx(tx)
-			},
-		)
-		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
-
-		dbLNCTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.LNCSessionsDB {
-				return db.WithTx(tx)
-			},
-		)
-		lncStore = aperturedb.NewLNCSessionsStore(dbLNCTxer)
+		secretStore, onionStore, lncStore, txnStore =
+			initSQLStores(db.BaseDB)
 
 	default:
 		return fmt.Errorf("unknown database backend: %s",
@@ -306,6 +286,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 
 	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
+
+	challengerOpts := buildChallengerOpts(txnStore)
 
 	if !a.cfg.Authenticator.Disable {
 		authCfg := a.cfg.Authenticator
@@ -338,6 +320,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			a.challenger, err = challenger.NewLNCChallenger(
 				session, lncStore, a.cfg.InvoiceBatchSize,
 				genInvoiceReq, errChan, a.cfg.StrictVerify,
+				challengerOpts...,
 			)
 			if err != nil {
 				return fmt.Errorf("unable to start lnc "+
@@ -362,6 +345,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			a.challenger, err = challenger.NewLndChallenger(
 				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
 				context.Background, errChan, a.cfg.StrictVerify,
+				challengerOpts...,
 			)
 			if err != nil {
 				return err
@@ -369,9 +353,21 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}
 	}
 
+	adminServices, adminCleanup, err := createAdminServer(
+		a.cfg, txnStore, secretStore,
+		func() []*proxy.Service { return a.cfg.Services },
+		func(s []*proxy.Service) error {
+			return a.UpdateServices(s)
+		},
+	)
+	if err != nil {
+		return err
+	}
+	a.adminCleanup = adminCleanup
+
 	// Create the proxy and connect it to lnd.
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, secretStore,
+		a.cfg, a.challenger, secretStore, txnStore, adminServices...,
 	)
 	if err != nil {
 		return err
@@ -475,6 +471,11 @@ func (a *Aperture) Stop() error {
 
 	if a.challenger != nil {
 		a.challenger.Stop()
+	}
+
+	// Stop admin server resources.
+	if a.adminCleanup != nil {
+		a.adminCleanup()
 	}
 
 	// Stop everything that was started alongside the proxy, for example the
@@ -822,15 +823,220 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 	return torController, nil
 }
 
+// buildChallengerOpts builds the LndChallengerOptions. If a transaction
+// store is provided, a settlement callback is added to mark transactions
+// as settled when invoices are paid.
+func buildChallengerOpts(
+	txnStore *aperturedb.L402TransactionsStore) []challenger.LndChallengerOption {
+
+	var opts []challenger.LndChallengerOption
+	if txnStore != nil {
+		opts = append(opts, challenger.WithSettlementCallback(
+			func(hash lntypes.Hash) {
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					aperturedb.DefaultStoreTimeout,
+				)
+				defer cancel()
+
+				err := txnStore.SettleTransaction(
+					ctx, hash[:],
+				)
+				if err != nil {
+					log.Errorf("Error settling "+
+						"transaction (hash=%x): %v",
+						hash[:], err)
+				}
+			},
+		))
+	}
+
+	return opts
+}
+
+// createAdminServer creates the admin gRPC server and REST gateway following
+// the same pattern as createHashMailServer.
+func createAdminServer(cfg *Config,
+	txnStore *aperturedb.L402TransactionsStore,
+	secretStore mint.SecretStore,
+	getServices func() []*proxy.Service,
+	updateServices func([]*proxy.Service) error) (
+	[]proxy.LocalService, func(), error) {
+
+	if cfg.Admin == nil || !cfg.Admin.Enabled || txnStore == nil {
+		return nil, func() {}, nil
+	}
+
+	// Determine the admin root key. We use the SecretStore with a
+	// well-known hash to persist the root key across restarts.
+	adminKeyHash := sha256.Sum256([]byte("aperture-admin-root-key"))
+	rootKey, err := secretStore.GetSecret(
+		context.Background(), adminKeyHash,
+	)
+	if errors.Is(err, mint.ErrSecretNotFound) {
+		rootKey, err = secretStore.NewSecret(
+			context.Background(), adminKeyHash,
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to create "+
+				"admin root key: %v", err)
+		}
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("unable to get admin root "+
+			"key: %v", err)
+	}
+
+	// Generate the admin macaroon and write it to disk.
+	mac, err := admin.GenerateAdminMacaroon(rootKey[:])
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to generate admin "+
+			"macaroon: %v", err)
+	}
+
+	macPath := cfg.Admin.MacaroonPath
+	if macPath == "" {
+		macPath = filepath.Join(
+			apertureDataDir, defaultAdminMacaroonFilename,
+		)
+	}
+
+	if err := admin.WriteAdminMacaroon(mac, macPath); err != nil {
+		return nil, nil, fmt.Errorf("unable to write admin "+
+			"macaroon: %v", err)
+	}
+
+	log.Infof("Admin macaroon written to %s", macPath)
+
+	// Create the gRPC server with macaroon authentication.
+	serverOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			admin.MacaroonInterceptor(rootKey[:]),
+		),
+	}
+
+	adminServer := admin.NewServer(admin.ServerConfig{
+		Network:          cfg.Authenticator.Network,
+		ListenAddr:       cfg.ListenAddr,
+		Insecure:         cfg.Insecure,
+		TransactionStore: txnStore,
+		Services:         getServices,
+		UpdateServices:   updateServices,
+		SecretStore:      secretStore,
+	})
+
+	adminGRPC := grpc.NewServer(serverOpts...)
+	adminrpc.RegisterAdminServer(adminGRPC, adminServer)
+
+	var localServices []proxy.LocalService
+	localServices = append(localServices, proxy.NewLocalService(
+		adminGRPC, func(r *http.Request) bool {
+			return strings.HasPrefix(
+				r.URL.Path, adminGRPCPrefix,
+			)
+		},
+	))
+
+	// Create REST gateway.
+	customMarshalerOption := gateway.WithMarshalerOption(
+		gateway.MIMEWildcard, &gateway.JSONPb{
+			MarshalOptions: protojson.MarshalOptions{
+				UseProtoNames:   true,
+				EmitUnpopulated: true,
+			},
+		},
+	)
+
+	ctxc, cancel := context.WithCancel(context.Background())
+	cleanup := func() {
+		cancel()
+	}
+
+	restProxyTLSOpt := grpc.WithTransportCredentials(
+		credentials.NewTLS(
+			&tls.Config{InsecureSkipVerify: true},
+		),
+	)
+	if cfg.Insecure {
+		restProxyTLSOpt = grpc.WithTransportCredentials(
+			insecure.NewCredentials(),
+		)
+	}
+
+	mux := gateway.NewServeMux(customMarshalerOption)
+	err = adminrpc.RegisterAdminHandlerFromEndpoint(
+		ctxc, mux, cfg.ListenAddr, []grpc.DialOption{
+			restProxyTLSOpt,
+		},
+	)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
+	corsHandler := allowCORS(mux, []string{"*"})
+	localServices = append(localServices, proxy.NewLocalService(
+		corsHandler, func(r *http.Request) bool {
+			return strings.HasPrefix(
+				r.URL.Path, adminRESTPrefix,
+			)
+		},
+	))
+
+	log.Infof("Admin gRPC/REST API enabled")
+
+	return localServices, cleanup, nil
+}
+
+// initSQLStores creates all SQL-backed stores from a BaseDB instance. This
+// is shared between the postgres and sqlite backends.
+func initSQLStores(db *aperturedb.BaseDB) (
+	*aperturedb.SecretsStore,
+	*aperturedb.OnionStore,
+	*aperturedb.LNCSessionsStore,
+	*aperturedb.L402TransactionsStore) {
+
+	dbSecretTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.SecretsDB {
+			return db.WithTx(tx)
+		},
+	)
+	secretStore := aperturedb.NewSecretsStore(dbSecretTxer)
+
+	dbOnionTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.OnionDB {
+			return db.WithTx(tx)
+		},
+	)
+	onionStore := aperturedb.NewOnionStore(dbOnionTxer)
+
+	dbLNCTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.LNCSessionsDB {
+			return db.WithTx(tx)
+		},
+	)
+	lncStore := aperturedb.NewLNCSessionsStore(dbLNCTxer)
+
+	dbTxnTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.L402TransactionsDB {
+			return db.WithTx(tx)
+		},
+	)
+	txnStore := aperturedb.NewL402TransactionsStore(dbTxnTxer)
+
+	return secretStore, onionStore, lncStore, txnStore
+}
+
 // createProxy creates the proxy with all the services it needs.
 func createProxy(cfg *Config, challenger challenger.Challenger,
-	store mint.SecretStore) (*proxy.Proxy, func(), error) {
+	store mint.SecretStore, txnStore mint.TransactionStore,
+	adminServices ...proxy.LocalService) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
-		Challenger:     challenger,
-		Secrets:        store,
-		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
-		Now:            time.Now,
+		Challenger:       challenger,
+		Secrets:          store,
+		ServiceLimiter:   newStaticServiceLimiter(cfg.Services),
+		Now:              time.Now,
+		TransactionStore: txnStore,
 	})
 	authenticator := auth.NewL402Authenticator(minter, challenger)
 
@@ -871,7 +1077,8 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 	))
 
 	prxy, err := proxy.New(
-		authenticator, cfg.Services, cfg.Blocklist, localServices...,
+		authenticator, cfg.Services, cfg.Blocklist,
+		adminServices, localServices...,
 	)
 	return prxy, proxyCleanup, err
 }
