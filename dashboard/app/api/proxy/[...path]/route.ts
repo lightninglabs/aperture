@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const APERTURE_URL = process.env.APERTURE_URL ?? "http://localhost:8081";
-const APERTURE_API_KEY = process.env.APERTURE_API_KEY ?? "";
+const APERTURE_MACAROON = process.env.APERTURE_MACAROON ?? "";
 
 async function proxy(req: NextRequest, params: { path: string[] }) {
   const path = params.path.join("/");
@@ -11,8 +11,8 @@ async function proxy(req: NextRequest, params: { path: string[] }) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (APERTURE_API_KEY) {
-    headers["Authorization"] = `Bearer ${APERTURE_API_KEY}`;
+  if (APERTURE_MACAROON) {
+    headers["Grpc-Metadata-Macaroon"] = APERTURE_MACAROON;
   }
 
   let body: string | undefined;
