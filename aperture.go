@@ -685,6 +685,7 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 			GetCertificate: manager.GetCertificate,
 			CipherSuites:   http2TLSCipherSuites,
 			MinVersion:     tls.VersionTLS10,
+			NextProtos:     []string{"h2", "http/1.1"},
 		}, nil
 	}
 
@@ -788,6 +789,7 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 		Certificates: []tls.Certificate{certData},
 		CipherSuites: http2TLSCipherSuites,
 		MinVersion:   tls.VersionTLS10,
+		NextProtos:   []string{"h2", "http/1.1"},
 	}, nil
 }
 
