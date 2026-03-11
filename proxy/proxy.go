@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
@@ -71,8 +72,20 @@ func (l *localService) IsHandling(r *http.Request) bool {
 // a challenge to the client or forwards the request to another server and
 // proxies the response back to the client.
 type Proxy struct {
-	proxyBackend  *httputil.ReverseProxy
+	// servicesMtx protects services and proxyBackend from concurrent
+	// access during dynamic updates via UpdateServices.
+	servicesMtx  sync.RWMutex
+	proxyBackend *httputil.ReverseProxy
+
+	// priorityLocalServices are checked before proxy service matching.
+	// Use this for local endpoints that must not be intercepted by
+	// broad proxy path patterns.
+	priorityLocalServices []LocalService
+
+	// localServices are checked after proxy service matching fails.
+	// The static file server is typically the catch-all here.
 	localServices []LocalService
+
 	authenticator auth.Authenticator
 	services      []*Service
 	blocklist     map[string]struct{}
@@ -82,7 +95,8 @@ type Proxy struct {
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
 func New(auth auth.Authenticator, services []*Service,
-	blocklist []string, localServices ...LocalService) (*Proxy, error) {
+	blocklist []string, priorityLocalServices []LocalService,
+	localServices ...LocalService) (*Proxy, error) {
 
 	blMap := make(map[string]struct{})
 	for _, ip := range blocklist {
@@ -95,10 +109,11 @@ func New(auth auth.Authenticator, services []*Service,
 	}
 
 	proxy := &Proxy{
-		localServices: localServices,
-		authenticator: auth,
-		services:      services,
-		blocklist:     blMap,
+		priorityLocalServices: priorityLocalServices,
+		localServices:         localServices,
+		authenticator:         auth,
+		services:              services,
+		blocklist:             blMap,
 	}
 	err := proxy.UpdateServices(services)
 	if err != nil {
@@ -141,6 +156,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc) {
 		w.Header().Set(hdrContentType, hdrTypeGrpc)
 	}
+
+	// Priority local services are checked before proxy service matching
+	// so that endpoints like the admin API are not intercepted by broad
+	// proxy path patterns (e.g. "^/api/.*$").
+	for _, ls := range p.priorityLocalServices {
+		if ls.IsHandling(r) {
+			prefixLog.Debugf("Dispatching request %s to "+
+				"priority local service.", r.URL.Path)
+			ls.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	// Take a read lock to get a consistent snapshot of services and the
+	// proxy backend. This is held for the duration of request handling
+	// so that UpdateServices does not swap them mid-flight.
+	p.servicesMtx.RLock()
+	defer p.servicesMtx.RUnlock()
 
 	// Requests that can't be matched to a service backend will be
 	// dispatched to the static file server. If the file exists in the
@@ -336,6 +369,11 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 		},
 	}
 
+	p.servicesMtx.Lock()
+	defer p.servicesMtx.Unlock()
+
+	p.services = services
+
 	p.proxyBackend = &httputil.ReverseProxy{
 		Director:  p.director,
 		Transport: &trailerFixingTransport{next: transport},
@@ -354,6 +392,9 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 
 // Close cleans up the Proxy by closing any remaining open connections.
 func (p *Proxy) Close() error {
+	p.servicesMtx.RLock()
+	defer p.servicesMtx.RUnlock()
+
 	var returnErr error
 	for _, s := range p.services {
 		if err := s.pricer.Close(); err != nil {

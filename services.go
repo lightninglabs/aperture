@@ -13,9 +13,9 @@ import (
 //
 // TODO(wilmer): use etcd instead.
 type staticServiceLimiter struct {
-	capabilities map[l402.Service]l402.Caveat
-	constraints  map[l402.Service][]l402.Caveat
-	timeouts     map[l402.Service]l402.Caveat
+	capabilities map[string]l402.Caveat
+	constraints  map[string][]l402.Caveat
+	timeouts     map[string]l402.Caveat
 }
 
 // A compile-time constraint to ensure staticServiceLimiter implements
@@ -27,31 +27,27 @@ var _ mint.ServiceLimiter = (*staticServiceLimiter)(nil)
 func newStaticServiceLimiter(
 	proxyServices []*proxy.Service) *staticServiceLimiter {
 
-	capabilities := make(map[l402.Service]l402.Caveat)
-	constraints := make(map[l402.Service][]l402.Caveat)
-	timeouts := make(map[l402.Service]l402.Caveat)
+	capabilities := make(map[string]l402.Caveat)
+	constraints := make(map[string][]l402.Caveat)
+	timeouts := make(map[string]l402.Caveat)
 
 	for _, proxyService := range proxyServices {
-		s := l402.Service{
-			Name:  proxyService.Name,
-			Tier:  l402.BaseTier,
-			Price: proxyService.Price,
-		}
-
 		if proxyService.Timeout > 0 {
-			timeouts[s] = l402.NewTimeoutCaveat(
+			timeouts[proxyService.Name] = l402.NewTimeoutCaveat(
 				proxyService.Name,
 				proxyService.Timeout,
 				time.Now,
 			)
 		}
 
-		capabilities[s] = l402.NewCapabilitiesCaveat(
+		capabilities[proxyService.Name] = l402.NewCapabilitiesCaveat(
 			proxyService.Name, proxyService.Capabilities,
 		)
 		for cond, value := range proxyService.Constraints {
 			caveat := l402.Caveat{Condition: cond, Value: value}
-			constraints[s] = append(constraints[s], caveat)
+			constraints[proxyService.Name] = append(
+				constraints[proxyService.Name], caveat,
+			)
 		}
 	}
 
@@ -69,7 +65,7 @@ func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
-		capabilities, ok := l.capabilities[service]
+		capabilities, ok := l.capabilities[service.Name]
 		if !ok {
 			continue
 		}
@@ -86,7 +82,7 @@ func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
 
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
-		constraints, ok := l.constraints[service]
+		constraints, ok := l.constraints[service.Name]
 		if !ok {
 			continue
 		}
@@ -103,7 +99,7 @@ func (l *staticServiceLimiter) ServiceTimeouts(ctx context.Context,
 
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
-		timeout, ok := l.timeouts[service]
+		timeout, ok := l.timeouts[service.Name]
 		if !ok {
 			continue
 		}
