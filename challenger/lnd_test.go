@@ -264,3 +264,188 @@ func TestLndChallenger(t *testing.T) {
 	invoiceMock.stop()
 	c.Stop()
 }
+
+func TestSettlementQueue(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		settled []lntypes.Hash
+	)
+
+	mockClient := &mockInvoiceClient{
+		updateChan: make(chan *lnrpc.Invoice),
+		errChan:    make(chan error, 1),
+		quit:       make(chan struct{}),
+	}
+	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
+		return newInvoice(lntypes.ZeroHash, 99, lnrpc.Invoice_OPEN),
+			nil
+	}
+	invoicesMtx := &sync.Mutex{}
+	c := &LndChallenger{
+		client:        mockClient,
+		batchSize:     1,
+		clientCtx:     context.Background,
+		genInvoiceReq: genInvoiceReq,
+		invoiceStates: make(
+			map[lntypes.Hash]lnrpc.Invoice_InvoiceState,
+		),
+		quit:         make(chan struct{}),
+		invoicesMtx:  invoicesMtx,
+		invoicesCond: sync.NewCond(invoicesMtx),
+		errChan:      make(chan error),
+		strictVerify: false,
+		onSettled: func(hash lntypes.Hash) {
+			mu.Lock()
+			settled = append(settled, hash)
+			mu.Unlock()
+		},
+		settlementQueue: make(chan lntypes.Hash, 100),
+	}
+
+	err := c.Start()
+	require.NoError(t, err)
+
+	// Send 5 settlement updates.
+	numSettlements := 5
+	for i := 0; i < numSettlements; i++ {
+		hash := lntypes.Hash{byte(i)}
+		mockClient.updateChan <- newInvoice(
+			hash, uint64(i), lnrpc.Invoice_SETTLED,
+		)
+	}
+
+	// Wait for all to be processed.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(settled) == numSettlements
+	}, time.Second, 10*time.Millisecond)
+
+	// Verify all hashes were received.
+	mu.Lock()
+	require.Len(t, settled, numSettlements)
+	mu.Unlock()
+
+	mockClient.stop()
+	c.Stop()
+}
+
+func TestSettlementReconcilesHistoricalInvoicesOnStart(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		settled []lntypes.Hash
+	)
+
+	hash := lntypes.Hash{9, 9, 9}
+	mockClient := &mockInvoiceClient{
+		invoices: []*lnrpc.Invoice{
+			newInvoice(hash, 77, lnrpc.Invoice_SETTLED),
+		},
+		updateChan: make(chan *lnrpc.Invoice),
+		errChan:    make(chan error, 1),
+		quit:       make(chan struct{}),
+	}
+	invoicesMtx := &sync.Mutex{}
+	c := &LndChallenger{
+		client:        mockClient,
+		batchSize:     10,
+		clientCtx:     context.Background,
+		genInvoiceReq: func(int64) (*lnrpc.Invoice, error) { return nil, nil },
+		invoiceStates: make(
+			map[lntypes.Hash]lnrpc.Invoice_InvoiceState,
+		),
+		quit:                make(chan struct{}),
+		invoicesMtx:         invoicesMtx,
+		invoicesCond:        sync.NewCond(invoicesMtx),
+		errChan:             make(chan error),
+		strictVerify:        false,
+		settlementQueueSize: 1,
+		settlementQueue:     make(chan lntypes.Hash, 1),
+		onSettled: func(hash lntypes.Hash) {
+			mu.Lock()
+			settled = append(settled, hash)
+			mu.Unlock()
+		},
+	}
+
+	err := c.Start()
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(settled) == 1 && settled[0] == hash
+	}, time.Second, 10*time.Millisecond)
+
+	mockClient.stop()
+	c.Stop()
+}
+
+func TestSettlementQueueDrainOnStop(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		settled []lntypes.Hash
+	)
+
+	// Create a challenger with a settlement callback.
+	mockClient := &mockInvoiceClient{
+		updateChan: make(chan *lnrpc.Invoice),
+		errChan:    make(chan error, 1),
+		quit:       make(chan struct{}),
+	}
+	genInvoiceReq := func(price int64) (*lnrpc.Invoice, error) {
+		return newInvoice(lntypes.ZeroHash, 99, lnrpc.Invoice_OPEN),
+			nil
+	}
+	invoicesMtx := &sync.Mutex{}
+	c := &LndChallenger{
+		client:        mockClient,
+		batchSize:     1,
+		clientCtx:     context.Background,
+		genInvoiceReq: genInvoiceReq,
+		invoiceStates: make(
+			map[lntypes.Hash]lnrpc.Invoice_InvoiceState,
+		),
+		quit:         make(chan struct{}),
+		invoicesMtx:  invoicesMtx,
+		invoicesCond: sync.NewCond(invoicesMtx),
+		errChan:      make(chan error),
+		strictVerify: false,
+		onSettled: func(hash lntypes.Hash) {
+			mu.Lock()
+			settled = append(settled, hash)
+			mu.Unlock()
+		},
+		settlementQueue: make(chan lntypes.Hash, 100),
+	}
+
+	err := c.Start()
+	require.NoError(t, err)
+
+	// Send one settlement and wait for it.
+	hash := lntypes.Hash{42}
+	mockClient.updateChan <- newInvoice(
+		hash, 1, lnrpc.Invoice_SETTLED,
+	)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(settled) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	// Stop should drain any remaining items.
+	mockClient.stop()
+	c.Stop()
+
+	mu.Lock()
+	require.GreaterOrEqual(t, len(settled), 1)
+	mu.Unlock()
+}
