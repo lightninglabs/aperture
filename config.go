@@ -20,6 +20,7 @@ var (
 	defaultLogLevel         = "info"
 	defaultLogFilename      = "aperture.log"
 	defaultInvoiceBatchSize = 100000
+	defaultSettlementQueue  = 1000
 	defaultStrictVerify     = false
 
 	defaultSqliteDatabaseFileName = "aperture.db"
@@ -154,6 +155,20 @@ type TorConfig struct {
 	V3          bool   `long:"v3" description:"Whether we should listen for client requests through a v3 onion service."`
 }
 
+// AdminConfig holds the configuration for the admin gRPC/REST API.
+type AdminConfig struct {
+	// Enabled determines whether the admin API is active.
+	Enabled bool `long:"enabled" description:"Enable the admin API."`
+
+	// MacaroonPath is the path where the admin macaroon will be written.
+	// Defaults to admin.macaroon in the aperture data directory.
+	MacaroonPath string `long:"macaroonpath" description:"Path to write the admin macaroon."`
+
+	// CORSOrigins controls which origins are allowed to call the admin REST
+	// API. If empty, CORS is disabled and browsers can only use same-origin.
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+}
+
 type Config struct {
 	// ListenAddr is the listening address that we should use to allow Aperture
 	// to listen for requests.
@@ -208,6 +223,9 @@ type Config struct {
 	// server to scrape metrics from.
 	Prometheus *PrometheusConfig `group:"prometheus" namespace:"prometheus" description:"Configuration setting up an endpoint that a Prometheus server can scrape."`
 
+	// Admin is the configuration for the admin REST API.
+	Admin *AdminConfig `group:"admin" namespace:"admin" description:"Configuration for the admin REST API."`
+
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
 	DebugLevel string `long:"debuglevel" description:"Debug level for the Aperture application and its subsystems."`
@@ -235,6 +253,10 @@ type Config struct {
 	// InvoiceBatchSize is the number of invoices to fetch in a single
 	// request.
 	InvoiceBatchSize int `long:"invoicebatchsize" description:"The number of invoices to fetch in a single request."`
+
+	// SettlementQueueSize is the number of settled invoice hashes that can be
+	// queued while waiting for transaction-settlement callbacks.
+	SettlementQueueSize int `long:"settlementqueuesize" description:"Maximum number of settled invoice callbacks queued for processing."`
 
 	// StrictVerify is a flag that indicates whether we should verify the
 	// invoice status strictly or not. If set to true, then this requires
@@ -301,22 +323,24 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
-		DatabaseBackend:  "etcd",
-		Etcd:             &EtcdConfig{},
-		Sqlite:           DefaultSqliteConfig(),
-		Postgres:         &aperturedb.PostgresConfig{},
-		Authenticator:    &AuthConfig{},
-		Tor:              &TorConfig{},
-		HashMail:         &HashMailConfig{},
-		Prometheus:       &PrometheusConfig{},
-		IdleTimeout:      defaultIdleTimeout,
-		ReadTimeout:      defaultReadTimeout,
-		WriteTimeout:     defaultWriteTimeout,
-		WsPingInterval:   defaultWsPingInterval,
-		WsPongWait:       defaultWsPongWait,
-		InvoiceBatchSize: defaultInvoiceBatchSize,
-		Logging:          build.DefaultLogConfig(),
-		Blocklist:        []string{},
-		StrictVerify:     defaultStrictVerify,
+		DatabaseBackend:     "etcd",
+		Etcd:                &EtcdConfig{},
+		Sqlite:              DefaultSqliteConfig(),
+		Postgres:            &aperturedb.PostgresConfig{},
+		Authenticator:       &AuthConfig{},
+		Tor:                 &TorConfig{},
+		HashMail:            &HashMailConfig{},
+		Prometheus:          &PrometheusConfig{},
+		Admin:               &AdminConfig{},
+		IdleTimeout:         defaultIdleTimeout,
+		ReadTimeout:         defaultReadTimeout,
+		WriteTimeout:        defaultWriteTimeout,
+		WsPingInterval:      defaultWsPingInterval,
+		WsPongWait:          defaultWsPongWait,
+		InvoiceBatchSize:    defaultInvoiceBatchSize,
+		SettlementQueueSize: defaultSettlementQueue,
+		Logging:             build.DefaultLogConfig(),
+		Blocklist:           []string{},
+		StrictVerify:        defaultStrictVerify,
 	}
 }

@@ -3,6 +3,7 @@ package aperture
 import (
 	"testing"
 
+	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,4 +16,13 @@ func TestGetTLSConfigAllowsEmptyServerName(t *testing.T) {
 	cfg, err := getTLSConfig("", t.TempDir(), false)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+}
+
+func TestAsMintTransactionStoreNilPointer(t *testing.T) {
+	t.Parallel()
+
+	var txnStore *aperturedb.L402TransactionsStore
+	mintTxnStore := asMintTransactionStore(txnStore)
+
+	require.Nil(t, mintTxnStore)
 }
