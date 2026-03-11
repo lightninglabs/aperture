@@ -8,8 +8,6 @@ function generate() {
 
   PROTOS="*.proto"
 
-  # For each of the sub-servers, we then generate their protos, but a restricted
-  # set as they don't yet require REST proxies, or swagger docs.
   for file in $PROTOS; do
     DIRECTORY=$(dirname "${file}")
     echo "Generating protos from ${file}, into ${DIRECTORY}"
@@ -19,11 +17,6 @@ function generate() {
       --go_out . --go_opt paths=source_relative \
       --go-grpc_out . --go-grpc_opt paths=source_relative \
       "${file}"
-
-    # Stop here if we don't need to generate anything REST.
-    if [[ "$1" == "skip_rest" ]]; then
-      return
-    fi
 
     # Generate the REST reverse proxy.
     annotationsFile=${file//proto/yaml}
@@ -42,29 +35,6 @@ function generate() {
       --openapiv2_opt json_names_for_fields=false \
       "${file}"
   done
-
-  # Generate the JSON/WASM client stubs.
-  falafel=$(which falafel)
-  pkg="pricesrpc"
-  opts="package_name=$pkg,js_stubs=1,build_tags=//go:build js"
-  protoc -I/usr/local/include -I. -I.. \
-    --plugin=protoc-gen-custom=$falafel\
-    --custom_out=. \
-    --custom_opt="$opts" \
-    prices.proto
-
-  PACKAGES=""
-  for package in $PACKAGES; do
-
-    opts="package_name=$package,manual_import=$manual_import,js_stubs=1,build_tags=//go:build js"
-    pushd $package
-    protoc -I/usr/local/include -I. -I.. \
-      --plugin=protoc-gen-custom=$falafel\
-      --custom_out=. \
-      --custom_opt="$opts" \
-      "$(find . -name '*.proto')"
-    popd
-  done
 }
 
 # format formats the *.proto files with the clang-format utility.
@@ -72,23 +42,6 @@ function format() {
   find . -name "*.proto" -print0 | xargs -0 clang-format --style=file -i
 }
 
-# Compile and format the pricesrpc package.
-pushd pricesrpc
+# Compile and format the adminrpc package.
 format
 generate
-popd
-
-pushd proxy/testdata
-format
-generate skip_rest
-popd
-
-pushd adminrpc
-./gen_protos.sh
-popd
-
-if [[ "$COMPILE_MOBILE" == "1" ]]; then
-  pushd mobile
-  ./gen_bindings.sh $FALAFEL_VERSION
-  popd
-fi
