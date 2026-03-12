@@ -87,7 +87,7 @@ jobs:
   # dashboard tsc + lint
   ########################
   dashboard:
-    name: dashboard tsc and lint
+    name: dashboard tsc, lint, and format
     runs-on: ubuntu-latest
     steps:
       - name: git checkout
@@ -111,6 +111,10 @@ jobs:
       - name: lint
         working-directory: dashboard
         run: npm run lint
+
+      - name: format check
+        working-directory: dashboard
+        run: npm run format:check
 
   ########################
   # run unit tests
