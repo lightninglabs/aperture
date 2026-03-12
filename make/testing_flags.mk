@@ -1,5 +1,5 @@
 TEST_FLAGS =
-DEV_TAGS = dev
+DEV_TAGS = dev nodashboard
 COVER_PKG = $$(go list -deps -tags="$(DEV_TAGS)" ./... | grep '$(PKG)' | grep -v lnrpc)
 GOLIST := go list -tags="$(DEV_TAGS)" -deps $(PKG)/... | grep '$(PKG)'| grep -v '/vendor/'
 
