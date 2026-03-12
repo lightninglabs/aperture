@@ -395,7 +395,7 @@ export default function DashboardPage() {
                     return (
                       <ServiceRow
                         key={svc.name}
-                        href={`/services/${encodeURIComponent(svc.name)}`}
+                        href={`/services/detail?name=${encodeURIComponent(svc.name)}`}
                         $hasBorder={i < services.length - 1}
                       >
                         <div

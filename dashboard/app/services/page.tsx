@@ -542,7 +542,7 @@ export default function ServicesPage() {
                   <Row key={svc.name}>
                     <Td style={{ fontWeight: 600 }}>
                       <NameLink
-                        href={`/services/${encodeURIComponent(svc.name)}`}
+                        href={`/services/detail?name=${encodeURIComponent(svc.name)}`}
                       >
                         {svc.name}
                       </NameLink>
