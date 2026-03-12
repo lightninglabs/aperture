@@ -3,6 +3,8 @@ run:
   # Linting uses a lot of memory. Keep it under control by only running a single
   # worker.
   concurrency: 1
+  build-tags:
+    - nodashboard
 linters:
 
   # Specify an enabled list of linters rather than a disabled list because
