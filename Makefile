@@ -64,7 +64,7 @@ build-nodashboard:
 	@$(call print, "Building aperture without dashboard.")
 	$(GOBUILD) -tags=nodashboard $(PKG)/cmd/aperture
 
-install:
+install: build-dashboard
 	@$(call print, "Installing aperture.")
 	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
 
@@ -162,3 +162,4 @@ clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) ./aperture
 	$(RM) coverage.txt
+	$(RM) -r dashboard/out
