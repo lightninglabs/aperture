@@ -17,7 +17,11 @@ interface Props {
   data: ServiceRevenueItem[];
 }
 
-function Chart({ data, width, height }: Props & { width: number; height: number }) {
+function Chart({
+  data,
+  width,
+  height,
+}: Props & { width: number; height: number }) {
   const {
     showTooltip,
     hideTooltip,
@@ -80,7 +84,7 @@ function Chart({ data, width, height }: Props & { width: number; height: number 
                   point.x = e.clientX;
                   point.y = e.clientY;
                   const svgPoint = point.matrixTransform(
-                    svg.getScreenCTM()?.inverse(),
+                    svg.getScreenCTM()?.inverse()
                   );
                   showTooltip({
                     tooltipData: d,

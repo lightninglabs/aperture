@@ -31,7 +31,7 @@ function bucketByDay(transactions: Transaction[]): Bucket[] {
 
   const sorted = [...transactions].sort(
     (a, b) =>
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
 
   const earliest = new Date(sorted[0].created_at);
@@ -111,19 +111,20 @@ function Chart({
   });
 
   const handleTooltip = useCallback(
-    (
-      bar: Bucket,
-      event: React.MouseEvent<SVGRectElement>,
-    ) => {
+    (bar: Bucket, event: React.MouseEvent<SVGRectElement>) => {
       const point = localPoint(event);
       if (!point) return;
       showTooltip({
-        tooltipData: { label: bar.label, settled: bar.settled, pending: bar.pending },
+        tooltipData: {
+          label: bar.label,
+          settled: bar.settled,
+          pending: bar.pending,
+        },
         tooltipLeft: point.x,
         tooltipTop: point.y,
       });
     },
-    [showTooltip],
+    [showTooltip]
   );
 
   return (
@@ -161,7 +162,7 @@ function Chart({
                     onMouseLeave={hideTooltip}
                     style={{ cursor: "pointer" }}
                   />
-                )),
+                ))
               )
             }
           </BarStack>
@@ -214,7 +215,13 @@ function Chart({
             whiteSpace: "nowrap",
           }}
         >
-          <div style={{ color: theme.colors.offWhite, fontWeight: 600, marginBottom: 4 }}>
+          <div
+            style={{
+              color: theme.colors.offWhite,
+              fontWeight: 600,
+              marginBottom: 4,
+            }}
+          >
             {tooltipData.label}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -228,7 +235,10 @@ function Chart({
               }}
             />
             <span style={{ color: theme.colors.lightningGray }}>
-              Settled: <strong style={{ color: theme.colors.lightningGreen }}>{tooltipData.settled}</strong>
+              Settled:{" "}
+              <strong style={{ color: theme.colors.lightningGreen }}>
+                {tooltipData.settled}
+              </strong>
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -242,7 +252,10 @@ function Chart({
               }}
             />
             <span style={{ color: theme.colors.lightningGray }}>
-              Pending: <strong style={{ color: theme.colors.lightningYellow }}>{tooltipData.pending}</strong>
+              Pending:{" "}
+              <strong style={{ color: theme.colors.lightningYellow }}>
+                {tooltipData.pending}
+              </strong>
             </span>
           </div>
         </TooltipInPortal>

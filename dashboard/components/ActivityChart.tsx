@@ -22,7 +22,7 @@ function bucketTransactions(transactions: Transaction[]): Bucket[] {
 
   const sorted = [...transactions].sort(
     (a, b) =>
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
 
   const earliest = new Date(sorted[0].created_at);
@@ -106,9 +106,7 @@ function Chart({
 
   const handleTooltip = useCallback(
     (
-      event:
-        | React.TouchEvent<SVGRectElement>
-        | React.MouseEvent<SVGRectElement>,
+      event: React.TouchEvent<SVGRectElement> | React.MouseEvent<SVGRectElement>
     ) => {
       const point = localPoint(event);
       if (!point) return;
@@ -131,7 +129,7 @@ function Chart({
         tooltipTop: yScale(d.sats),
       });
     },
-    [xScale, yScale, data, showTooltip],
+    [xScale, yScale, data, showTooltip]
   );
 
   if (data.length < 2) {

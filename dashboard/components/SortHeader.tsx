@@ -64,7 +64,7 @@ export default SortHeader;
 export function useSort<T>(
   data: T[] | undefined,
   defaultField: string | null = null,
-  defaultDir: SortDir = "asc",
+  defaultDir: SortDir = "asc"
 ) {
   const [sortField, setSortField] = useState<string | null>(defaultField);
   const [sortDir, setSortDir] = useState<SortDir>(defaultDir);
@@ -78,7 +78,7 @@ export function useSort<T>(
         setSortDir("asc");
       }
     },
-    [sortField],
+    [sortField]
   );
 
   const sorted = useMemo(() => {

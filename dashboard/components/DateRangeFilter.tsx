@@ -109,8 +109,7 @@ const Styled = {
     display: block;
     width: 100%;
     text-align: left;
-    background: ${(p) =>
-      p.$active ? p.theme.colors.overlay : "transparent"};
+    background: ${(p) => (p.$active ? p.theme.colors.overlay : "transparent")};
     border: none;
     color: ${(p) =>
       p.$active ? p.theme.colors.white : p.theme.colors.offWhite};
@@ -168,8 +167,7 @@ const Styled = {
     background-color: ${(p) =>
       p.$disabled ? p.theme.colors.blue : p.theme.colors.purple};
     border: none;
-    color: ${(p) =>
-      p.$disabled ? p.theme.colors.gray : p.theme.colors.white};
+    color: ${(p) => (p.$disabled ? p.theme.colors.gray : p.theme.colors.white)};
     padding: 8px 0;
     font-size: 13px;
     font-weight: 600;
@@ -228,7 +226,7 @@ const DateRangeFilter: React.FC<Props> = ({ from, to, onChange }) => {
       onChange(preset.range());
       setOpen(false);
     },
-    [onChange],
+    [onChange]
   );
 
   const handleApplyCustom = useCallback(() => {
@@ -310,10 +308,7 @@ const DateRangeFilter: React.FC<Props> = ({ from, to, onChange }) => {
       {open &&
         pos &&
         createPortal(
-          <Panel
-            ref={panelRef}
-            style={{ top: pos.top, left: pos.left }}
-          >
+          <Panel ref={panelRef} style={{ top: pos.top, left: pos.left }}>
             <PresetList>
               {presets.map((preset) => (
                 <PresetBtn
@@ -355,7 +350,7 @@ const DateRangeFilter: React.FC<Props> = ({ from, to, onChange }) => {
               </ApplyBtn>
             </CustomSection>
           </Panel>,
-          document.body,
+          document.body
         )}
     </>
   );

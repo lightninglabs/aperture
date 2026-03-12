@@ -269,7 +269,12 @@ export default function TransactionsPage() {
     ...(dateTo && { to: dateTo }),
   };
 
-  const { data: transactions, isLoading, error, mutate } = useTransactions(params);
+  const {
+    data: transactions,
+    isLoading,
+    error,
+    mutate,
+  } = useTransactions(params);
   const { data: allTransactions } = useTransactions({
     limit: 200,
     ...(dateFrom && { from: dateFrom }),
@@ -278,7 +283,7 @@ export default function TransactionsPage() {
   const { sorted, sortField, sortDir, onSort } = useSort(
     transactions,
     "id",
-    "desc",
+    "desc"
   );
 
   const page = Math.floor(offset / PAGE_SIZE) + 1;
@@ -301,7 +306,7 @@ export default function TransactionsPage() {
       setDateTo(to);
       setOffset(0);
     },
-    [],
+    []
   );
 
   const toggleExpanded = useCallback((id: number) => {
@@ -329,7 +334,7 @@ export default function TransactionsPage() {
           tx.state,
           tx.payment_hash,
           `"${new Date(tx.created_at).toISOString()}"`,
-        ].join(","),
+        ].join(",")
       ),
     ];
     const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
@@ -343,12 +348,9 @@ export default function TransactionsPage() {
 
   const handlePrev = useCallback(
     () => setOffset((o) => Math.max(0, o - PAGE_SIZE)),
-    [],
+    []
   );
-  const handleNext = useCallback(
-    () => setOffset((o) => o + PAGE_SIZE),
-    [],
-  );
+  const handleNext = useCallback(() => setOffset((o) => o + PAGE_SIZE), []);
 
   const {
     Card,
@@ -453,7 +455,9 @@ export default function TransactionsPage() {
         <Button variant="primary" compact onClick={applyFilters}>
           Apply
         </Button>
-        {hasFilters && <ClearBtn onClick={clearFilters}>Clear filters</ClearBtn>}
+        {hasFilters && (
+          <ClearBtn onClick={clearFilters}>Clear filters</ClearBtn>
+        )}
       </FilterBar>
 
       {/* Table */}
@@ -462,12 +466,55 @@ export default function TransactionsPage() {
           <Table>
             <thead>
               <HeadRow>
-                <SortHeader label="ID" field="id" sortField={sortField} sortDir={sortDir} onSort={onSort} />
-                <SortHeader label="Service" field="service_name" sortField={sortField} sortDir={sortDir} onSort={onSort} />
-                <SortHeader label="Amount" field="price_sats" sortField={sortField} sortDir={sortDir} onSort={onSort} align="right" tooltip={<Tooltip text="Amount in satoshis paid via Lightning invoice for this L402 token." />} />
-                <SortHeader label="State" field="state" sortField={sortField} sortDir={sortDir} onSort={onSort} tooltip={<Tooltip text="Pending = invoice created but unpaid. Settled = invoice paid, access granted." />} />
-                <SortHeader label="Payment Hash" field="payment_hash" sortField={sortField} sortDir={sortDir} onSort={onSort} />
-                <SortHeader label="Created" field="created_at" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+                <SortHeader
+                  label="ID"
+                  field="id"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+                <SortHeader
+                  label="Service"
+                  field="service_name"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+                <SortHeader
+                  label="Amount"
+                  field="price_sats"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  align="right"
+                  tooltip={
+                    <Tooltip text="Amount in satoshis paid via Lightning invoice for this L402 token." />
+                  }
+                />
+                <SortHeader
+                  label="State"
+                  field="state"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  tooltip={
+                    <Tooltip text="Pending = invoice created but unpaid. Settled = invoice paid, access granted." />
+                  }
+                />
+                <SortHeader
+                  label="Payment Hash"
+                  field="payment_hash"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+                <SortHeader
+                  label="Created"
+                  field="created_at"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
                 <th style={{ padding: "10px 16px", width: 48 }} />
               </HeadRow>
             </thead>
@@ -500,9 +547,7 @@ export default function TransactionsPage() {
                       <DateCell>
                         {new Date(tx.created_at).toLocaleString()}
                       </DateCell>
-                      <MenuCell
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      <MenuCell onClick={(e) => e.stopPropagation()}>
                         <OverflowMenu
                           items={[
                             {

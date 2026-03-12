@@ -225,7 +225,12 @@ const Styled = {
 };
 
 export default function ServicesPage() {
-  const { data: services, isLoading, error: servicesError, mutate: refreshServices } = useServices();
+  const {
+    data: services,
+    isLoading,
+    error: servicesError,
+    mutate: refreshServices,
+  } = useServices();
   const { sorted, sortField, sortDir, onSort } = useSort(services, "name");
   const [editingPrice, setEditingPrice] = useState<string | null>(null);
   const [priceValue, setPriceValue] = useState("");
@@ -245,13 +250,13 @@ export default function ServicesPage() {
       } catch (e: unknown) {
         toast(
           e instanceof Error ? e.message : "Failed to update price",
-          "error",
+          "error"
         );
       }
       setSaving(false);
       setEditingPrice(null);
     },
-    [priceValue],
+    [priceValue]
   );
 
   const handleAuthChange = useCallback(async (name: string, auth: string) => {
@@ -260,10 +265,7 @@ export default function ServicesPage() {
       await updateService(name, { auth });
       toast(`Auth updated to "${auth}"`);
     } catch (e: unknown) {
-      toast(
-        e instanceof Error ? e.message : "Failed to update auth",
-        "error",
-      );
+      toast(e instanceof Error ? e.message : "Failed to update auth", "error");
     }
     setSaving(false);
   }, []);
@@ -277,7 +279,7 @@ export default function ServicesPage() {
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to delete service",
-        "error",
+        "error"
       );
     }
     setSaving(false);
@@ -300,12 +302,12 @@ export default function ServicesPage() {
       } catch (e: unknown) {
         toast(
           e instanceof Error ? e.message : "Failed to create service",
-          "error",
+          "error"
         );
       }
       setSaving(false);
     },
-    [form],
+    [form]
   );
 
   const toggleAdd = useCallback(() => {
@@ -321,10 +323,7 @@ export default function ServicesPage() {
     setForm({ ...initialForm });
   }, []);
 
-  const toggleAdvanced = useCallback(
-    () => setShowAdvanced((s) => !s),
-    [],
-  );
+  const toggleAdvanced = useCallback(() => setShowAdvanced((s) => !s), []);
 
   function getAuthLevel(auth: string): "on" | "off" | "freebie" {
     if (auth === "off" || auth === "false") return "off";
@@ -392,9 +391,7 @@ export default function ServicesPage() {
                 </Label>
                 <Input
                   value={form.name}
-                  onChange={(e) =>
-                    setForm({ ...form, name: e.target.value })
-                  }
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder="my-service"
                 />
               </div>
@@ -448,13 +445,13 @@ export default function ServicesPage() {
               <div>
                 <Label>
                   Auth
-                  <Tooltip text={`"on" = payment required. "off" = no payment. "freebie N" = first N requests per IP are free, then payment is required.`} />
+                  <Tooltip
+                    text={`"on" = payment required. "off" = no payment. "freebie N" = first N requests per IP are free, then payment is required.`}
+                  />
                 </Label>
                 <Select
                   value={form.auth}
-                  onChange={(e) =>
-                    setForm({ ...form, auth: e.target.value })
-                  }
+                  onChange={(e) => setForm({ ...form, auth: e.target.value })}
                 >
                   {authOptions.map((opt) => (
                     <option key={opt} value={opt}>
@@ -518,11 +515,50 @@ export default function ServicesPage() {
           <Table>
             <thead>
               <HeadRow>
-                <SortHeader label="Name" field="name" sortField={sortField} sortDir={sortDir} onSort={onSort} />
-                <SortHeader label="Address" field="address" sortField={sortField} sortDir={sortDir} onSort={onSort} />
-                <SortHeader label="Protocol" field="protocol" sortField={sortField} sortDir={sortDir} onSort={onSort} />
-                <SortHeader label="Price" field="price" sortField={sortField} sortDir={sortDir} onSort={onSort} align="right" tooltip={<Tooltip text="Cost in satoshis per L402 token. Click a value to edit it inline." />} />
-                <SortHeader label="Auth" field="auth" sortField={sortField} sortDir={sortDir} onSort={onSort} tooltip={<Tooltip text={`"on" = payment required. "off" = free access. "freebie N" = N free requests per IP before payment.`} />} />
+                <SortHeader
+                  label="Name"
+                  field="name"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+                <SortHeader
+                  label="Address"
+                  field="address"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+                <SortHeader
+                  label="Protocol"
+                  field="protocol"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                />
+                <SortHeader
+                  label="Price"
+                  field="price"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  align="right"
+                  tooltip={
+                    <Tooltip text="Cost in satoshis per L402 token. Click a value to edit it inline." />
+                  }
+                />
+                <SortHeader
+                  label="Auth"
+                  field="auth"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  tooltip={
+                    <Tooltip
+                      text={`"on" = payment required. "off" = free access. "freebie N" = N free requests per IP before payment.`}
+                    />
+                  }
+                />
                 <th style={{ padding: "10px 16px", width: 48 }} />
               </HeadRow>
             </thead>
@@ -560,10 +596,8 @@ export default function ServicesPage() {
                           value={priceValue}
                           onChange={(e) => setPriceValue(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter")
-                              handlePriceSave(svc.name);
-                            if (e.key === "Escape")
-                              setEditingPrice(null);
+                            if (e.key === "Enter") handlePriceSave(svc.name);
+                            if (e.key === "Escape") setEditingPrice(null);
                           }}
                           onBlur={() => handlePriceSave(svc.name)}
                         />
