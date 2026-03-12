@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Proxy middleware: used in development only. In the embedded Go binary,
+// the server handles /api/proxy/ directly with the admin macaroon attached.
+// Next.js middleware is not included in `output: 'export'` static builds.
+
 const APERTURE_URL = process.env.APERTURE_URL ?? "http://localhost:8081";
 const APERTURE_MACAROON = process.env.APERTURE_MACAROON ?? "";
 
 const SAFE_SEGMENT = /^[\w-]+$/;
 
-async function proxy(req: NextRequest, params: { path: string[] }) {
-  if (params.path.some((seg) => !SAFE_SEGMENT.test(seg))) {
+export async function proxy(req: NextRequest) {
+  const segments = req.nextUrl.pathname
+    .replace(/^\/api\/proxy\//, "")
+    .split("/")
+    .filter(Boolean);
+
+  if (segments.some((seg) => !SAFE_SEGMENT.test(seg))) {
     return new NextResponse("bad request", { status: 400 });
   }
-  const path = params.path.join("/");
+
+  const path = segments.join("/");
   const url = new URL(`/api/admin/${path}`, APERTURE_URL);
   url.search = req.nextUrl.search;
 
@@ -38,30 +48,6 @@ async function proxy(req: NextRequest, params: { path: string[] }) {
   });
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  return proxy(req, await params);
-}
-
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  return proxy(req, await params);
-}
-
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  return proxy(req, await params);
-}
-
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  return proxy(req, await params);
-}
+export const config = {
+  matcher: "/api/proxy/:path*",
+};

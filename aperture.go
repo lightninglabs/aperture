@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"encoding/hex"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // Blank import to set up profiling HTTP handlers.
@@ -1048,6 +1050,105 @@ func createAdminServer(cfg *Config,
 	))
 
 	log.Infof("Admin gRPC/REST API enabled")
+
+	// Wire the embedded dashboard if it was compiled in (build tag
+	// !nodashboard). When nil, the dashboard is not served.
+	dashFS, err := DashboardFS()
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("unable to load embedded "+
+			"dashboard: %w", err)
+	}
+
+	if dashFS != nil {
+		// Generate a macaroon from the root key to attach to
+		// server-side proxied requests to the admin REST API.
+		mac, err := admin.GenerateAdminMacaroon(rootKey[:])
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("unable to generate "+
+				"dashboard macaroon: %w", err)
+		}
+		macBytes, err := mac.MarshalBinary()
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("unable to marshal "+
+				"dashboard macaroon: %w", err)
+		}
+		macHex := hex.EncodeToString(macBytes)
+
+		// dashboardProxyPrefix is the path the dashboard JS uses to
+		// reach the admin REST API. The Go server strips this prefix
+		// and forwards internally to adminRESTPrefix.
+		const dashboardProxyPrefix = "/api/proxy/"
+
+		safeSegment := regexp.MustCompile(`^[\w-]+$`)
+		proxyHandler := http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				raw := strings.TrimPrefix(
+					r.URL.Path, dashboardProxyPrefix,
+				)
+				for _, seg := range strings.Split(raw, "/") {
+					if !safeSegment.MatchString(seg) {
+						http.Error(
+							w, "bad request",
+							http.StatusBadRequest,
+						)
+						return
+					}
+				}
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = adminRESTPrefix + raw
+				r2.Header = r.Header.Clone()
+				r2.Header.Set(
+					"Grpc-Metadata-Macaroon", macHex,
+				)
+				mux.ServeHTTP(w, r2)
+			},
+		)
+		localServices = append(localServices, proxy.NewLocalService(
+			proxyHandler,
+			func(r *http.Request) bool {
+				return strings.HasPrefix(
+					r.URL.Path, dashboardProxyPrefix,
+				)
+			},
+		))
+
+		// Catch-all static file server with index.html fallback for
+		// client-side routing (SPA deep-link support).
+		dashHandler := http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				path := strings.TrimPrefix(r.URL.Path, "/")
+
+				// Serve the file if it exists and is not a
+				// directory (e.g. _next/ assets).
+				if fi, statErr := fs.Stat(dashFS, path); statErr == nil && !fi.IsDir() {
+					http.ServeFileFS(w, r, dashFS, path)
+					return
+				}
+
+				// For directory paths, serve the index.html
+				// nested inside (Next.js trailingSlash layout).
+				indexPath := strings.TrimSuffix(path, "/") +
+					"/index.html"
+				if _, statErr := fs.Stat(dashFS, indexPath); statErr == nil {
+					http.ServeFileFS(w, r, dashFS, indexPath)
+					return
+				}
+
+				// Fall back to root index.html for unknown
+				// paths (dynamic client-side routes).
+				http.ServeFileFS(w, r, dashFS, "index.html")
+			},
+		)
+		localServices = append(localServices, proxy.NewLocalService(
+			dashHandler,
+			func(r *http.Request) bool { return true },
+		))
+
+		log.Infof("Admin dashboard embedded and serving")
+	}
 
 	return localServices, cleanup, nil
 }

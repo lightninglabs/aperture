@@ -1,6 +1,7 @@
 "use client";
 
-import { use, useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   useServices,
@@ -274,13 +275,9 @@ const Styled = {
   `,
 };
 
-export default function ServiceDetailPage({
-  params,
-}: {
-  params: Promise<{ name: string }>;
-}) {
-  const { name } = use(params);
-  const decodedName = decodeURIComponent(name);
+function ServiceDetailContent() {
+  const searchParams = useSearchParams();
+  const decodedName = decodeURIComponent(searchParams.get("name") ?? "");
   const {
     data: services,
     isLoading,
@@ -817,5 +814,13 @@ export default function ServiceDetailPage({
         </div>
       </CardNopad>
     </div>
+  );
+}
+
+export default function ServiceDetailPage() {
+  return (
+    <Suspense fallback={null}>
+      <ServiceDetailContent />
+    </Suspense>
   );
 }

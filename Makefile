@@ -52,9 +52,17 @@ $(GOACC_BIN):
 # INSTALLATION
 # ============
 
-build:
-	@$(call print, "Building aperture.")
+build-dashboard:
+	@$(call print, "Building dashboard static export.")
+	cd dashboard && npm ci --legacy-peer-deps && npm run build
+
+build: build-dashboard
+	@$(call print, "Building aperture with embedded dashboard.")
 	$(GOBUILD) $(PKG)/cmd/aperture
+
+build-nodashboard:
+	@$(call print, "Building aperture without dashboard.")
+	$(GOBUILD) -tags=nodashboard $(PKG)/cmd/aperture
 
 install:
 	@$(call print, "Installing aperture.")
