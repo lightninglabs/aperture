@@ -102,7 +102,7 @@ const Tooltip: React.FC<Props> = ({ text, children }) => {
             {text}
             <Arrow />
           </Bubble>,
-          document.body,
+          document.body
         )}
     </>
   );

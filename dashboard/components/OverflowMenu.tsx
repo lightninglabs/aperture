@@ -84,7 +84,7 @@ const OverflowMenu: React.FC<Props> = ({ items }) => {
       setOpen(false);
       onClick();
     },
-    [],
+    []
   );
 
   useEffect(() => {
@@ -131,7 +131,7 @@ const OverflowMenu: React.FC<Props> = ({ items }) => {
               </Item>
             ))}
           </Panel>,
-          document.body,
+          document.body
         )}
     </>
   );

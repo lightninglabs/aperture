@@ -11,10 +11,7 @@ export interface ToastItem {
 
 let toastListeners: Array<(t: ToastItem) => void> = [];
 
-export function toast(
-  message: string,
-  type: "success" | "error" = "success",
-) {
+export function toast(message: string, type: "success" | "error" = "success") {
   const item: ToastItem = { id: crypto.randomUUID(), message, type };
   toastListeners.forEach((fn) => fn(item));
 }
@@ -37,9 +34,7 @@ const Styled = {
     font-weight: 500;
     color: ${(p) => p.theme.colors.white};
     background-color: ${(p) =>
-      p.$type === "success"
-        ? "rgba(16,185,129,0.15)"
-        : "rgba(239,68,68,0.15)"};
+      p.$type === "success" ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)"};
     border: 1px solid
       ${(p) =>
         p.$type === "success"

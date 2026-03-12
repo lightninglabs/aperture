@@ -29,14 +29,14 @@ export function useStats(from?: string, to?: string) {
       fetcher<Record<string, unknown>>(path).then((r) => ({
         total_revenue_sats: Number(r.total_revenue_sats ?? 0),
         transaction_count: Number(r.transaction_count ?? 0),
-        service_breakdown: ((r.service_breakdown as Array<Record<string, unknown>>) ?? []).map(
-          (s) => ({
-            service_name: String(s.service_name ?? ""),
-            total_revenue_sats: Number(s.total_revenue_sats ?? 0),
-          }),
-        ),
+        service_breakdown: (
+          (r.service_breakdown as Array<Record<string, unknown>>) ?? []
+        ).map((s) => ({
+          service_name: String(s.service_name ?? ""),
+          total_revenue_sats: Number(s.total_revenue_sats ?? 0),
+        })),
       })),
-    { refreshInterval: 10_000 },
+    { refreshInterval: 10_000 }
   );
 }
 
@@ -50,19 +50,18 @@ export function useServices() {
   return useSWR<Service[]>(
     "/api/proxy/services",
     (path: string) =>
-      fetcher<{ services: Array<Record<string, unknown>> }>(path).then(
-        (r) =>
-          (r.services ?? []).map((s) => ({
-            name: String(s.name ?? ""),
-            address: String(s.address ?? ""),
-            protocol: String(s.protocol ?? ""),
-            host_regexp: String(s.host_regexp ?? ""),
-            path_regexp: String(s.path_regexp ?? ""),
-            price: Number(s.price ?? 0),
-            auth: String(s.auth ?? ""),
-          })),
+      fetcher<{ services: Array<Record<string, unknown>> }>(path).then((r) =>
+        (r.services ?? []).map((s) => ({
+          name: String(s.name ?? ""),
+          address: String(s.address ?? ""),
+          protocol: String(s.protocol ?? ""),
+          host_regexp: String(s.host_regexp ?? ""),
+          path_regexp: String(s.path_regexp ?? ""),
+          price: Number(s.price ?? 0),
+          auth: String(s.auth ?? ""),
+        }))
       ),
-    { refreshInterval: 30_000 },
+    { refreshInterval: 30_000 }
   );
 }
 
@@ -72,7 +71,8 @@ export function useTransactions(params: TransactionParams) {
   if (params.offset) sp.set("offset", String(params.offset));
   if (params.service) sp.set("service", params.service);
   if (params.state) sp.set("state", params.state);
-  if (params.from) sp.set("from", new Date(params.from + "T00:00:00").toISOString());
+  if (params.from)
+    sp.set("from", new Date(params.from + "T00:00:00").toISOString());
   if (params.to) sp.set("to", new Date(params.to + "T23:59:59").toISOString());
   const qs = sp.toString();
   const key = `/api/proxy/transactions${qs ? `?${qs}` : ""}`;
@@ -81,9 +81,9 @@ export function useTransactions(params: TransactionParams) {
     key,
     (path: string) =>
       fetcher<{ transactions: Transaction[] }>(path).then(
-        (r) => r.transactions ?? [],
+        (r) => r.transactions ?? []
       ),
-    { refreshInterval: 10_000 },
+    { refreshInterval: 10_000 }
   );
 }
 
@@ -98,7 +98,7 @@ export async function updateService(
     pathregexp?: string;
     price?: number;
     auth?: string;
-  },
+  }
 ) {
   const res = await fetch(`/api/proxy/services/${encodeURIComponent(name)}`, {
     method: "PUT",

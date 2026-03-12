@@ -94,8 +94,7 @@ const Styled = {
     font-weight: ${(p) => (p.$active ? 600 : 500)};
     text-decoration: none;
     line-height: 24px;
-    color: ${(p) =>
-      p.$active ? p.theme.colors.white : p.theme.colors.gray};
+    color: ${(p) => (p.$active ? p.theme.colors.white : p.theme.colors.gray)};
     background-color: ${(p) =>
       p.$active ? p.theme.colors.overlay : "transparent"};
     transition: all 0.2s ease;
@@ -151,7 +150,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const isActive = useCallback(
     (href: string) =>
       href === "/" ? pathname === "/" : pathname.startsWith(href),
-    [pathname],
+    [pathname]
   );
 
   const links = useMemo(
@@ -165,28 +164,18 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           {item.label}
         </Styled.NavLink>
       )),
-    [isActive],
+    [isActive]
   );
 
-  const {
-    Body,
-    Nav,
-    Brand,
-    NetworkBadge,
-    NavLinks,
-    Status,
-    StatusDot,
-    Main,
-  } = Styled;
+  const { Body, Nav, Brand, NetworkBadge, NavLinks, Status, StatusDot, Main } =
+    Styled;
 
   return (
     <Body>
       <Nav>
         <Brand href="/">
           APERTURE
-          {network && (
-            <NetworkBadge $network={network}>{network}</NetworkBadge>
-          )}
+          {network && <NetworkBadge $network={network}>{network}</NetworkBadge>}
         </Brand>
         <NavLinks>{links}</NavLinks>
         <Status>

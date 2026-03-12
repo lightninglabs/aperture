@@ -92,8 +92,7 @@ const Styled = {
   ConfigValue: styled.span<{ $mono?: boolean }>`
     font-size: 14px;
     color: ${(p) => p.theme.colors.offWhite};
-    font-family: ${(p) =>
-      p.$mono ? "monospace" : p.theme.fonts.open};
+    font-family: ${(p) => (p.$mono ? "monospace" : p.theme.fonts.open)};
   `,
   EditablePrice: styled.span`
     cursor: pointer;
@@ -292,11 +291,7 @@ function ServiceDetailContent() {
     service: decodedName,
     limit: 50,
   });
-  const {
-    data: info,
-    error: infoError,
-    mutate: mutateInfo,
-  } = useInfo();
+  const { data: info, error: infoError, mutate: mutateInfo } = useInfo();
 
   const [editingPrice, setEditingPrice] = useState(false);
   const [priceValue, setPriceValue] = useState("");
@@ -318,13 +313,12 @@ function ServiceDetailContent() {
         if (tx.state === "settled") return sum + tx.price_sats;
         return sum;
       }, 0) ?? 0,
-    [transactions],
+    [transactions]
   );
 
   const settledCount = useMemo(
-    () =>
-      transactions?.filter((tx) => tx.state === "settled").length ?? 0,
-    [transactions],
+    () => transactions?.filter((tx) => tx.state === "settled").length ?? 0,
+    [transactions]
   );
 
   const handlePriceSave = useCallback(async () => {
@@ -335,10 +329,7 @@ function ServiceDetailContent() {
       await updateService(decodedName, { price });
       toast(`Price updated to ${price} sats`);
     } catch (e: unknown) {
-      toast(
-        e instanceof Error ? e.message : "Failed to update price",
-        "error",
-      );
+      toast(e instanceof Error ? e.message : "Failed to update price", "error");
     }
     setSaving(false);
     setEditingPrice(false);
@@ -354,7 +345,7 @@ function ServiceDetailContent() {
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to update address",
-        "error",
+        "error"
       );
     }
     setSaving(false);
@@ -371,7 +362,7 @@ function ServiceDetailContent() {
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to update protocol",
-        "error",
+        "error"
       );
     }
     setSaving(false);
@@ -384,14 +375,12 @@ function ServiceDetailContent() {
     try {
       await updateService(decodedName, { hostregexp: trimmed });
       toast(
-        trimmed
-          ? `Host regexp updated to "${trimmed}"`
-          : "Host regexp cleared",
+        trimmed ? `Host regexp updated to "${trimmed}"` : "Host regexp cleared"
       );
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to update host regexp",
-        "error",
+        "error"
       );
     }
     setSaving(false);
@@ -404,14 +393,12 @@ function ServiceDetailContent() {
     try {
       await updateService(decodedName, { pathregexp: trimmed });
       toast(
-        trimmed
-          ? `Path regexp updated to "${trimmed}"`
-          : "Path regexp cleared",
+        trimmed ? `Path regexp updated to "${trimmed}"` : "Path regexp cleared"
       );
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to update path regexp",
-        "error",
+        "error"
       );
     }
     setSaving(false);
@@ -427,12 +414,12 @@ function ServiceDetailContent() {
       } catch (e: unknown) {
         toast(
           e instanceof Error ? e.message : "Failed to update auth",
-          "error",
+          "error"
         );
       }
       setSaving(false);
     },
-    [decodedName],
+    [decodedName]
   );
 
   const handleDelete = useCallback(async () => {
@@ -446,7 +433,7 @@ function ServiceDetailContent() {
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to delete service",
-        "error",
+        "error"
       );
       setSaving(false);
     }
@@ -609,9 +596,7 @@ function ServiceDetailContent() {
       <ConfigGrid>
         <Card>
           <SectionTitle>Configuration</SectionTitle>
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: 12 }}
-          >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <ConfigRow>
               <ConfigLabel>Protocol</ConfigLabel>
               <ConfigValue>
@@ -746,14 +731,12 @@ function ServiceDetailContent() {
         <Card>
           <SectionTitle>Test Endpoint</SectionTitle>
           <CodeBlock>
-            {testEndpoint
-              ? testEndpoint
-              : "Loading server info..."}
+            {testEndpoint ? testEndpoint : "Loading server info..."}
           </CodeBlock>
           <HelpText>
             Aperture will respond with HTTP 402 and a{" "}
-            <Code>WWW-Authenticate: L402</Code> header containing a
-            macaroon and Lightning invoice.
+            <Code>WWW-Authenticate: L402</Code> header containing a macaroon and
+            Lightning invoice.
           </HelpText>
         </Card>
       </ConfigGrid>

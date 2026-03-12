@@ -205,7 +205,7 @@ export default function DashboardPage() {
       setDateFrom(from);
       setDateTo(to);
     },
-    [],
+    []
   );
 
   const handleRetry = useCallback(() => {
@@ -222,9 +222,7 @@ export default function DashboardPage() {
   }, [transactions]);
 
   const isFirstRun =
-    !servicesLoading &&
-    services?.length === 0 &&
-    !transactions?.length;
+    !servicesLoading && services?.length === 0 && !transactions?.length;
 
   const hasError = !!(statsError || servicesError || transactionsError);
 
@@ -390,7 +388,7 @@ export default function DashboardPage() {
                   {services.map((svc, i) => {
                     const rev =
                       stats?.service_breakdown?.find(
-                        (s) => s.service_name === svc.name,
+                        (s) => s.service_name === svc.name
                       )?.total_revenue_sats ?? 0;
                     return (
                       <ServiceRow

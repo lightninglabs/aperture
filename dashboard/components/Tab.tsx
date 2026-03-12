@@ -40,5 +40,7 @@ interface TabListProps {
 }
 
 export const TabList: React.FC<TabListProps> = ({ children }) => {
-  return <div style={{ display: "flex", alignItems: "center" }}>{children}</div>;
+  return (
+    <div style={{ display: "flex", alignItems: "center" }}>{children}</div>
+  );
 };

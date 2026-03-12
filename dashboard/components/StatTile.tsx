@@ -18,7 +18,9 @@ const Styled = {
     background-color: ${(p) => p.theme.colors.lightNavy};
     border: 1px solid ${(p) => p.theme.colors.lightningBlack};
     border-radius: 8px;
-    transition: border-color 0.2s ease, transform 0.2s ease;
+    transition:
+      border-color 0.2s ease,
+      transform 0.2s ease;
 
     &:hover {
       border-color: ${(p) => p.theme.colors.lightBlue};
