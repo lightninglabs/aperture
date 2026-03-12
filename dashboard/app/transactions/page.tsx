@@ -324,7 +324,7 @@ export default function TransactionsPage() {
       ...rows.map((tx) =>
         [
           tx.id,
-          `"${tx.service_name}"`,
+          `"${tx.service_name.replace(/"/g, '""')}"`,
           tx.price_sats,
           tx.state,
           tx.payment_hash,

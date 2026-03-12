@@ -3,7 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 const APERTURE_URL = process.env.APERTURE_URL ?? "http://localhost:8081";
 const APERTURE_MACAROON = process.env.APERTURE_MACAROON ?? "";
 
+const SAFE_SEGMENT = /^[\w-]+$/;
+
 async function proxy(req: NextRequest, params: { path: string[] }) {
+  if (params.path.some((seg) => !SAFE_SEGMENT.test(seg))) {
+    return new NextResponse("bad request", { status: 400 });
+  }
   const path = params.path.join("/");
   const url = new URL(`/api/admin/${path}`, APERTURE_URL);
   url.search = req.nextUrl.search;
