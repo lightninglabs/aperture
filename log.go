@@ -7,6 +7,7 @@ import (
 	"github.com/lightninglabs/aperture/challenger"
 	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mint"
+	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd"
@@ -39,6 +40,7 @@ func SetupLoggers(root *build.SubLoggerManager, intercept signal.Interceptor) {
 	lnd.AddSubLogger(
 		root, admin.Subsystem, intercept, admin.UseLogger,
 	)
+	lnd.AddSubLogger(root, mpp.Subsystem, intercept, mpp.UseLogger)
 }
 
 // genSubLogger creates a logger for a subsystem. We provide an instance of

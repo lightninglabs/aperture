@@ -77,6 +77,27 @@ type AuthConfig struct {
 	// DevServer set to true to skip verification of the mailbox server's
 	// tls cert.
 	DevServer bool `long:"devserver" description:"set to true to skip verification of the server's tls cert."`
+
+	// EnableMPP enables the Payment HTTP Authentication Scheme (MPP)
+	// alongside the existing L402 scheme.
+	EnableMPP bool `long:"enablempp" description:"Enable the Payment HTTP Authentication Scheme (MPP)"`
+
+	// MPPRealm is the realm string used in MPP challenges. Defaults to
+	// the server's listen address if empty.
+	MPPRealm string `long:"mpprealm" description:"Realm string for MPP challenges"`
+
+	// EnableSessions enables the MPP session intent, which provides
+	// prepaid sessions with deposit, bearer, top-up, and close
+	// operations.
+	EnableSessions bool `long:"enablesessions" description:"Enable MPP session intent (requires payment sending capability)"`
+
+	// SessionDepositMultiplier is the number of service units per deposit.
+	// Defaults to 20 if not set.
+	SessionDepositMultiplier int `long:"sessiondepositmultiplier" description:"Number of service units per session deposit" default:"20"`
+
+	// SessionIdleTimeout is the idle timeout for sessions in seconds.
+	// Defaults to 300 (5 minutes) if not set.
+	SessionIdleTimeout int `long:"sessionidletimeout" description:"Session idle timeout in seconds" default:"300"`
 }
 
 func (a *AuthConfig) validate() error {

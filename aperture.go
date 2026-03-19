@@ -2,6 +2,8 @@ package aperture
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
@@ -243,11 +245,12 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 
 	var (
-		secretStore mint.SecretStore
-		onionStore  tor.OnionStore
-		lncStore    lnc.Store
-		txnStore    *aperturedb.L402TransactionsStore
-		svcStore    *aperturedb.ServicesStore
+		secretStore     mint.SecretStore
+		onionStore      tor.OnionStore
+		lncStore        lnc.Store
+		txnStore        *aperturedb.L402TransactionsStore
+		svcStore        *aperturedb.ServicesStore
+		mppSessionStore auth.SessionStore
 	)
 
 	// Connect to the chosen database backend.
@@ -277,6 +280,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		secretStore, onionStore, lncStore, txnStore, svcStore =
 			initSQLStores(db.BaseDB)
 
+		dbMPPTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPSessionsDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
+
 	case "sqlite":
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
@@ -286,6 +296,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		a.db = db.DB
 		secretStore, onionStore, lncStore, txnStore, svcStore =
 			initSQLStores(db.BaseDB)
+
+		dbMPPTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPSessionsDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
 
 	default:
 		return fmt.Errorf("unknown database backend: %s",
@@ -395,8 +412,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// Create the proxy and connect it to lnd.
 	mintTxnStore := asMintTransactionStore(txnStore)
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, secretStore, mintTxnStore,
-		adminPriority, adminFallback,
+		a.cfg, a.challenger, secretStore, mppSessionStore,
+		mintTxnStore, adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -1553,12 +1570,42 @@ func asMintTransactionStore(
 	return txnStore
 }
 
+// deriveHMACSecret derives a deterministic HMAC secret for MPP challenge
+// binding. It uses a well-known key hash with the secret store. If the secret
+// doesn't exist yet, it creates one.
+func deriveHMACSecret(store mint.SecretStore) []byte {
+	// Use a deterministic key hash for the MPP HMAC secret.
+	keyHash := sha256.Sum256([]byte("aperture-mpp-hmac-secret-v1"))
+
+	secret, err := store.GetSecret(context.Background(), keyHash)
+	if err != nil {
+		// Secret doesn't exist yet, create it.
+		secret, err = store.NewSecret(context.Background(), keyHash)
+		if err != nil {
+			// If we can't create a secret, generate a random one.
+			// This means challenges won't survive restarts, but
+			// the server will still function.
+			log.Warnf("Failed to store HMAC secret, using "+
+				"ephemeral: %v", err)
+			var random [32]byte
+			if _, err := rand.Read(random[:]); err != nil {
+				log.Errorf("Failed to generate random "+
+					"HMAC secret: %v", err)
+			}
+			return random[:]
+		}
+	}
+
+	return secret[:]
+}
+
 // createProxy creates the proxy with all the services it needs.
 // adminPriorityServices are checked before proxy backend matching (e.g. admin
 // gRPC, REST, dashboard proxy). adminFallbackServices are checked after proxy
 // backend matching fails (e.g. dashboard catch-all static file server).
 func createProxy(cfg *Config, challenger challenger.Challenger,
-	store mint.SecretStore, txnStore mint.TransactionStore,
+	store mint.SecretStore, mppSessionStore auth.SessionStore,
+	txnStore mint.TransactionStore,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
 ) (*proxy.Proxy, func(), error) {
 
@@ -1569,7 +1616,67 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 		Now:              time.Now,
 		TransactionStore: txnStore,
 	})
-	authenticator := auth.NewL402Authenticator(minter, challenger)
+	l402Auth := auth.NewL402Authenticator(minter, challenger)
+
+	// Build the authenticator, optionally composing with MPP.
+	var authenticator auth.Authenticator
+	if cfg.Authenticator.EnableMPP {
+		realm := cfg.Authenticator.MPPRealm
+		if realm == "" {
+			realm = cfg.ListenAddr
+		}
+
+		// Generate an HMAC secret for challenge binding. We derive
+		// it from a deterministic key stored via the secret store.
+		hmacSecret := deriveHMACSecret(store)
+
+		network := cfg.Authenticator.Network
+		if network == "" {
+			network = "mainnet"
+		}
+
+		mppAuth := auth.NewMPPAuthenticator(
+			challenger, challenger, realm, hmacSecret, network,
+		)
+
+		auths := []auth.Authenticator{l402Auth, mppAuth}
+
+		// Optionally add the session authenticator.
+		if cfg.Authenticator.EnableSessions && mppSessionStore != nil {
+			multiplier := cfg.Authenticator.SessionDepositMultiplier
+			if multiplier <= 0 {
+				multiplier = 20
+			}
+			idleTimeout := time.Duration(
+				cfg.Authenticator.SessionIdleTimeout,
+			) * time.Second
+			if idleTimeout <= 0 {
+				idleTimeout = 5 * time.Minute
+			}
+
+			sessAuth := auth.NewMPPSessionAuthenticator(
+				&auth.MPPSessionConfig{
+					Challenger:        challenger,
+					Checker:           challenger,
+					SessionStore:      mppSessionStore,
+					Realm:             realm,
+					HMACSecret:        hmacSecret,
+					Network:           network,
+					DepositMultiplier: multiplier,
+					IdleTimeout:       idleTimeout,
+				},
+			)
+			auths = append(auths, sessAuth)
+		}
+
+		authenticator = auth.NewMultiAuthenticator(auths...)
+
+		log.Infof("MPP (Payment HTTP Auth) enabled with realm=%s "+
+			"network=%s sessions=%v", realm, network,
+			cfg.Authenticator.EnableSessions)
+	} else {
+		authenticator = l402Auth
+	}
 
 	// By default the static file server only returns 404 answers for
 	// security reasons. Serving files from the staticRoot directory has to
