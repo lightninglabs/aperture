@@ -23,6 +23,9 @@ const (
 
 	// defaultIdleTimeout is the default idle timeout for sessions.
 	defaultIdleTimeout = 5 * time.Minute
+
+	// sessionStatusOpen is the status string for an open session.
+	sessionStatusOpen = "open"
 )
 
 // MPPSessionAuthenticator is an authenticator that implements the Payment HTTP
@@ -279,7 +282,7 @@ func (a *MPPSessionAuthenticator) handleBearer(ctx context.Context,
 		return false
 	}
 
-	if session.Status != "open" {
+	if session.Status != sessionStatusOpen {
 		log.Debugf("MPP Session: Session %s is closed",
 			payload.SessionID)
 		return false
@@ -339,7 +342,7 @@ func (a *MPPSessionAuthenticator) handleTopUp(ctx context.Context,
 			err)
 		return false
 	}
-	if session.Status != "open" {
+	if session.Status != sessionStatusOpen {
 		log.Debugf("MPP Session: Session %s is closed for topUp",
 			payload.SessionID)
 		return false
@@ -429,7 +432,7 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 		return false
 	}
 
-	if session.Status != "open" {
+	if session.Status != sessionStatusOpen {
 		log.Debugf("MPP Session: Session %s already closed",
 			payload.SessionID)
 		return false

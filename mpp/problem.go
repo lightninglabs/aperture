@@ -17,27 +17,27 @@ const (
 
 // Well-known problem type URIs per draft-httpauth-payment-00 Section 8.2.
 const (
-	ProblemPaymentRequired    = ProblemBaseURI + "payment-required"
+	ProblemPaymentRequired     = ProblemBaseURI + "payment-required"
 	ProblemPaymentInsufficient = ProblemBaseURI + "payment-insufficient"
-	ProblemPaymentExpired     = ProblemBaseURI + "payment-expired"
-	ProblemVerificationFailed = ProblemBaseURI + "verification-failed"
-	ProblemMethodUnsupported  = ProblemBaseURI + "method-unsupported"
+	ProblemPaymentExpired      = ProblemBaseURI + "payment-expired"
+	ProblemVerificationFailed  = ProblemBaseURI + "verification-failed"
+	ProblemMethodUnsupported   = ProblemBaseURI + "method-unsupported"
 	ProblemMalformedCredential = ProblemBaseURI + "malformed-credential"
-	ProblemInvalidChallenge   = ProblemBaseURI + "invalid-challenge"
+	ProblemInvalidChallenge    = ProblemBaseURI + "invalid-challenge"
 )
 
 // Lightning-specific problem type URIs per draft-lightning-charge-00
 // Section 11.
 const (
-	ProblemLightningMalformed   = ProblemLightningBaseURI + "malformed-credential"
-	ProblemLightningUnknown     = ProblemLightningBaseURI + "unknown-challenge"
-	ProblemLightningPreimage    = ProblemLightningBaseURI + "invalid-preimage"
-	ProblemLightningExpired     = ProblemLightningBaseURI + "expired-invoice"
-	ProblemLightningSessionNotFound = ProblemLightningBaseURI + "session-not-found"
-	ProblemLightningSessionClosed   = ProblemLightningBaseURI + "session-closed"
-	ProblemLightningInsufficient    = ProblemLightningBaseURI + "insufficient-balance"
+	ProblemLightningMalformed        = ProblemLightningBaseURI + "malformed-credential"
+	ProblemLightningUnknown          = ProblemLightningBaseURI + "unknown-challenge"
+	ProblemLightningPreimage         = ProblemLightningBaseURI + "invalid-preimage"
+	ProblemLightningExpired          = ProblemLightningBaseURI + "expired-invoice"
+	ProblemLightningSessionNotFound  = ProblemLightningBaseURI + "session-not-found"
+	ProblemLightningSessionClosed    = ProblemLightningBaseURI + "session-closed"
+	ProblemLightningInsufficient     = ProblemLightningBaseURI + "insufficient-balance"
 	ProblemLightningChallengeExpired = ProblemLightningBaseURI + "challenge-expired"
-	ProblemLightningReturnInvoice   = ProblemLightningBaseURI + "invalid-return-invoice"
+	ProblemLightningReturnInvoice    = ProblemLightningBaseURI + "invalid-return-invoice"
 )
 
 // ProblemDetails represents an RFC 9457 Problem Details object for use in

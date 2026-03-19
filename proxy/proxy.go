@@ -26,7 +26,6 @@ import (
 // from the authentication check to the response modifier.
 type receiptContextKey struct{}
 
-
 const (
 	// formatPattern is the pattern in which the request log will be
 	// printed. This is loosely oriented on the apache log format.

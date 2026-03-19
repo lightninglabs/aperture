@@ -16,7 +16,7 @@ type MultiAuthenticator struct {
 	// mu protects lastAcceptedIdx which tracks which authenticator
 	// accepted the most recent request. This is used to delegate
 	// ReceiptHeader calls.
-	mu             sync.Mutex
+	mu              sync.Mutex
 	lastAcceptedIdx int
 }
 

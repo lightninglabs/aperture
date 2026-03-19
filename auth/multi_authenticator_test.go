@@ -12,7 +12,6 @@ type mockAuthenticator struct {
 	acceptResult    bool
 	challengeHeader http.Header
 	challengeErr    error
-	receiptHeader   http.Header
 }
 
 var _ Authenticator = (*mockAuthenticator)(nil)

@@ -14,12 +14,6 @@ import (
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
-const (
-	// paymentAuthScheme is the HTTP authentication scheme name per
-	// draft-httpauth-payment-00.
-	paymentAuthScheme = "Payment"
-)
-
 // MPPAuthenticator is an authenticator that implements the Payment HTTP
 // Authentication Scheme for the Lightning "charge" intent. It issues BOLT11
 // invoices as challenges and verifies payment preimages as credentials.
