@@ -270,7 +270,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		secretStore = newSecretStore(a.etcdClient)
 		onionStore = newOnionStore(a.etcdClient)
 
-	case "postgres":
+	case "postgres": //nolint:dupl
 		db, err := aperturedb.NewPostgresStore(a.cfg.Postgres)
 		if err != nil {
 			return fmt.Errorf("unable to connect to postgres: %v",
