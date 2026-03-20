@@ -29,6 +29,12 @@ servername: aperture.example.com
 # connections.
 insecure: false
 
+# If TLS is terminated by a load balancer/ingress in front of aperture, make
+# sure the load balancer's ALPN policy includes "h2". On AWS NLB, the default
+# ALPN policy "None" does not negotiate ALPN and gRPC clients may fail with
+# "missing selected ALPN property". With TCP passthrough, aperture negotiates
+# ALPN directly.
+
 # Whether we should verify the invoice status strictly or not. If set to true,
 # then this requires all invoices to be read from disk at start up.
 strictverify: false
