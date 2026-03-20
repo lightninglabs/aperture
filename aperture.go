@@ -287,7 +287,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		)
 		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
 
-	case "sqlite":
+	case "sqlite": //nolint:dupl
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
 			return fmt.Errorf("unable to connect to sqlite: %v",
