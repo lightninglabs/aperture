@@ -12,6 +12,19 @@ import (
 	"github.com/lightningnetwork/lnd/lntypes"
 )
 
+const (
+	// defaultListInvoicesBatchSize is the default number of invoices to
+	// fetch in each ListInvoices call during the historical load.
+	defaultListInvoicesBatchSize = 1000
+)
+
+var (
+	// defaultInitialLoadTimeout is the maximum time we wait for the initial
+	// batch of invoices to be loaded from lnd before allowing state checks
+	// to proceed or fail.
+	defaultInitialLoadTimeout = 10 * time.Second
+)
+
 // LndChallenger is a challenger that uses an lnd backend to create new L402
 // payment challenges.
 type LndChallenger struct {
@@ -20,10 +33,8 @@ type LndChallenger struct {
 	clientCtx     func() context.Context
 	genInvoiceReq InvoiceRequestGenerator
 
-	invoiceStates  map[lntypes.Hash]lnrpc.Invoice_InvoiceState
-	invoicesMtx    *sync.Mutex
+	invoiceStore   *InvoiceStateStore
 	invoicesCancel func()
-	invoicesCond   *sync.Cond
 
 	// strictVerify indicates whether we should verify the invoice states,
 	// or rely on the higher level preimage verification.
@@ -55,131 +66,290 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		return nil, fmt.Errorf("genInvoiceReq cannot be nil")
 	}
 
-	invoicesMtx := &sync.Mutex{}
-	challenger := &LndChallenger{
-		client:        client,
-		batchSize:     batchSize,
-		clientCtx:     ctxFunc,
-		genInvoiceReq: genInvoiceReq,
-		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
-		invoicesMtx:   invoicesMtx,
-		invoicesCond:  sync.NewCond(invoicesMtx),
-		quit:          make(chan struct{}),
-		errChan:       errChan,
-		strictVerify:  strictVerification,
+	// Use default batch size if zero or negative is provided.
+	if batchSize <= 0 {
+		batchSize = defaultListInvoicesBatchSize
 	}
 
-	err := challenger.Start()
-	if err != nil {
-		return nil, fmt.Errorf("unable to start challenger: %w", err)
+	quitChan := make(chan struct{})
+	challenger := &LndChallenger{
+		client:         client,
+		batchSize:      batchSize,
+		clientCtx:      ctxFunc,
+		genInvoiceReq:  genInvoiceReq,
+		invoiceStore:   NewInvoiceStateStore(quitChan),
+		invoicesCancel: func() {},
+		quit:           quitChan,
+		errChan:        errChan,
+		strictVerify:   strictVerification,
 	}
+
+	// Start the background loading/subscription process.
+	challenger.Start()
 
 	return challenger, nil
 }
 
-// Start starts the challenger's main work which is to keep track of all
-// invoices and their states. For that the backing lnd node is queried for all
-// invoices on startup and a subscription to all subsequent invoice updates
-// is created.
-func (l *LndChallenger) Start() error {
-	// If we aren't doing strict verification, then we can just exit here as
-	// we don't need the invoice state.
+// Start launches the background process to load historical invoices and
+// subscribe to new invoice updates concurrently. This method returns
+// immediately.
+func (l *LndChallenger) Start() {
+	// If we aren't doing strict verification, then we can just exit here
+	// as we don't need the invoice state.
 	if !l.strictVerify {
 		log.Infof("Skipping invoice state tracking strict_verify=%v",
 			l.strictVerify)
-		return nil
+
+		// Mark load complete immediately so any waiters don't block.
+		l.invoiceStore.MarkInitialLoadComplete()
+		return
 	}
 
-	// These are the default values for the subscription. In case there are
-	// no invoices yet, this will instruct lnd to just send us all updates.
-	// If there are existing invoices, these indices will be updated to
-	// reflect the latest known invoices.
+	log.Infof("Starting LND challenger background tasks...")
+
+	// Use a short timeout context for this initial call.
+	ctxIdx, cancelIdx := context.WithTimeout(l.clientCtx(), 30*time.Second)
+	defer cancelIdx()
+
 	addIndex := uint64(0)
 	settleIndex := uint64(0)
 
-	log.Debugf("Starting LND challenger")
-	// Paginate through all existing invoices on startup and add them to our
-	// cache. We need to keep track of all invoices to ensure tokens are
-	// valid.
-	ctx := l.clientCtx()
+	log.Debugf("Querying latest invoice indices...")
+	latestInvoiceResp, err := l.client.ListInvoices(
+		ctxIdx, &lnrpc.ListInvoiceRequest{
+			NumMaxInvoices: 1, // Only need the latest one.
+			Reversed:       true,
+		},
+	)
+	if err != nil {
+		// Don't fail startup entirely, just log and proceed with 0
+		// indices. The historical load will catch up.
+		log.Errorf("Failed to get latest invoice indices, "+
+			"subscribing from beginning (error: %v)", err)
+	} else if len(latestInvoiceResp.Invoices) > 0 {
+		// Indices are only meaningful if we actually got an invoice.
+		latestInvoice := latestInvoiceResp.Invoices[0]
+		addIndex = latestInvoice.AddIndex
+		settleIndex = latestInvoice.SettleIndex
+
+		log.Infof("Latest indices found: add=%d, settle=%d",
+			addIndex, settleIndex)
+	} else {
+		log.Infof("No existing invoices found, subscribing " +
+			"from beginning.")
+	}
+
+	cancelIdx()
+
+	// Create the subscription context here on the calling goroutine so
+	// there's no data race between subscribeToInvoices writing the cancel
+	// func and Stop() reading it. Cancel is safe to call multiple times.
+	ctxSub, cancelSub := context.WithCancel(l.clientCtx())
+	l.invoicesCancel = cancelSub
+
+	// We'll launch our first goroutine to load the historical invoices in
+	// the background.
+	l.wg.Add(1)
+	go l.loadHistoricalInvoices()
+
+	// We'll launch our second goroutine to subscribe to new invoices to
+	// populate the invoice store with new updates.
+	l.wg.Add(1)
+	go l.subscribeToInvoices(ctxSub, addIndex, settleIndex)
+
+	log.Infof("LND challenger background tasks launched.")
+}
+
+// loadHistoricalInvoices fetches all past invoices relevant using pagination
+// and updates the invoice store. It marks the initial load complete upon
+// finishing. This runs in a goroutine.
+func (l *LndChallenger) loadHistoricalInvoices() {
+	defer l.wg.Done()
+
+	log.Infof("Starting historical invoice loading "+
+		"(batch size %d)...", l.batchSize)
+
+	// Use a background context for the potentially long-running list
+	// calls. Allow it to be cancelled by Stop() via the main quit
+	// channel.
+	ctxList, cancelList := context.WithCancel(l.clientCtx())
+	defer cancelList()
+
+	// Goroutine to cancel the list context if quit signal is received.
+	go func() {
+		select {
+		case <-l.quit:
+			log.Warnf("Shutdown signal received, cancelling " +
+				"historical invoice list context.")
+			cancelList()
+
+		case <-ctxList.Done():
+		}
+	}()
+
+	startTime := time.Now()
+	numInvoicesLoaded := 0
 	indexOffset := uint64(0)
+
 	for {
-		log.Debugf("Querying invoices from index %d", indexOffset)
-		invoiceResp, err := l.client.ListInvoices(
-			ctx, &lnrpc.ListInvoiceRequest{
-				IndexOffset:    indexOffset,
-				NumMaxInvoices: uint64(l.batchSize),
-			},
-		)
+		// Check for shutdown signal before each batch.
+		select {
+		case <-l.quit:
+			log.Warnf("Shutdown signal received during " +
+				"historical invoice loading.")
+
+			// Mark load complete anyway so waiters don't block
+			// indefinitely.
+			l.invoiceStore.MarkInitialLoadComplete()
+			return
+		default:
+		}
+
+		log.Debugf("Querying invoices batch starting from "+
+			"index %d", indexOffset)
+
+		req := &lnrpc.ListInvoiceRequest{
+			IndexOffset:    indexOffset,
+			NumMaxInvoices: uint64(l.batchSize),
+		}
+
+		invoiceResp, err := l.client.ListInvoices(ctxList, req)
 		if err != nil {
-			return err
+			// If context was cancelled by shutdown, it's not a
+			// fatal startup error.
+			if strings.Contains(
+				err.Error(), context.Canceled.Error(),
+			) {
+
+				log.Warnf("Historical invoice loading " +
+					"cancelled by shutdown.")
+
+				l.invoiceStore.MarkInitialLoadComplete()
+				return
+			}
+			log.Errorf("Failed to list invoices batch "+
+				"(offset %d): %v", indexOffset, err)
+
+			// Signal fatal error to the main application.
+			select {
+			case l.errChan <- fmt.Errorf("failed historical "+
+				"invoice load batch: %w", err):
+			case <-l.quit:
+			}
+
+			// Mark load complete on error so waiters don't block
+			// indefinitely.
+			l.invoiceStore.MarkInitialLoadComplete()
+			return
 		}
 
-		// If there are no more invoices, stop pagination.
-		if len(invoiceResp.Invoices) == 0 {
-			break
-		}
+		// Process the received batch.
+		invoicesInBatch := len(invoiceResp.Invoices)
 
-		// Lock the mutex to safely update the invoice states.
-		l.invoicesMtx.Lock()
+		log.Debugf("Received %d invoices in batch (offset %d)",
+			invoicesInBatch, indexOffset)
+
 		for _, invoice := range invoiceResp.Invoices {
-			// Skip invoices that do not have a payment hash
-			// populated.
+			// Some invoices like AMP invoices may not have a
+			// payment hash populated.
 			if invoice.RHash == nil {
 				continue
 			}
 
-			if invoice.AddIndex > addIndex {
-				addIndex = invoice.AddIndex
-			}
-			if invoice.SettleIndex > settleIndex {
-				settleIndex = invoice.SettleIndex
-			}
 			hash, err := lntypes.MakeHash(invoice.RHash)
 			if err != nil {
-				l.invoicesMtx.Unlock()
-				return fmt.Errorf("error parsing invoice "+
-					"hash: %v", err)
+				log.Errorf("Error parsing invoice hash "+
+					"during initial load: %v. Skipping "+
+					"invoice.", err)
+				continue
 			}
 
-			// Skip tracking the state of canceled or expired
-			// invoices.
+			// Don't track the state of irrelevant invoices.
 			if invoiceIrrelevant(invoice) {
 				continue
 			}
-			l.invoiceStates[hash] = invoice.State
+
+			l.invoiceStore.SetState(hash, invoice.State)
+			numInvoicesLoaded++
 		}
-		l.invoicesMtx.Unlock()
 
-		// Update the index offset for the next batch.
+		// If this batch was empty or less than max, we're done with
+		// history.
+		if invoicesInBatch == 0 || invoicesInBatch < l.batchSize {
+			log.Debugf("Last batch processed (%d invoices), "+
+				"stopping pagination.", invoicesInBatch)
+			break
+		}
+
+		// Prepare for the next batch.
 		indexOffset = invoiceResp.LastIndexOffset
+		log.Debugf("Processed batch, %d invoices loaded so "+
+			"far. Next index offset: %d",
+			numInvoicesLoaded, indexOffset)
 	}
-	log.Debugf("Finished querying invoices")
 
-	// We need to be able to cancel any subscription we make.
-	ctxc, cancel := context.WithCancel(l.clientCtx())
-	l.invoicesCancel = cancel
+	loadDuration := time.Since(startTime)
+
+	log.Infof("Finished historical invoice loading. Loaded %d "+
+		"relevant invoices in %v.", numInvoicesLoaded,
+		loadDuration)
+
+	// Mark the initial load as complete *only after* all pages are
+	// processed.
+	l.invoiceStore.MarkInitialLoadComplete()
+}
+
+// subscribeToInvoices sets up the invoice subscription stream and reads from
+// it until the stream errors or the challenger shuts down. The context is
+// created by Start() to avoid a data race on the cancel function. This runs
+// in a goroutine managed by Start.
+func (l *LndChallenger) subscribeToInvoices(ctx context.Context,
+	addIndex, settleIndex uint64) {
+
+	defer l.wg.Done()
+
+	// Check for immediate shutdown before attempting subscription.
+	select {
+	case <-l.quit:
+		log.Warnf("Shutdown signal received before starting " +
+			"invoice subscription.")
+		return
+	default:
+	}
+
+	log.Infof("Attempting to subscribe to invoice updates starting "+
+		"from add_index=%d, settle_index=%d", addIndex, settleIndex)
 
 	subscriptionResp, err := l.client.SubscribeInvoices(
-		ctxc, &lnrpc.InvoiceSubscription{
+		ctx, &lnrpc.InvoiceSubscription{
 			AddIndex:    addIndex,
 			SettleIndex: settleIndex,
 		},
 	)
 	if err != nil {
-		cancel()
-		return err
+		// If context was cancelled by shutdown, it's not a fatal
+		// error.
+		if strings.Contains(err.Error(), context.Canceled.Error()) {
+			log.Warnf("Invoice subscription cancelled " +
+				"during setup by shutdown.")
+			return
+		}
+
+		log.Errorf("Failed to subscribe to invoices: %v", err)
+		select {
+		case l.errChan <- fmt.Errorf("failed invoice "+
+			"subscription: %w", err):
+
+		case <-l.quit:
+		}
+		return
 	}
 
-	l.wg.Add(1)
-	go func() {
-		defer l.wg.Done()
-		defer cancel()
+	log.Infof("Successfully subscribed to invoice updates.")
 
-		l.readInvoiceStream(subscriptionResp)
-	}()
-
-	return nil
+	// Read from the subscription stream directly. This blocks until the
+	// stream errors or the context is cancelled by Stop().
+	l.readInvoiceStream(subscriptionResp)
 }
 
 // readInvoiceStream reads the invoice update messages sent on the stream until
@@ -253,28 +423,30 @@ func (l *LndChallenger) readInvoiceStream(
 			return
 		}
 
-		l.invoicesMtx.Lock()
 		if invoiceIrrelevant(invoice) {
 			// Don't keep the state of canceled or expired invoices.
-			delete(l.invoiceStates, hash)
+			l.invoiceStore.DeleteState(hash)
 		} else {
-			l.invoiceStates[hash] = invoice.State
+			l.invoiceStore.SetState(hash, invoice.State)
 		}
-
-		// Before releasing the lock, notify our conditions that listen
-		// for updates on the invoice state.
-		l.invoicesCond.Broadcast()
-		l.invoicesMtx.Unlock()
 	}
 }
 
 // Stop shuts down the challenger.
 func (l *LndChallenger) Stop() {
-	if l.invoicesCancel != nil {
-		l.invoicesCancel()
-	}
+	log.Infof("Stopping LND challenger...")
+
+	// Signal all goroutines to exit.
 	close(l.quit)
+
+	// Cancel the subscription context if it exists and was set.
+	// invoicesCancel is initialized to a no-op, so safe to call always.
+	l.invoicesCancel()
+
+	// Wait for all background goroutines (loadHistorical,
+	// subscribeToInvoices, and readInvoiceStream) to finish.
 	l.wg.Wait()
+	log.Infof("LND challenger stopped.")
 }
 
 // NewChallenge creates a new L402 payment challenge, returning a payment
@@ -308,10 +480,10 @@ func (l *LndChallenger) NewChallenge(price int64) (string, lntypes.Hash,
 	return response.PaymentRequest, paymentHash, nil
 }
 
-// VerifyInvoiceStatus checks that an invoice identified by a payment
-// hash has the desired status. To make sure we don't fail while the
-// invoice update is still on its way, we try several times until either
-// the desired status is set or the given timeout is reached.
+// VerifyInvoiceStatus checks that an invoice identified by a payment hash has
+// the desired status. It waits until the desired status is reached or the
+// given timeout occurs. It also handles waiting for the initial invoice load
+// if necessary.
 //
 // NOTE: This is part of the auth.InvoiceChecker interface.
 func (l *LndChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
@@ -323,80 +495,31 @@ func (l *LndChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
 		return nil
 	}
 
-	// Prevent the challenger to be shut down while we're still waiting for
-	// status updates.
+	// Prevent the challenger from being shut down while we're still
+	// waiting for status updates.
 	l.wg.Add(1)
 	defer l.wg.Done()
 
-	var (
-		condWg         sync.WaitGroup
-		doneChan       = make(chan struct{})
-		timeoutReached bool
-		hasInvoice     bool
-		invoiceState   lnrpc.Invoice_InvoiceState
-	)
-
-	// First of all, spawn a goroutine that will signal us on timeout.
-	// Otherwise if a client subscribes to an update on an invoice that
-	// never arrives, and there is no other activity, it would block
-	// forever in the condition.
-	condWg.Add(1)
-	go func() {
-		defer condWg.Done()
-
-		select {
-		case <-doneChan:
-		case <-time.After(timeout):
-		case <-l.quit:
-		}
-
-		l.invoicesCond.L.Lock()
-		timeoutReached = true
-		l.invoicesCond.Broadcast()
-		l.invoicesCond.L.Unlock()
-	}()
-
-	// Now create the main goroutine that blocks until an update is received
-	// on the condition.
-	condWg.Add(1)
-	go func() {
-		defer condWg.Done()
-		l.invoicesCond.L.Lock()
-
-		// Block here until our condition is met or the allowed time is
-		// up. The Wait() will return whenever a signal is broadcast.
-		invoiceState, hasInvoice = l.invoiceStates[hash]
-		//nolint:staticcheck
-		for !(hasInvoice && invoiceState == state) && !timeoutReached {
-			l.invoicesCond.Wait()
-
-			// The Wait() above has re-acquired the lock so we can
-			// safely access the states map.
-			invoiceState, hasInvoice = l.invoiceStates[hash]
-		}
-
-		// We're now done.
-		l.invoicesCond.L.Unlock()
-		close(doneChan)
-	}()
-
-	// Wait until we're either done or timed out.
-	condWg.Wait()
-
-	// Interpret the result so we can return a more descriptive error than
-	// just "failed".
-	switch {
-	case !hasInvoice:
-		return fmt.Errorf("no active or settled invoice found for "+
-			"hash=%v", hash)
-
-	case invoiceState != state:
-		return fmt.Errorf("invoice status not correct before timeout, "+
-			"hash=%v, status=%v", hash, invoiceState)
-
+	// Check for immediate shutdown signal before potentially blocking.
+	select {
+	case <-l.quit:
+		return fmt.Errorf("challenger shutting down")
 	default:
-		return nil
 	}
+
+	// Delegate the waiting logic to the invoice store. We use a default
+	// timeout for the initial load wait, and the provided timeout for the
+	// specific state wait.
+	err := l.invoiceStore.WaitForState(
+		hash, state, defaultInitialLoadTimeout, timeout,
+	)
+	if err != nil {
+		// Add context to the error message.
+		return fmt.Errorf("error verifying invoice status for hash %v "+
+			"(target state %v): %w", hash, state, err)
+	}
+
+	return nil
 }
 
 // invoiceIrrelevant returns true if an invoice is nil, canceled or non-settled
