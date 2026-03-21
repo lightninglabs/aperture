@@ -27,6 +27,12 @@ func (m *mockMint) VerifyL402(_ context.Context, p *mint.VerificationParams) err
 	return nil
 }
 
+func (m *mockMint) VerifyL402PoW(_ context.Context,
+	p *mint.PoWVerificationParams) error {
+
+	return nil
+}
+
 type mockChecker struct {
 	err error
 }

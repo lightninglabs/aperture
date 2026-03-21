@@ -40,6 +40,13 @@ type Token struct {
 	// TimeCreated is the moment when this token was created.
 	TimeCreated time.Time
 
+	// PowNonce holds the PoW solution nonce. If non-zero, this is a
+	// PoW-authenticated token.
+	PowNonce uint64
+
+	// PowDifficulty is the difficulty target for this PoW token.
+	PowDifficulty uint32
+
 	// baseMac is the base macaroon in its original form as baked by the
 	// authentication server. No client side caveats have been added to it
 	// yet.
@@ -96,10 +103,35 @@ func (t *Token) IsValid() bool {
 	return true
 }
 
+// isPoW returns true if this is a PoW-authenticated token.
+func (t *Token) isPoW() bool {
+	return t.PowNonce != 0 || t.PowDifficulty != 0
+}
+
 // isPending returns true if the payment for the L402 is still in flight and we
-// haven't received the preimage yet.
+// haven't received the preimage yet. PoW tokens are never pending since they
+// are solved instantly.
 func (t *Token) isPending() bool {
+	if t.isPoW() {
+		return false
+	}
 	return t.Preimage == zeroPreimage
+}
+
+// SolvedMacaroon returns the base macaroon with the proof-of-work caveat
+// added as a first-party caveat.
+func (t *Token) SolvedMacaroon() (*macaroon.Macaroon, error) {
+	mac := t.BaseMacaroon()
+	err := AddFirstPartyCaveats(
+		mac, NewCaveat(
+			CondPoW,
+			FormatPoWCaveatValue(t.PowDifficulty, t.PowNonce),
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return mac, nil
 }
 
 // serializeToken returns a byte-serialized representation of the token.
@@ -138,6 +170,15 @@ func serializeToken(t *Token) ([]byte, error) {
 
 	timeUnix := t.TimeCreated.UnixNano()
 	if err := binary.Write(&b, byteOrder, timeUnix); err != nil {
+		return nil, err
+	}
+
+	// PoW fields (optional, zero = Lightning token). Appended at the end
+	// for backwards compatibility with existing serialized tokens.
+	if err := binary.Write(&b, byteOrder, t.PowNonce); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(&b, byteOrder, t.PowDifficulty); err != nil {
 		return nil, err
 	}
 
@@ -185,6 +226,15 @@ func deserializeToken(value []byte) (*Token, error) {
 		return nil, err
 	}
 	token.TimeCreated = time.Unix(0, unixNano)
+
+	// Try to read PoW fields. If EOF, this is an older Lightning-only
+	// token and the fields default to zero.
+	if err := binary.Read(r, byteOrder, &token.PowNonce); err != nil {
+		return token, nil
+	}
+	if err := binary.Read(r, byteOrder, &token.PowDifficulty); err != nil {
+		return token, nil
+	}
 
 	return token, nil
 }

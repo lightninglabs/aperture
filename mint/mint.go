@@ -238,6 +238,63 @@ func (m *Mint) caveatsForServices(ctx context.Context,
 	return caveats, nil
 }
 
+// PoWVerificationParams holds the requirements to verify a PoW-authenticated
+// L402.
+type PoWVerificationParams struct {
+	// Macaroon is the macaroon as part of the L402 we'll attempt to verify.
+	Macaroon *macaroon.Macaroon
+
+	// Difficulty is the required number of leading zero bits for the PoW.
+	Difficulty uint32
+
+	// TargetService is the target service a user of an L402 is attempting
+	// to access.
+	TargetService string
+}
+
+// VerifyL402PoW verifies a PoW-authenticated L402. This is similar to
+// VerifyL402 but does not require a preimage. Instead, it verifies that the
+// macaroon contains a valid proof-of-work caveat.
+func (m *Mint) VerifyL402PoW(ctx context.Context,
+	params *PoWVerificationParams) error {
+
+	// Decode the identifier to get the token ID for PoW verification.
+	id, err := l402.DecodeIdentifier(
+		bytes.NewReader(params.Macaroon.Id()),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Ensure the L402 was minted by us by verifying the HMAC chain.
+	secret, err := m.cfg.Secrets.GetSecret(
+		ctx, sha256.Sum256(params.Macaroon.Id()),
+	)
+	if err != nil {
+		return err
+	}
+	rawCaveats, err := params.Macaroon.VerifySignature(secret[:], nil)
+	if err != nil {
+		return err
+	}
+
+	// Decode all caveats and verify them, including the PoW satisfier.
+	caveats := make([]l402.Caveat, 0, len(rawCaveats))
+	for _, rawCaveat := range rawCaveats {
+		caveat, err := l402.DecodeCaveat(rawCaveat)
+		if err != nil {
+			continue
+		}
+		caveats = append(caveats, caveat)
+	}
+	return l402.VerifyCaveats(
+		caveats,
+		l402.NewServicesSatisfier(params.TargetService),
+		l402.NewTimeoutSatisfier(params.TargetService, m.cfg.Now),
+		l402.NewPoWSatisfier(id.TokenID, params.Difficulty),
+	)
+}
+
 // VerificationParams holds all of the requirements to properly verify an L402.
 type VerificationParams struct {
 	// Macaroon is the macaroon as part of the L402 we'll attempt to verify.

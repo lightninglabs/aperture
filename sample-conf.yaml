@@ -256,6 +256,18 @@ services:
       insecure: false
       tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
+    # Example: A service using proof-of-work authentication instead of
+    # Lightning payments. Clients must solve a SHA256 PoW challenge with the
+    # specified number of leading zero bits.
+  - name: "service-pow-example"
+    hostregexp: '^pow\.example\.com$'
+    pathregexp: '^/api/.*$'
+    address: "localhost:8082"
+    protocol: https
+    auth: "on"
+    authmethod: "POW"
+    powdifficulty: 20
+
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.
 tor:

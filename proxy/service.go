@@ -110,6 +110,14 @@ type Service struct {
 	// request, but still try to do the l402 authentication.
 	AuthSkipInvoiceCreationPaths []string `long:"authskipinvoicecreationpaths" description:"List of regular expressions for paths that will skip invoice creation'"`
 
+	// AuthMethod specifies the authentication method for this service.
+	// Valid values are "lightning" (default) and "POW".
+	AuthMethod string `long:"authmethod" description:"Authentication method: lightning (default) or POW"`
+
+	// PowDifficulty is the number of leading zero bits required for
+	// proof-of-work authentication. Only used when AuthMethod is "POW".
+	PowDifficulty uint32 `long:"powdifficulty" description:"Number of leading zero bits required for PoW"`
+
 	// RateLimits is an optional list of rate-limiting rules for this
 	// service. Each rule specifies a path pattern and rate limit
 	// parameters. All matching rules are evaluated; if any rule denies
@@ -178,8 +186,29 @@ func (s *Service) SkipInvoiceCreation(r *http.Request) bool {
 
 // prepareServices prepares the backend service configurations to be used by the
 // proxy.
+// IsPoW returns true if the service is configured for PoW authentication.
+func (s *Service) IsPoW() bool {
+	return s.AuthMethod == "POW"
+}
+
 func prepareServices(services []*Service) error {
 	for _, service := range services {
+		// Validate auth method.
+		switch service.AuthMethod {
+		case "", "lightning":
+			// Default, nothing to do.
+		case "POW":
+			if service.PowDifficulty == 0 {
+				return fmt.Errorf("service %s: powdifficulty "+
+					"must be greater than 0 when "+
+					"authmethod is POW", service.Name)
+			}
+		default:
+			return fmt.Errorf("service %s: invalid authmethod "+
+				"%q, must be \"lightning\" or \"POW\"",
+				service.Name, service.AuthMethod)
+		}
+
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
 			service.freebieDB = freebie.NewMemIPMaskStore(

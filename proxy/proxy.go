@@ -71,17 +71,19 @@ func (l *localService) IsHandling(r *http.Request) bool {
 // a challenge to the client or forwards the request to another server and
 // proxies the response back to the client.
 type Proxy struct {
-	proxyBackend  *httputil.ReverseProxy
-	localServices []LocalService
-	authenticator auth.Authenticator
-	services      []*Service
-	blocklist     map[string]struct{}
+	proxyBackend     *httputil.ReverseProxy
+	localServices    []LocalService
+	lnAuthenticator  auth.Authenticator
+	powAuthenticator auth.Authenticator
+	services         []*Service
+	blocklist        map[string]struct{}
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
-// headers if necessary.
-func New(auth auth.Authenticator, services []*Service,
+// headers if necessary. The powAuth parameter may be nil if no services use
+// PoW authentication.
+func New(lnAuth, powAuth auth.Authenticator, services []*Service,
 	blocklist []string, localServices ...LocalService) (*Proxy, error) {
 
 	blMap := make(map[string]struct{})
@@ -95,10 +97,11 @@ func New(auth auth.Authenticator, services []*Service,
 	}
 
 	proxy := &Proxy{
-		localServices: localServices,
-		authenticator: auth,
-		services:      services,
-		blocklist:     blMap,
+		localServices:    localServices,
+		lnAuthenticator:  lnAuth,
+		powAuthenticator: powAuth,
+		services:         services,
+		blocklist:        blMap,
 	}
 	err := proxy.UpdateServices(services)
 	if err != nil {
@@ -171,6 +174,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resourceName := target.ResourceName(r.URL.Path)
 
+	// Select the appropriate authenticator for this service.
+	authenticator := p.authenticatorForService(target)
+
 	// Determine auth level required to access service and dispatch request
 	// accordingly.
 	authLevel := target.AuthRequired(r)
@@ -202,7 +208,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// called in each case body rather than outside the switch so
 		// as to avoid calling this possibly expensive call for static
 		// resources.
-		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		acceptAuth := authenticator.Accept(&r.Header, resourceName)
 		if !acceptAuth {
 			if skipInvoiceCreation {
 				addCorsHeaders(w.Header())
@@ -233,7 +239,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r, resourceName, price)
+			p.handlePaymentRequired(
+				w, r, resourceName, price, authenticator,
+			)
 			return
 		}
 
@@ -245,7 +253,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		acceptAuth := authenticator.Accept(&r.Header, resourceName)
 		if !acceptAuth {
 			ok, err := target.freebieDB.CanPass(r, remoteIP)
 			if err != nil {
@@ -281,6 +289,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				p.handlePaymentRequired(
 					w, r, resourceName, target.Price,
+					authenticator,
 				)
 				return
 			}
@@ -315,6 +324,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
 	p.proxyBackend.ServeHTTP(w, r)
+}
+
+// authenticatorForService returns the appropriate authenticator for the given
+// service. PoW services use the PoW authenticator, all others use Lightning.
+func (p *Proxy) authenticatorForService(s *Service) auth.Authenticator {
+	if s.IsPoW() && p.powAuthenticator != nil {
+		return p.powAuthenticator
+	}
+	return p.lnAuthenticator
 }
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
@@ -475,9 +493,10 @@ func addCorsHeaders(header http.Header) {
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
-	serviceName string, servicePrice int64) {
+	serviceName string, servicePrice int64,
+	authenticator auth.Authenticator) {
 
-	header, err := p.authenticator.FreshChallengeHeader(
+	header, err := authenticator.FreshChallengeHeader(
 		serviceName, servicePrice,
 	)
 	if err != nil {
