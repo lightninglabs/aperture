@@ -1,6 +1,9 @@
 package auth
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 // MockAuthenticator is a mock implementation of the authenticator.
 type MockAuthenticator struct{}
@@ -18,6 +21,13 @@ func NewMockAuthenticator() *MockAuthenticator {
 // to a given backend service.
 func (a MockAuthenticator) Accept(header *http.Header, _ string) bool {
 	if header.Get("Authorization") != "" {
+		return true
+	}
+	// Check current spec header names first, then legacy.
+	if header.Get("Grpc-Metadata-Token") != "" {
+		return true
+	}
+	if header.Get("Token") != "" {
 		return true
 	}
 	if header.Get("Grpc-Metadata-macaroon") != "" {
@@ -38,15 +48,23 @@ func (a MockAuthenticator) FreshChallengeHeader(string, int64) (http.Header,
 		"Content-Type": []string{"application/grpc"},
 	}
 
-	str := "macaroon=\"AGIAJEemVQUTEyNCR0exk7ek9" +
-		"0Cg==\", invoice=\"lnbc1500n1pw5kjhmpp5fu6xhthlt2vucm" +
+	macBase64 := "AGIAJEemVQUTEyNCR0exk7ek90Cg=="
+	invoice := "lnbc1500n1pw5kjhmpp5fu6xhthlt2vucm" +
 		"zkx6c7wtlh2r625r30cyjsfqhu8rsx4xpz5lwqdpa2fjkzep6yptk" +
 		"sct5yp5hxgrrv96hx6twvusycn3qv9jx7ur5d9hkugr5dusx6cqzp" +
 		"gxqr23s79ruapxc4j5uskt4htly2salw4drq979d7rcela9wz02el" +
 		"hypmdzmzlnxuknpgfyfm86pntt8vvkvffma5qc9n50h4mvqhngadq" +
-		"y3ngqjcym5a\""
-	header.Set("WWW-Authenticate", lsatAuthScheme+" "+str)
-	header.Add("WWW-Authenticate", l402AuthScheme+" "+str)
+		"y3ngqjcym5a"
+
+	legacyStr := fmt.Sprintf(
+		"macaroon=\"%s\", invoice=\"%s\"", macBase64, invoice,
+	)
+	l402Str := fmt.Sprintf(
+		"version=\"0\", token=\"%s\", invoice=\"%s\"",
+		macBase64, invoice,
+	)
+	header.Set("WWW-Authenticate", lsatAuthScheme+" "+legacyStr)
+	header.Add("WWW-Authenticate", l402AuthScheme+" "+l402Str)
 
 	return header, nil
 }

@@ -1029,7 +1029,8 @@ func allowCORS(handler http.Handler, origins []string) http.Handler {
 		// Set the static header fields first.
 		w.Header().Set(
 			allowHeaders,
-			"Content-Type, Accept, Grpc-Metadata-Macaroon",
+			"Content-Type, Accept, Grpc-Metadata-Token, "+
+				"Token, Grpc-Metadata-Macaroon, Macaroon",
 		)
 		w.Header().Set(allowMethods, "GET, POST, DELETE")
 

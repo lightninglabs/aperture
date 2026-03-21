@@ -17,12 +17,22 @@ const (
 	// send the L402 by REST clients.
 	HeaderAuthorization = "Authorization"
 
-	// HeaderMacaroonMD is the HTTP header field name that is used to send
-	// the L402 by certain REST and gRPC clients.
+	// HeaderTokenMD is the HTTP header field name that is used to send
+	// the L402 by certain REST and gRPC clients using the current spec.
+	HeaderTokenMD = "Grpc-Metadata-Token"
+
+	// HeaderToken is the HTTP header field name that is used to send the
+	// L402 by our own gRPC clients using the current spec.
+	HeaderToken = "Token"
+
+	// HeaderMacaroonMD is the legacy HTTP header field name that is used
+	// to send the L402 by certain REST and gRPC clients. Kept for
+	// backwards compatibility.
 	HeaderMacaroonMD = "Grpc-Metadata-Macaroon"
 
-	// HeaderMacaroon is the HTTP header field name that is used to send the
-	// L402 by our own gRPC clients.
+	// HeaderMacaroon is the legacy HTTP header field name that is used to
+	// send the L402 by our own gRPC clients. Kept for backwards
+	// compatibility.
 	HeaderMacaroon = "Macaroon"
 )
 
@@ -33,20 +43,22 @@ var (
 )
 
 // FromHeader tries to extract authentication information from HTTP headers.
-// There are two supported formats that can be sent in four different header
+// There are multiple supported formats that can be sent in different header
 // fields:
-//  0. Authorization: LSAT <macBase64>:<preimageHex>
-//  1. Authorization: L402 <macBase64>:<preimageHex>
-//  2. Grpc-Metadata-Macaroon: <macHex>
-//  3. Macaroon: <macHex>
+//  0. Authorization: LSAT <tokenBase64>:<preimageHex>
+//  1. Authorization: L402 <tokenBase64>:<preimageHex>
+//  2. Grpc-Metadata-Token: <tokenHex>    (current spec)
+//  3. Token: <tokenHex>                  (current spec)
+//  4. Grpc-Metadata-Macaroon: <macHex>   (legacy, backwards compat)
+//  5. Macaroon: <macHex>                 (legacy, backwards compat)
 //
-// If only the macaroon is sent in header 2 or three then it is expected to have
+// If only the token is sent in header fields 2-5, then it is expected to have
 // a caveat with the preimage attached to it.
 func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, error) {
 	var authHeader string
 
 	switch {
-	// Header field 1 contains the macaroon and the preimage as distinct
+	// Header field 0/1 contains the token and the preimage as distinct
 	// values separated by a colon.
 	case header.Get(HeaderAuthorization) != "":
 		// Parse the content of the header field and check that it is in
@@ -72,13 +84,13 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 		if err != nil {
 			return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
-				"decode of macaroon failed: %v", err)
+				"decode of token failed: %v", err)
 		}
 		mac := &macaroon.Macaroon{}
 		err = mac.UnmarshalBinary(macBytes)
 		if err != nil {
 			return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
-				"unmarshal macaroon: %v", err)
+				"unmarshal token: %v", err)
 		}
 		preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 		if err != nil {
@@ -87,14 +99,22 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		}
 
 		// All done, we don't need to extract anything from the
-		// macaroon since the preimage was presented separately.
+		// token since the preimage was presented separately.
 		return mac, preimage, nil
 
-	// Header field 2: Contains only the macaroon.
+	// Header field 2: Current spec gRPC metadata with "token" key.
+	case header.Get(HeaderTokenMD) != "":
+		authHeader = header.Get(HeaderTokenMD)
+
+	// Header field 3: Current spec gRPC header with "Token" key.
+	case header.Get(HeaderToken) != "":
+		authHeader = header.Get(HeaderToken)
+
+	// Header field 4: Legacy gRPC metadata with "macaroon" key.
 	case header.Get(HeaderMacaroonMD) != "":
 		authHeader = header.Get(HeaderMacaroonMD)
 
-	// Header field 3: Contains only the macaroon.
+	// Header field 5: Legacy gRPC header with "Macaroon" key.
 	case header.Get(HeaderMacaroon) != "":
 		authHeader = header.Get(HeaderMacaroon)
 
@@ -103,18 +123,18 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 			"provided")
 	}
 
-	// For case 2 and 3, we need to actually unmarshal the macaroon to
-	// extract the preimage.
+	// For cases 2-5, we need to actually unmarshal the token to extract
+	// the preimage from its caveats.
 	macBytes, err := hex.DecodeString(authHeader)
 	if err != nil {
 		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
-			"macaroon failed: %v", err)
+			"token failed: %v", err)
 	}
 	mac := &macaroon.Macaroon{}
 	err = mac.UnmarshalBinary(macBytes)
 	if err != nil {
 		return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
-			"unmarshal macaroon: %v", err)
+			"unmarshal token: %v", err)
 	}
 	preimageHex, ok := HasCaveat(mac, PreimageKey)
 	if !ok {

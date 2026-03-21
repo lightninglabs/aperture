@@ -149,6 +149,31 @@ func TestL402Authenticator(t *testing.T) {
 				result: true,
 			},
 			{
+				id: "valid token metadata header (current spec)",
+				header: &http.Header{
+					l402.HeaderTokenMD: []string{
+						testMacHex,
+					},
+				},
+				result: true,
+			},
+			{
+				id: "valid token header (current spec)",
+				header: &http.Header{
+					l402.HeaderToken: []string{
+						testMacHex,
+					},
+				},
+				result: true,
+			},
+			{
+				id: "invalid token metadata header",
+				header: &http.Header{
+					l402.HeaderTokenMD: []string{"foo"},
+				},
+				result: false,
+			},
+			{
 				id: "valid macaroon header, wrong invoice state",
 				header: &http.Header{
 					l402.HeaderMacaroon: []string{

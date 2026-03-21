@@ -87,8 +87,16 @@ func tokenFromContext(ctx context.Context) (*TokenID, error) {
 	if !ok {
 		return nil, fmt.Errorf("context contains no metadata")
 	}
+
+	// Construct an HTTP header from the gRPC metadata so we can reuse
+	// FromHeader for parsing. The gRPC transport strips the
+	// "Grpc-Metadata-" prefix, so the metadata keys are just "token"
+	// and "macaroon". We map them to the HTTP header names that
+	// FromHeader expects.
 	header := &http.Header{
 		HeaderAuthorization: md.Get(HeaderAuthorization),
+		HeaderTokenMD:       md.Get("token"),
+		HeaderMacaroonMD:    md.Get("macaroon"),
 	}
 	log.Debugf("Auth header present in request: %s",
 		md.Get(HeaderAuthorization))

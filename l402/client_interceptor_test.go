@@ -345,11 +345,14 @@ func testInterceptor(t *testing.T, tc interceptTestCase, addL402 bool,
 
 	backendWg.Wait()
 	if tc.expectMacaroonCall1 {
-		require.Len(t, callMD, 1)
+		require.Len(t, callMD, 2)
 
-		// We expect the sent macaroon to be larger than the bare
-		// macaroon as it should contain the preimage now.
-		require.Greater(t, len(callMD["macaroon"]), len(testMacHex))
+		// We expect the sent token to be larger than the bare
+		// token as it should contain the preimage now. Both
+		// the "token" and legacy "macaroon" keys carry the
+		// same value.
+		require.Greater(t, len(callMD["token"]), len(testMacHex))
+		require.Equal(t, callMD["token"], callMD["macaroon"])
 	}
 
 	// Do we expect more calls? Then make sure we will wait for completion
@@ -404,11 +407,14 @@ func testInterceptor(t *testing.T, tc interceptTestCase, addL402 bool,
 		require.Equal(t, ErrNoToken, err)
 	}
 	if tc.expectMacaroonCall2 {
-		require.Len(t, callMD, 1)
+		require.Len(t, callMD, 2)
 
-		// We expect the sent macaroon to be larger than the bare
-		// macaroon as it should contain the preimage now.
-		require.Greater(t, len(callMD["macaroon"]), len(testMacHex))
+		// We expect the sent token to be larger than the bare
+		// token as it should contain the preimage now. Both
+		// the "token" and legacy "macaroon" keys carry the
+		// same value.
+		require.Greater(t, len(callMD["token"]), len(testMacHex))
+		require.Equal(t, callMD["token"], callMD["macaroon"])
 	}
 	require.Equal(t, tc.expectBackendCalls, numBackendCalls)
 }
@@ -449,11 +455,20 @@ func makeAuthHeaders(macBytes []byte, addL402 bool) []string {
 		"kvj5e77nmwqvpnq9qy9qsq72afzu7sfuppzqg3q2pn49hlh66rv7w60h2rua" +
 		"hx857g94s066yzxcjn4yccqc79779sd232v9ewluvu0tmusvht6r99rld8xs" +
 		"k287cpyac79r"
-	str := fmt.Sprintf("macaroon=\"%s\", invoice=\"%s\"",
-		base64.StdEncoding.EncodeToString(macBytes), invoice)
-	values := []string{"LSAT " + str}
+	macBase64 := base64.StdEncoding.EncodeToString(macBytes)
+
+	// Legacy LSAT header uses old "macaroon=" format.
+	legacyStr := fmt.Sprintf(
+		"macaroon=\"%s\", invoice=\"%s\"", macBase64, invoice,
+	)
+	values := []string{"LSAT " + legacyStr}
 	if addL402 {
-		values = append(values, "L402 "+str)
+		// Current L402 header uses "token=" with version parameter.
+		l402Str := fmt.Sprintf(
+			"version=\"0\", token=\"%s\", invoice=\"%s\"",
+			macBase64, invoice,
+		)
+		values = append(values, "L402 "+l402Str)
 	}
 
 	return values

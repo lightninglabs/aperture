@@ -64,9 +64,11 @@ const (
 
 var (
 	// authHeaderRegex is the regular expression the payment challenge must
-	// match for us to be able to parse the macaroon and invoice.
+	// match for us to be able to parse the token and invoice. We accept
+	// both "token=" (current spec) and "macaroon=" (legacy) key names,
+	// with an optional "version=" parameter prefix.
 	authHeaderRegex = regexp.MustCompile(
-		"(LSAT|L402) macaroon=\"(.*?)\", invoice=\"(.*?)\"",
+		`(LSAT|L402) (?:version="[^"]*", )?(?:token|macaroon)="([^"]+)", invoice="([^"]+)"`,
 	)
 
 	// errPaymentFailedTerminally is signaled by the payment tracking method

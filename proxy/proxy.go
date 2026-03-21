@@ -468,7 +468,9 @@ func addCorsHeaders(header http.Header) {
 	header.Add("Access-Control-Expose-Headers", "WWW-Authenticate")
 	header.Add(
 		"Access-Control-Allow-Headers",
-		"Authorization, Grpc-Metadata-macaroon, WWW-Authenticate",
+		"Authorization, Grpc-Metadata-Token, Token, "+
+			"Grpc-Metadata-macaroon, Macaroon, "+
+			"WWW-Authenticate",
 	)
 }
 
