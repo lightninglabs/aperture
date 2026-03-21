@@ -422,7 +422,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	defer backendService.Stop()
 
 	// Dial to the proxy now, without any authentication.
-	conn, err := grpc.Dial(testProxyAddr, opts...)
+	conn, err := grpc.NewClient(testProxyAddr, opts...)
 	require.NoError(t, err)
 	client := proxytest.NewGreeterClient(conn)
 
@@ -458,7 +458,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	// Make sure that if we query an URL that is on the whitelist, we don't
 	// get the 402 response.
 	if len(tc.authWhitelist) > 0 {
-		conn, err = grpc.Dial(testProxyAddr, opts...)
+		conn, err = grpc.NewClient(testProxyAddr, opts...)
 		require.NoError(t, err)
 		client = proxytest.NewGreeterClient(conn)
 
@@ -481,7 +481,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 		grpc.WithTransportCredentials(creds),
 		grpc.WithPerRPCCredentials(cred),
 	}
-	conn, err = grpc.Dial(testProxyAddr, opts...)
+	conn, err = grpc.NewClient(testProxyAddr, opts...)
 	require.NoError(t, err)
 	client = proxytest.NewGreeterClient(conn)
 
