@@ -11,17 +11,19 @@ SELECT *
 FROM mpp_sessions
 WHERE session_id = $1;
 
--- name: UpdateMPPSessionDeposit :exec
+-- name: UpdateMPPSessionDeposit :execresult
 UPDATE mpp_sessions
 SET deposit_sats = deposit_sats + $1, updated_at = $2
 WHERE session_id = $3 AND status = 'open';
 
--- name: UpdateMPPSessionSpent :exec
+-- name: UpdateMPPSessionSpent :execresult
 UPDATE mpp_sessions
 SET spent_sats = spent_sats + $1, updated_at = $2
-WHERE session_id = $3 AND status = 'open';
+WHERE session_id = $3
+  AND status = 'open'
+  AND deposit_sats - spent_sats >= $1;
 
--- name: CloseMPPSession :exec
+-- name: CloseMPPSession :execresult
 UPDATE mpp_sessions
 SET status = 'closed', updated_at = $1
 WHERE session_id = $2 AND status = 'open';

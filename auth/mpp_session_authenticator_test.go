@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/zpay32"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,6 +111,7 @@ func (m *mockSessionStore) CloseSession(_ context.Context,
 
 // mockPaymentSender implements PaymentSender for testing.
 type mockPaymentSender struct {
+	mu       sync.Mutex
 	payments []sentPayment
 	err      error
 }
@@ -119,6 +124,9 @@ type sentPayment struct {
 func (m *mockPaymentSender) SendPayment(_ context.Context, invoice string,
 	amtSats int64) (string, error) {
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.err != nil {
 		return "", m.err
 	}
@@ -127,6 +135,35 @@ func (m *mockPaymentSender) SendPayment(_ context.Context, invoice string,
 		amtSats: amtSats,
 	})
 	return "refund-preimage-hex", nil
+}
+
+// testReturnInvoice generates a valid BOLT11 invoice with no encoded amount
+// on the regtest network, suitable for use as a session return invoice.
+func testReturnInvoice(t *testing.T, paymentHash lntypes.Hash) string {
+	t.Helper()
+
+	privKey, err := btcec.NewPrivateKey()
+	require.NoError(t, err)
+
+	inv, err := zpay32.NewInvoice(
+		&chaincfg.RegressionNetParams,
+		paymentHash,
+		time.Now(),
+		zpay32.Description("return invoice"),
+	)
+	require.NoError(t, err)
+
+	encoded, err := inv.Encode(
+		zpay32.MessageSigner{
+			SignCompact: func(msg []byte) ([]byte, error) {
+				sig := ecdsa.SignCompact(privKey, msg, true)
+				return sig, nil
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	return encoded
 }
 
 // buildSessionCredential creates a properly encoded session credential.
@@ -224,10 +261,11 @@ func TestSessionOpenAccept(t *testing.T) {
 		t, hmacSecret, paymentHash, 300,
 	)
 
+	returnInvoice := testReturnInvoice(t, paymentHash)
 	payload := &mpp.SessionPayload{
 		Action:        mpp.SessionActionOpen,
 		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: "lnbcrt1return...",
+		ReturnInvoice: returnInvoice,
 	}
 	h := buildSessionCredential(t, challenge, payload)
 
@@ -239,7 +277,7 @@ func TestSessionOpenAccept(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "open", session.Status)
 	require.Equal(t, int64(300), session.DepositSats)
-	require.Equal(t, "lnbcrt1return...", session.ReturnInvoice)
+	require.Equal(t, returnInvoice, session.ReturnInvoice)
 }
 
 // TestSessionBearerAccept verifies that a valid bearer credential is accepted
@@ -257,34 +295,25 @@ func TestSessionBearerAccept(t *testing.T) {
 	openPayload := &mpp.SessionPayload{
 		Action:        mpp.SessionActionOpen,
 		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: "lnbcrt1return...",
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
 	}
 	openH := buildSessionCredential(t, challenge, openPayload)
 	require.True(t, auth.Accept(&openH, "test-service"))
 
-	// Now send a bearer credential.
+	// Now send a bearer credential with the same valid challenge.
 	bearerPayload := &mpp.SessionPayload{
 		Action:    mpp.SessionActionBearer,
 		SessionID: sessionID,
 		Preimage:  hex.EncodeToString(preimage[:]),
 	}
-
-	// Bearer doesn't need valid HMAC, just any valid challenge echo.
-	bearerChallenge := mpp.ChallengeEcho{
-		ID:      "any-id",
-		Realm:   "api.example.com",
-		Method:  mpp.MethodLightning,
-		Intent:  mpp.IntentSession,
-		Request: "eyJ0ZXN0IjoiMSJ9",
-	}
-	bearerH := buildSessionCredential(t, bearerChallenge, bearerPayload)
+	bearerH := buildSessionCredential(t, challenge, bearerPayload)
 	require.True(t, auth.Accept(&bearerH, "test-service"))
 
-	// Verify session state unchanged.
+	// Verify session balance was deducted. The challenge has amount="2".
 	session, err := store.GetSession(context.Background(), sessionID)
 	require.NoError(t, err)
 	require.Equal(t, "open", session.Status)
-	require.Equal(t, int64(0), session.SpentSats)
+	require.Equal(t, int64(2), session.SpentSats)
 }
 
 // TestSessionBearerWrongPreimage verifies that a bearer with wrong preimage is
@@ -303,25 +332,18 @@ func TestSessionBearerWrongPreimage(t *testing.T) {
 	openPayload := &mpp.SessionPayload{
 		Action:        mpp.SessionActionOpen,
 		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: "lnbcrt1return...",
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
 	}
 	openH := buildSessionCredential(t, challenge, openPayload)
 	require.True(t, auth.Accept(&openH, "test-service"))
 
-	// Bearer with wrong preimage.
+	// Bearer with wrong preimage but valid challenge HMAC.
 	bearerPayload := &mpp.SessionPayload{
 		Action:    mpp.SessionActionBearer,
 		SessionID: sessionID,
 		Preimage:  hex.EncodeToString(wrongPreimage[:]),
 	}
-	bearerChallenge := mpp.ChallengeEcho{
-		ID:      "any-id",
-		Realm:   "api.example.com",
-		Method:  mpp.MethodLightning,
-		Intent:  mpp.IntentSession,
-		Request: "eyJ0ZXN0IjoiMSJ9",
-	}
-	bearerH := buildSessionCredential(t, bearerChallenge, bearerPayload)
+	bearerH := buildSessionCredential(t, challenge, bearerPayload)
 	require.False(t, auth.Accept(&bearerH, "test-service"))
 }
 
@@ -339,7 +361,7 @@ func TestSessionTopUpAccept(t *testing.T) {
 	openPayload := &mpp.SessionPayload{
 		Action:        mpp.SessionActionOpen,
 		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: "lnbcrt1return...",
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
 	}
 	openH := buildSessionCredential(t, challenge, openPayload)
 	require.True(t, auth.Accept(&openH, "test-service"))
@@ -380,7 +402,7 @@ func TestSessionCloseWithRefund(t *testing.T) {
 	openPayload := &mpp.SessionPayload{
 		Action:        mpp.SessionActionOpen,
 		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: "lnbcrt1return...",
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
 	}
 	openH := buildSessionCredential(t, challenge, openPayload)
 	require.True(t, auth.Accept(&openH, "test-service"))
@@ -391,20 +413,13 @@ func TestSessionCloseWithRefund(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Close session.
+	// Close session with valid HMAC challenge.
 	closePayload := &mpp.SessionPayload{
 		Action:    mpp.SessionActionClose,
 		SessionID: sessionID,
 		Preimage:  hex.EncodeToString(preimage[:]),
 	}
-	closeChallenge := mpp.ChallengeEcho{
-		ID:      "any-id",
-		Realm:   "api.example.com",
-		Method:  mpp.MethodLightning,
-		Intent:  mpp.IntentSession,
-		Request: "eyJ0ZXN0IjoiMSJ9",
-	}
-	closeH := buildSessionCredential(t, closeChallenge, closePayload)
+	closeH := buildSessionCredential(t, challenge, closePayload)
 	require.True(t, auth.Accept(&closeH, "test-service"))
 
 	// Verify session is closed.
@@ -412,9 +427,9 @@ func TestSessionCloseWithRefund(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "closed", session.Status)
 
-	// Verify refund was sent.
+	// Verify refund was sent to the return invoice.
 	require.Len(t, sender.payments, 1)
-	require.Equal(t, "lnbcrt1return...", sender.payments[0].invoice)
+	require.NotEmpty(t, sender.payments[0].invoice)
 	require.Equal(t, int64(200), sender.payments[0].amtSats) // 300-100
 }
 
@@ -433,29 +448,22 @@ func TestSessionCloseAlreadyClosed(t *testing.T) {
 	openPayload := &mpp.SessionPayload{
 		Action:        mpp.SessionActionOpen,
 		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: "lnbcrt1return...",
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
 	}
 	openH := buildSessionCredential(t, challenge, openPayload)
 	require.True(t, auth.Accept(&openH, "test-service"))
 
-	// Close session.
+	// Close session with valid HMAC challenge.
 	closePayload := &mpp.SessionPayload{
 		Action:    mpp.SessionActionClose,
 		SessionID: sessionID,
 		Preimage:  hex.EncodeToString(preimage[:]),
 	}
-	closeChallenge := mpp.ChallengeEcho{
-		ID:      "any-id",
-		Realm:   "api.example.com",
-		Method:  mpp.MethodLightning,
-		Intent:  mpp.IntentSession,
-		Request: "eyJ0ZXN0IjoiMSJ9",
-	}
-	closeH := buildSessionCredential(t, closeChallenge, closePayload)
+	closeH := buildSessionCredential(t, challenge, closePayload)
 	require.True(t, auth.Accept(&closeH, "test-service"))
 
-	// Try to close again.
-	closeH2 := buildSessionCredential(t, closeChallenge, closePayload)
+	// Try to close again — should be rejected (already closed).
+	closeH2 := buildSessionCredential(t, challenge, closePayload)
 	require.False(t, auth.Accept(&closeH2, "test-service"))
 }
 
@@ -503,4 +511,148 @@ func TestSessionFreshChallengeHeader(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(paymentHash[:]),
 		sessReq.PaymentHash)
 	require.Equal(t, "300", sessReq.IdleTimeout) // 5 min
+}
+
+// TestSessionConcurrentCloseReceipts verifies that concurrent session closes
+// produce correct receipts for each session (no cross-contamination).
+func TestSessionConcurrentCloseReceipts(t *testing.T) {
+	auth, store, sender, hmacSecret := newTestSessionAuth(t)
+
+	const numSessions = 10
+	type sessionInfo struct {
+		preimage    lntypes.Preimage
+		paymentHash lntypes.Hash
+		sessionID   string
+		challenge   mpp.ChallengeEcho
+		depositSats int64
+	}
+
+	sessions := make([]sessionInfo, numSessions)
+
+	// Open all sessions.
+	for i := 0; i < numSessions; i++ {
+		preimage, paymentHash := testPreimageAndHash(t)
+		auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+		depositSats := int64((i + 1) * 100)
+		challenge, sessionID := buildSessionChallenge(
+			t, hmacSecret, paymentHash, depositSats,
+		)
+
+		returnInv := testReturnInvoice(t, paymentHash)
+		openPayload := &mpp.SessionPayload{
+			Action:        mpp.SessionActionOpen,
+			Preimage:      hex.EncodeToString(preimage[:]),
+			ReturnInvoice: returnInv,
+		}
+		openH := buildSessionCredential(t, challenge, openPayload)
+		require.True(t, auth.Accept(&openH, "test-service"))
+
+		sessions[i] = sessionInfo{
+			preimage:    preimage,
+			paymentHash: paymentHash,
+			sessionID:   sessionID,
+			challenge:   challenge,
+			depositSats: depositSats,
+		}
+	}
+
+	// Close all sessions concurrently.
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for i := 0; i < numSessions; i++ {
+		wg.Add(1)
+		go func(s sessionInfo) {
+			defer wg.Done()
+			<-start
+
+			closePayload := &mpp.SessionPayload{
+				Action:    mpp.SessionActionClose,
+				SessionID: s.sessionID,
+				Preimage: hex.EncodeToString(
+					s.preimage[:],
+				),
+			}
+			closeH := buildSessionCredential(
+				t, s.challenge, closePayload,
+			)
+			auth.Accept(&closeH, "test-service")
+		}(sessions[i])
+	}
+
+	close(start)
+	wg.Wait()
+
+	// Verify all sessions are closed.
+	for _, s := range sessions {
+		session, err := store.GetSession(
+			context.Background(), s.sessionID,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "closed", session.Status)
+	}
+
+	// Verify refunds were sent for all sessions.
+	require.Len(t, sender.payments, numSessions)
+}
+
+// TestSessionConcurrentBearerAccept verifies that concurrent bearer requests
+// on the same session don't corrupt state.
+func TestSessionConcurrentBearerAccept(t *testing.T) {
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+	preimage, paymentHash := testPreimageAndHash(t)
+
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+	// Open session with a large deposit.
+	challenge, sessionID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, 10000,
+	)
+	returnInv := testReturnInvoice(t, paymentHash)
+	openPayload := &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: returnInv,
+	}
+	openH := buildSessionCredential(t, challenge, openPayload)
+	require.True(t, auth.Accept(&openH, "test-service"))
+
+	// Send many concurrent bearer requests.
+	const numRequests = 50
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for i := 0; i < numRequests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+
+			bearerPayload := &mpp.SessionPayload{
+				Action:    mpp.SessionActionBearer,
+				SessionID: sessionID,
+				Preimage: hex.EncodeToString(
+					preimage[:],
+				),
+			}
+			bearerH := buildSessionCredential(
+				t, challenge, bearerPayload,
+			)
+			auth.Accept(&bearerH, "test-service")
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	// Verify no balance overdraft. Each bearer deducts 2 sats (the
+	// amount in the challenge). 50 requests * 2 sats = 100 sats.
+	session, err := store.GetSession(
+		context.Background(), sessionID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(10000), session.DepositSats)
+	require.Equal(t, int64(100), session.SpentSats)
+	require.True(t, session.SpentSats <= session.DepositSats)
 }

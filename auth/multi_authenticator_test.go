@@ -52,10 +52,6 @@ func TestMultiAuthenticatorAcceptFirstMatch(t *testing.T) {
 
 	result := multi.Accept(&h, "test-service")
 	require.True(t, result)
-
-	// Verify the second authenticator (index 1) was the one that
-	// accepted.
-	require.Equal(t, 1, multi.lastAcceptedIdx)
 }
 
 // TestMultiAuthenticatorAcceptNoneMatch verifies that Accept returns false
@@ -69,7 +65,6 @@ func TestMultiAuthenticatorAcceptNoneMatch(t *testing.T) {
 
 	result := multi.Accept(&h, "test-service")
 	require.False(t, result)
-	require.Equal(t, -1, multi.lastAcceptedIdx)
 }
 
 // TestMultiAuthenticatorChallengeHeaderMerge verifies that challenge headers
@@ -105,7 +100,7 @@ func TestMultiAuthenticatorChallengeHeaderMerge(t *testing.T) {
 }
 
 // TestMultiAuthenticatorReceiptDelegation verifies that ReceiptHeader
-// delegates to the authenticator that accepted the request.
+// delegates to the authenticator that provides a receipt for the credential.
 func TestMultiAuthenticatorReceiptDelegation(t *testing.T) {
 	receiptHdr := http.Header{
 		"Payment-Receipt": []string{"encoded-receipt-data"},
@@ -123,7 +118,7 @@ func TestMultiAuthenticatorReceiptDelegation(t *testing.T) {
 	// Accept should select auth2.
 	require.True(t, multi.Accept(&h, "test-service"))
 
-	// ReceiptHeader should delegate to auth2.
+	// ReceiptHeader should find auth2's receipt by trying each provider.
 	receipt := multi.ReceiptHeader(&h, "test-service")
 	require.NotNil(t, receipt)
 	require.Equal(t, "encoded-receipt-data",
@@ -131,7 +126,7 @@ func TestMultiAuthenticatorReceiptDelegation(t *testing.T) {
 }
 
 // TestMultiAuthenticatorReceiptNoProvider verifies that ReceiptHeader returns
-// nil when the accepting authenticator does not implement ReceiptProvider.
+// nil when no authenticator implements ReceiptProvider.
 func TestMultiAuthenticatorReceiptNoProvider(t *testing.T) {
 	auth1 := &mockAuthenticator{acceptResult: true}
 	multi := NewMultiAuthenticator(auth1)
@@ -139,25 +134,23 @@ func TestMultiAuthenticatorReceiptNoProvider(t *testing.T) {
 
 	require.True(t, multi.Accept(&h, "test-service"))
 
-	// L402Authenticator doesn't implement ReceiptProvider, so nil.
+	// mockAuthenticator doesn't implement ReceiptProvider, so nil.
 	receipt := multi.ReceiptHeader(&h, "test-service")
 	require.Nil(t, receipt)
 }
 
-// TestMultiAuthenticatorReceiptBeforeAccept verifies that ReceiptHeader
-// returns nil when called before any Accept.
-func TestMultiAuthenticatorReceiptBeforeAccept(t *testing.T) {
+// TestMultiAuthenticatorReceiptNilFromProvider verifies that ReceiptHeader
+// returns nil when the ReceiptProvider returns nil (e.g., the credential
+// type doesn't match what that provider handles).
+func TestMultiAuthenticatorReceiptNilFromProvider(t *testing.T) {
 	auth1 := &mockAuthWithReceipt{
 		mockAuthenticator: mockAuthenticator{acceptResult: true},
-		receipt: http.Header{
-			"Payment-Receipt": []string{"data"},
-		},
+		receipt:           nil, // Provider returns nil.
 	}
 
 	multi := NewMultiAuthenticator(auth1)
 	h := make(http.Header)
 
-	// No Accept called yet.
 	receipt := multi.ReceiptHeader(&h, "test-service")
 	require.Nil(t, receipt)
 }

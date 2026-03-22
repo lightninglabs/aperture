@@ -51,22 +51,3 @@ type ChargePayload struct {
 	// HTLC settlement, encoded as a lowercase hex string (64 characters).
 	Preimage string `json:"preimage"`
 }
-
-// ChargeReceipt extends the base Receipt with Lightning charge-specific fields
-// per draft-lightning-charge-00 Section 10.2.
-type ChargeReceipt struct {
-	// Method is always "lightning".
-	Method string `json:"method"`
-
-	// ChallengeID is the challenge identifier for audit correlation.
-	ChallengeID string `json:"challengeId"`
-
-	// Reference is the payment hash as a lowercase hex string.
-	Reference string `json:"reference"`
-
-	// Status is always "success".
-	Status string `json:"status"`
-
-	// Timestamp is the settlement time in RFC 3339 format.
-	Timestamp string `json:"timestamp"`
-}

@@ -5,15 +5,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/zpay32"
 )
 
 const (
@@ -59,10 +62,14 @@ type MPPSessionAuthenticator struct {
 	// idleTimeout is the idle timeout for open sessions.
 	idleTimeout time.Duration
 
-	// lastCloseResult caches the refund outcome from the most recent
-	// close action so ReceiptHeader can include it. Protected by mu.
-	mu              sync.Mutex
-	lastCloseResult *closeResult
+	// chainParams identifies the Bitcoin network for BOLT11 decoding.
+	chainParams *chaincfg.Params
+
+	// closeResults caches refund outcomes from close actions keyed by
+	// sessionID so ReceiptHeader can include the correct refund data.
+	// Using sync.Map avoids the race where concurrent closes could
+	// overwrite each other's results.
+	closeResults sync.Map
 }
 
 // closeResult stores the outcome of a session close for receipt generation.
@@ -113,6 +120,7 @@ func NewMPPSessionAuthenticator(
 		network:           cfg.Network,
 		depositMultiplier: multiplier,
 		idleTimeout:       timeout,
+		chainParams:       networkToChainParams(cfg.Network),
 	}
 }
 
@@ -142,20 +150,23 @@ func (a *MPPSessionAuthenticator) Accept(header *http.Header,
 		return false
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), 10*time.Second,
+	)
+	defer cancel()
 
 	switch payload.Action {
 	case mpp.SessionActionOpen:
 		return a.handleOpen(ctx, cred, &payload)
 
 	case mpp.SessionActionBearer:
-		return a.handleBearer(ctx, &payload)
+		return a.handleBearer(ctx, cred, &payload)
 
 	case mpp.SessionActionTopUp:
 		return a.handleTopUp(ctx, cred, &payload)
 
 	case mpp.SessionActionClose:
-		return a.handleClose(ctx, &payload)
+		return a.handleClose(ctx, cred, &payload)
 
 	default:
 		log.Debugf("MPP Session: Unknown action: %s", payload.Action)
@@ -225,9 +236,22 @@ func (a *MPPSessionAuthenticator) handleOpen(ctx context.Context,
 		return false
 	}
 
-	// Validate return invoice. We just check it's non-empty for now.
+	// Validate return invoice is a valid BOLT11 invoice with no
+	// encoded amount per the spec.
 	if payload.ReturnInvoice == "" {
 		log.Debugf("MPP Session: Missing return invoice for open")
+		return false
+	}
+	inv, err := zpay32.Decode(
+		payload.ReturnInvoice, a.chainParams,
+	)
+	if err != nil {
+		log.Debugf("MPP Session: Invalid return invoice: %v", err)
+		return false
+	}
+	if inv.MilliSat != nil {
+		log.Debugf("MPP Session: Return invoice must not have " +
+			"an encoded amount")
 		return false
 	}
 
@@ -267,7 +291,15 @@ func (a *MPPSessionAuthenticator) handleOpen(ctx context.Context,
 // handleBearer verifies a bearer action credential against an existing
 // session.
 func (a *MPPSessionAuthenticator) handleBearer(ctx context.Context,
-	payload *mpp.SessionPayload) bool {
+	cred *mpp.Credential, payload *mpp.SessionPayload) bool {
+
+	// Verify challenge HMAC binding.
+	params := cred.Challenge.ToChallengeParams()
+	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
+		log.Debugf("MPP Session: Challenge ID verification " +
+			"failed for bearer")
+		return false
+	}
 
 	if payload.SessionID == "" || payload.Preimage == "" {
 		log.Debugf("MPP Session: Missing sessionId or preimage " +
@@ -300,8 +332,34 @@ func (a *MPPSessionAuthenticator) handleBearer(ctx context.Context,
 		return false
 	}
 
-	log.Tracef("MPP Session: Bearer accepted for session %s",
-		payload.SessionID)
+	// Deduct the service price from the session balance. The price is
+	// embedded in the challenge request's amount field.
+	var sessReq mpp.SessionRequest
+	if err := mpp.DecodeRequest(
+		cred.Challenge.Request, &sessReq,
+	); err != nil {
+		log.Debugf("MPP Session: Failed to decode bearer "+
+			"request: %v", err)
+		return false
+	}
+
+	price, err := strconv.ParseInt(sessReq.Amount, 10, 64)
+	if err != nil || price <= 0 {
+		log.Debugf("MPP Session: Invalid price in bearer "+
+			"request: %v", err)
+		return false
+	}
+
+	if err := a.sessionStore.DeductSessionBalance(
+		ctx, payload.SessionID, price,
+	); err != nil {
+		log.Debugf("MPP Session: Insufficient balance for "+
+			"session %s: %v", payload.SessionID, err)
+		return false
+	}
+
+	log.Tracef("MPP Session: Bearer accepted for session %s "+
+		"(deducted %d sats)", payload.SessionID, price)
 	return true
 }
 
@@ -416,7 +474,15 @@ func (a *MPPSessionAuthenticator) handleTopUp(ctx context.Context,
 
 // handleClose verifies a close action credential and initiates the refund.
 func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
-	payload *mpp.SessionPayload) bool {
+	cred *mpp.Credential, payload *mpp.SessionPayload) bool {
+
+	// Verify challenge HMAC binding.
+	params := cred.Challenge.ToChallengeParams()
+	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
+		log.Debugf("MPP Session: Challenge ID verification " +
+			"failed for close")
+		return false
+	}
 
 	if payload.SessionID == "" || payload.Preimage == "" {
 		log.Debugf("MPP Session: Missing sessionId or preimage " +
@@ -485,14 +551,12 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 		refundStatus = "failed"
 	}
 
-	// Cache the close result for ReceiptHeader.
-	a.mu.Lock()
-	a.lastCloseResult = &closeResult{
+	// Cache the close result for ReceiptHeader, keyed by sessionID.
+	a.closeResults.Store(payload.SessionID, &closeResult{
 		sessionID:    payload.SessionID,
 		refundSats:   refundSats,
 		refundStatus: refundStatus,
-	}
-	a.mu.Unlock()
+	})
 
 	log.Infof("MPP Session: Closed session %s (refund=%d status=%s)",
 		payload.SessionID, refundSats, refundStatus)
@@ -506,8 +570,13 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 	servicePrice int64) (http.Header, error) {
 
-	// Compute deposit amount.
-	depositSats := servicePrice * int64(a.depositMultiplier)
+	// Compute deposit amount with overflow check.
+	mult := int64(a.depositMultiplier)
+	if servicePrice > 0 && mult > math.MaxInt64/servicePrice {
+		return nil, fmt.Errorf("MPP Session: deposit overflow: "+
+			"price=%d multiplier=%d", servicePrice, mult)
+	}
+	depositSats := servicePrice * mult
 
 	// Create a deposit invoice.
 	paymentRequest, paymentHash, err := a.challenger.NewChallenge(
@@ -536,11 +605,15 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 			"request: %w", err)
 	}
 
+	expires := time.Now().Add(defaultChallengeExpiry).UTC().Format(
+		time.RFC3339,
+	)
 	params := &mpp.ChallengeParams{
 		Realm:   a.realm,
 		Method:  mpp.MethodLightning,
 		Intent:  mpp.IntentSession,
 		Request: encodedRequest,
+		Expires: expires,
 	}
 	params.ID = mpp.ComputeChallengeID(a.hmacSecret, params)
 
@@ -581,12 +654,13 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 			Timestamp: now,
 		}
 
-		// Retrieve the cached close result.
-		a.mu.Lock()
-		cr := a.lastCloseResult
-		a.mu.Unlock()
-
-		if cr != nil && cr.sessionID == payload.SessionID {
+		// Retrieve and delete the cached close result for this
+		// session. LoadAndDelete is atomic and ensures each close
+		// result is consumed exactly once.
+		if val, ok := a.closeResults.LoadAndDelete(
+			payload.SessionID,
+		); ok {
+			cr := val.(*closeResult)
 			sessReceipt.RefundSats = cr.refundSats
 			sessReceipt.RefundStatus = cr.refundStatus
 		}
@@ -633,4 +707,21 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 	}
 
 	return receiptHeader
+}
+
+// networkToChainParams converts a network name string to the corresponding
+// btcd chain parameters for BOLT11 invoice decoding.
+func networkToChainParams(network string) *chaincfg.Params {
+	switch network {
+	case "mainnet":
+		return &chaincfg.MainNetParams
+	case "testnet":
+		return &chaincfg.TestNet3Params
+	case "regtest":
+		return &chaincfg.RegressionNetParams
+	case "signet":
+		return &chaincfg.SigNetParams
+	default:
+		return &chaincfg.MainNetParams
+	}
 }

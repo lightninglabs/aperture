@@ -6,10 +6,11 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
-	CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams) error
+	CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams) (sql.Result, error)
 	CountL402Transactions(ctx context.Context) (int64, error)
 	CountL402TransactionsByDateRange(ctx context.Context, arg CountL402TransactionsByDateRangeParams) (int64, error)
 	CountL402TransactionsByService(ctx context.Context, serviceName string) (int64, error)
@@ -42,8 +43,8 @@ type Querier interface {
 	SetExpiry(ctx context.Context, arg SetExpiryParams) error
 	SetRemotePubKey(ctx context.Context, arg SetRemotePubKeyParams) error
 	UpdateL402TransactionState(ctx context.Context, arg UpdateL402TransactionStateParams) (int64, error)
-	UpdateMPPSessionDeposit(ctx context.Context, arg UpdateMPPSessionDepositParams) error
-	UpdateMPPSessionSpent(ctx context.Context, arg UpdateMPPSessionSpentParams) error
+	UpdateMPPSessionDeposit(ctx context.Context, arg UpdateMPPSessionDepositParams) (sql.Result, error)
+	UpdateMPPSessionSpent(ctx context.Context, arg UpdateMPPSessionSpentParams) (sql.Result, error)
 	UpsertOnion(ctx context.Context, arg UpsertOnionParams) error
 	UpsertService(ctx context.Context, arg UpsertServiceParams) error
 }

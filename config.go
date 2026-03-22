@@ -106,6 +106,12 @@ func (a *AuthConfig) validate() error {
 		return nil
 	}
 
+	// Sessions require MPP to be enabled.
+	if a.EnableSessions && !a.EnableMPP {
+		return errors.New("enablesessions requires enablempp " +
+			"to be set")
+	}
+
 	switch {
 	// If LndHost is set we connect directly to the LND node.
 	case a.LndHost != "":

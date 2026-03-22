@@ -2,7 +2,6 @@ package aperture
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
@@ -409,11 +408,32 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 	a.adminCleanup = adminCleanup
 
+	// Create a payment sender for MPP session refunds if sessions are
+	// enabled and we have a direct LND connection.
+	var paymentSender auth.PaymentSender
+	if a.cfg.Authenticator.EnableSessions &&
+		a.cfg.Authenticator.LndHost != "" {
+
+		authCfg := a.cfg.Authenticator
+		adminClient, err := lndclient.NewBasicClient(
+			authCfg.LndHost, authCfg.TLSPath,
+			authCfg.MacDir, authCfg.Network,
+		)
+		if err != nil {
+			log.Warnf("MPP: Unable to create admin LND client "+
+				"for session refunds: %v", err)
+		} else {
+			paymentSender = challenger.NewLndPaymentSender(
+				adminClient,
+			)
+		}
+	}
+
 	// Create the proxy and connect it to lnd.
 	mintTxnStore := asMintTransactionStore(txnStore)
 	a.proxy, a.proxyCleanup, err = createProxy(
 		a.cfg, a.challenger, secretStore, mppSessionStore,
-		mintTxnStore, adminPriority, adminFallback,
+		paymentSender, mintTxnStore, adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -1573,7 +1593,7 @@ func asMintTransactionStore(
 // deriveHMACSecret derives a deterministic HMAC secret for MPP challenge
 // binding. It uses a well-known key hash with the secret store. If the secret
 // doesn't exist yet, it creates one.
-func deriveHMACSecret(store mint.SecretStore) []byte {
+func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
 	// Use a deterministic key hash for the MPP HMAC secret.
 	keyHash := sha256.Sum256([]byte("aperture-mpp-hmac-secret-v1"))
 
@@ -1582,21 +1602,12 @@ func deriveHMACSecret(store mint.SecretStore) []byte {
 		// Secret doesn't exist yet, create it.
 		secret, err = store.NewSecret(context.Background(), keyHash)
 		if err != nil {
-			// If we can't create a secret, generate a random one.
-			// This means challenges won't survive restarts, but
-			// the server will still function.
-			log.Warnf("Failed to store HMAC secret, using "+
-				"ephemeral: %v", err)
-			var random [32]byte
-			if _, err := rand.Read(random[:]); err != nil {
-				log.Errorf("Failed to generate random "+
-					"HMAC secret: %v", err)
-			}
-			return random[:]
+			return nil, fmt.Errorf("failed to derive MPP "+
+				"HMAC secret: %w", err)
 		}
 	}
 
-	return secret[:]
+	return secret[:], nil
 }
 
 // createProxy creates the proxy with all the services it needs.
@@ -1605,7 +1616,7 @@ func deriveHMACSecret(store mint.SecretStore) []byte {
 // backend matching fails (e.g. dashboard catch-all static file server).
 func createProxy(cfg *Config, challenger challenger.Challenger,
 	store mint.SecretStore, mppSessionStore auth.SessionStore,
-	txnStore mint.TransactionStore,
+	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
 ) (*proxy.Proxy, func(), error) {
 
@@ -1628,7 +1639,11 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 
 		// Generate an HMAC secret for challenge binding. We derive
 		// it from a deterministic key stored via the secret store.
-		hmacSecret := deriveHMACSecret(store)
+		hmacSecret, err := deriveHMACSecret(store)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP HMAC secret: %w",
+				err)
+		}
 
 		network := cfg.Authenticator.Network
 		if network == "" {
@@ -1659,6 +1674,7 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 					Challenger:        challenger,
 					Checker:           challenger,
 					SessionStore:      mppSessionStore,
+					PaymentSender:     paymentSender,
 					Realm:             realm,
 					HMACSecret:        hmacSecret,
 					Network:           network,

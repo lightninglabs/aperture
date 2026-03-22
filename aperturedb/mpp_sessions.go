@@ -30,15 +30,16 @@ type MPPSessionsDB interface {
 
 	// UpdateMPPSessionDeposit atomically adds to the deposit balance.
 	UpdateMPPSessionDeposit(ctx context.Context,
-		arg sqlc.UpdateMPPSessionDepositParams) error
+		arg sqlc.UpdateMPPSessionDepositParams) (sql.Result, error)
 
 	// UpdateMPPSessionSpent atomically adds to the spent counter.
+	// The query includes a balance check: deposit_sats - spent_sats >= amount.
 	UpdateMPPSessionSpent(ctx context.Context,
-		arg sqlc.UpdateMPPSessionSpentParams) error
+		arg sqlc.UpdateMPPSessionSpentParams) (sql.Result, error)
 
 	// CloseMPPSession marks the session as closed.
 	CloseMPPSession(ctx context.Context,
-		arg sqlc.CloseMPPSessionParams) error
+		arg sqlc.CloseMPPSessionParams) (sql.Result, error)
 }
 
 // MPPSessionsTxOptions defines the set of db txn options the
@@ -166,15 +167,32 @@ func (s *MPPSessionsStore) GetSession(ctx context.Context,
 func (s *MPPSessionsStore) UpdateSessionBalance(ctx context.Context,
 	sessionID string, addSats int64) error {
 
+	if addSats <= 0 {
+		return fmt.Errorf("balance update must be positive, "+
+			"got %d", addSats)
+	}
+
 	var writeTxOpts MPPSessionsTxOptions
 	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx MPPSessionsDB) error {
-		return tx.UpdateMPPSessionDeposit(ctx,
+		result, err := tx.UpdateMPPSessionDeposit(ctx,
 			sqlc.UpdateMPPSessionDepositParams{
 				DepositSats: addSats,
 				UpdatedAt:   s.clock.Now().UTC(),
 				SessionID:   sessionID,
 			},
 		)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return fmt.Errorf("session %s not found or "+
+				"already closed", sessionID)
+		}
+		return nil
 	})
 
 	if err != nil {
@@ -193,29 +211,35 @@ func (s *MPPSessionsStore) UpdateSessionBalance(ctx context.Context,
 func (s *MPPSessionsStore) DeductSessionBalance(ctx context.Context,
 	sessionID string, amount int64) error {
 
+	if amount <= 0 {
+		return fmt.Errorf("deduction must be positive, got %d",
+			amount)
+	}
+
 	var writeTxOpts MPPSessionsTxOptions
 	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx MPPSessionsDB) error {
-		// First check balance.
-		session, err := tx.GetMPPSessionByID(ctx, sessionID)
-		if err != nil {
-			return err
-		}
-		if session.Status != "open" {
-			return fmt.Errorf("session %s is closed", sessionID)
-		}
-		available := session.DepositSats - session.SpentSats
-		if amount > available {
-			return fmt.Errorf("insufficient balance: need %d, "+
-				"have %d", amount, available)
-		}
-
-		return tx.UpdateMPPSessionSpent(ctx,
+		// Atomic UPDATE with balance check in the WHERE clause.
+		// This avoids the read-then-write TOCTOU race.
+		result, err := tx.UpdateMPPSessionSpent(ctx,
 			sqlc.UpdateMPPSessionSpentParams{
 				SpentSats: amount,
 				UpdatedAt: s.clock.Now().UTC(),
 				SessionID: sessionID,
 			},
 		)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return fmt.Errorf("session %s: not found, "+
+				"closed, or insufficient balance",
+				sessionID)
+		}
+		return nil
 	})
 
 	if err != nil {
@@ -235,10 +259,24 @@ func (s *MPPSessionsStore) CloseSession(ctx context.Context,
 
 	var writeTxOpts MPPSessionsTxOptions
 	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx MPPSessionsDB) error {
-		return tx.CloseMPPSession(ctx, sqlc.CloseMPPSessionParams{
-			UpdatedAt: s.clock.Now().UTC(),
-			SessionID: sessionID,
-		})
+		result, err := tx.CloseMPPSession(ctx,
+			sqlc.CloseMPPSessionParams{
+				UpdatedAt: s.clock.Now().UTC(),
+				SessionID: sessionID,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return fmt.Errorf("session %s not found or "+
+				"already closed", sessionID)
+		}
+		return nil
 	})
 
 	if err != nil {

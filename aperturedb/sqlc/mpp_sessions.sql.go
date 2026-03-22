@@ -7,10 +7,11 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
-const closeMPPSession = `-- name: CloseMPPSession :exec
+const closeMPPSession = `-- name: CloseMPPSession :execresult
 UPDATE mpp_sessions
 SET status = 'closed', updated_at = $1
 WHERE session_id = $2 AND status = 'open'
@@ -21,9 +22,8 @@ type CloseMPPSessionParams struct {
 	SessionID string
 }
 
-func (q *Queries) CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams) error {
-	_, err := q.db.ExecContext(ctx, closeMPPSession, arg.UpdatedAt, arg.SessionID)
-	return err
+func (q *Queries) CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, closeMPPSession, arg.UpdatedAt, arg.SessionID)
 }
 
 const getMPPSessionByID = `-- name: GetMPPSessionByID :one
@@ -85,7 +85,7 @@ func (q *Queries) InsertMPPSession(ctx context.Context, arg InsertMPPSessionPara
 	return id, err
 }
 
-const updateMPPSessionDeposit = `-- name: UpdateMPPSessionDeposit :exec
+const updateMPPSessionDeposit = `-- name: UpdateMPPSessionDeposit :execresult
 UPDATE mpp_sessions
 SET deposit_sats = deposit_sats + $1, updated_at = $2
 WHERE session_id = $3 AND status = 'open'
@@ -97,15 +97,16 @@ type UpdateMPPSessionDepositParams struct {
 	SessionID   string
 }
 
-func (q *Queries) UpdateMPPSessionDeposit(ctx context.Context, arg UpdateMPPSessionDepositParams) error {
-	_, err := q.db.ExecContext(ctx, updateMPPSessionDeposit, arg.DepositSats, arg.UpdatedAt, arg.SessionID)
-	return err
+func (q *Queries) UpdateMPPSessionDeposit(ctx context.Context, arg UpdateMPPSessionDepositParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, updateMPPSessionDeposit, arg.DepositSats, arg.UpdatedAt, arg.SessionID)
 }
 
-const updateMPPSessionSpent = `-- name: UpdateMPPSessionSpent :exec
+const updateMPPSessionSpent = `-- name: UpdateMPPSessionSpent :execresult
 UPDATE mpp_sessions
 SET spent_sats = spent_sats + $1, updated_at = $2
-WHERE session_id = $3 AND status = 'open'
+WHERE session_id = $3
+  AND status = 'open'
+  AND deposit_sats - spent_sats >= $1
 `
 
 type UpdateMPPSessionSpentParams struct {
@@ -114,7 +115,6 @@ type UpdateMPPSessionSpentParams struct {
 	SessionID string
 }
 
-func (q *Queries) UpdateMPPSessionSpent(ctx context.Context, arg UpdateMPPSessionSpentParams) error {
-	_, err := q.db.ExecContext(ctx, updateMPPSessionSpent, arg.SpentSats, arg.UpdatedAt, arg.SessionID)
-	return err
+func (q *Queries) UpdateMPPSessionSpent(ctx context.Context, arg UpdateMPPSessionSpentParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, updateMPPSessionSpent, arg.SpentSats, arg.UpdatedAt, arg.SessionID)
 }

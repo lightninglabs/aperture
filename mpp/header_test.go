@@ -231,14 +231,28 @@ func TestParseCredentialErrors(t *testing.T) {
 		{
 			name: "missing challenge.id",
 			header: "Payment " + Base64URLEncode(
-				[]byte(`{"challenge":{"method":"lightning","intent":"charge","request":"abc"},"payload":{}}`),
+				[]byte(`{"challenge":{"realm":"r","method":"lightning","intent":"charge","request":"abc"},"payload":{}}`),
 			),
 			errMsg: "missing challenge.id",
 		},
 		{
+			name: "missing challenge.realm",
+			header: "Payment " + Base64URLEncode(
+				[]byte(`{"challenge":{"id":"1","method":"lightning","intent":"charge","request":"abc"},"payload":{}}`),
+			),
+			errMsg: "missing challenge.realm",
+		},
+		{
+			name: "missing challenge.request",
+			header: "Payment " + Base64URLEncode(
+				[]byte(`{"challenge":{"id":"1","realm":"r","method":"lightning","intent":"charge"},"payload":{}}`),
+			),
+			errMsg: "missing challenge.request",
+		},
+		{
 			name: "missing payload",
 			header: "Payment " + Base64URLEncode(
-				[]byte(`{"challenge":{"id":"1","method":"lightning","intent":"charge","request":"abc"}}`),
+				[]byte(`{"challenge":{"id":"1","realm":"r","method":"lightning","intent":"charge","request":"abc"}}`),
 			),
 			errMsg: "missing payload",
 		},

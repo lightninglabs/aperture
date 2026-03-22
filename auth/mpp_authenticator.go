@@ -34,6 +34,9 @@ type MPPAuthenticator struct {
 	// network identifies the Lightning Network (e.g., "mainnet",
 	// "regtest", "signet").
 	network string
+
+	// challengeExpiry is the duration after which a challenge expires.
+	challengeExpiry time.Duration
 }
 
 // Compile-time interface checks.
@@ -42,15 +45,20 @@ var _ ReceiptProvider = (*MPPAuthenticator)(nil)
 
 // NewMPPAuthenticator creates a new authenticator for the Payment HTTP
 // Authentication Scheme with the "charge" intent.
+// defaultChallengeExpiry is the default challenge expiration duration.
+const defaultChallengeExpiry = 15 * time.Minute
+
 func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
-	realm string, hmacSecret []byte, network string) *MPPAuthenticator {
+	realm string, hmacSecret []byte,
+	network string) *MPPAuthenticator {
 
 	return &MPPAuthenticator{
-		challenger: challenger,
-		checker:    checker,
-		realm:      realm,
-		hmacSecret: hmacSecret,
-		network:    network,
+		challenger:      challenger,
+		checker:         checker,
+		realm:           realm,
+		hmacSecret:      hmacSecret,
+		network:         network,
+		challengeExpiry: defaultChallengeExpiry,
 	}
 }
 
@@ -193,12 +201,16 @@ func (a *MPPAuthenticator) FreshChallengeHeader(serviceName string,
 			"request: %w", err)
 	}
 
-	// Build challenge params.
+	// Build challenge params with expiry.
+	expires := time.Now().Add(a.challengeExpiry).UTC().Format(
+		time.RFC3339,
+	)
 	params := &mpp.ChallengeParams{
 		Realm:   a.realm,
 		Method:  mpp.MethodLightning,
 		Intent:  mpp.IntentCharge,
 		Request: encodedRequest,
+		Expires: expires,
 	}
 
 	// Compute the HMAC challenge ID.

@@ -96,6 +96,14 @@ func ParseCredential(h *http.Header) (*Credential, error) {
 			"token: %w", err)
 	}
 
+	// Reject oversized credentials to prevent memory exhaustion.
+	const maxCredentialSize = 64 * 1024 // 64KB.
+	if len(decoded) > maxCredentialSize {
+		return nil, fmt.Errorf("mpp: credential too large "+
+			"(%d bytes, max %d)", len(decoded),
+			maxCredentialSize)
+	}
+
 	// Unmarshal the JSON credential.
 	var cred Credential
 	if err := json.Unmarshal(decoded, &cred); err != nil {
@@ -108,6 +116,10 @@ func ParseCredential(h *http.Header) (*Credential, error) {
 		return nil, fmt.Errorf("mpp: credential missing " +
 			"challenge.id")
 	}
+	if cred.Challenge.Realm == "" {
+		return nil, fmt.Errorf("mpp: credential missing " +
+			"challenge.realm")
+	}
 	if cred.Challenge.Method == "" {
 		return nil, fmt.Errorf("mpp: credential missing " +
 			"challenge.method")
@@ -115,6 +127,10 @@ func ParseCredential(h *http.Header) (*Credential, error) {
 	if cred.Challenge.Intent == "" {
 		return nil, fmt.Errorf("mpp: credential missing " +
 			"challenge.intent")
+	}
+	if cred.Challenge.Request == "" {
+		return nil, fmt.Errorf("mpp: credential missing " +
+			"challenge.request")
 	}
 	if len(cred.Payload) == 0 {
 		return nil, fmt.Errorf("mpp: credential missing payload")
