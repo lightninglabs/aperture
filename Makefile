@@ -58,7 +58,7 @@ build:
 
 build-dashboard:
 	@$(call print, "Building dashboard static export.")
-	cd dashboard && npm ci --legacy-peer-deps && npm run build
+	cd dashboard && npm ci && npm run build
 
 build-withdashboard: build-dashboard
 	@$(call print, "Building aperture with embedded dashboard.")

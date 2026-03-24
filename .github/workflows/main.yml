@@ -102,7 +102,7 @@ jobs:
 
       - name: install dependencies
         working-directory: dashboard
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: type check
         working-directory: dashboard
