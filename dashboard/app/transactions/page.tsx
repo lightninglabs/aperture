@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useTransactions } from "@/lib/api";
 import styled from "@emotion/styled";
 import type { TransactionParams } from "@/lib/types";
@@ -253,6 +254,7 @@ const Styled = {
 };
 
 export default function TransactionsPage() {
+  const router = useRouter();
   const [stateFilter, setStateFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -275,11 +277,6 @@ export default function TransactionsPage() {
     error,
     mutate,
   } = useTransactions(params);
-  const { data: allTransactions } = useTransactions({
-    limit: 200,
-    ...(dateFrom && { from: dateFrom }),
-    ...(dateTo && { to: dateTo }),
-  });
   const { sorted, sortField, sortDir, onSort } = useSort(
     transactions,
     "id",
@@ -314,7 +311,7 @@ export default function TransactionsPage() {
   }, []);
 
   const exportCSV = useCallback(() => {
-    const rows = allTransactions ?? sorted ?? [];
+    const rows = transactions ?? sorted ?? [];
     if (!rows.length) return;
     const headers = [
       "ID",
@@ -331,8 +328,8 @@ export default function TransactionsPage() {
           tx.id,
           `"${tx.service_name.replace(/"/g, '""')}"`,
           tx.price_sats,
-          tx.state,
-          tx.payment_hash,
+          `"${tx.state.replace(/"/g, '""')}"`,
+          `"${tx.payment_hash.replace(/"/g, '""')}"`,
           `"${new Date(tx.created_at).toISOString()}"`,
         ].join(",")
       ),
@@ -344,7 +341,7 @@ export default function TransactionsPage() {
     a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [allTransactions, sorted]);
+  }, [transactions, sorted]);
 
   const handlePrev = useCallback(
     () => setOffset((o) => Math.max(0, o - PAGE_SIZE)),
@@ -397,7 +394,7 @@ export default function TransactionsPage() {
             compact
             onClick={exportCSV}
             disabled={
-              isLoading || (!allTransactions?.length && !sorted?.length)
+              isLoading || (!transactions?.length && !sorted?.length)
             }
           >
             Export CSV
@@ -415,8 +412,8 @@ export default function TransactionsPage() {
       {/* Activity sparkline */}
       <CardPadded>
         <SectionTitle>Activity</SectionTitle>
-        {allTransactions ? (
-          <ActivityChart transactions={allTransactions} />
+        {transactions ? (
+          <ActivityChart transactions={transactions} />
         ) : (
           <LoadingBox>Loading...</LoadingBox>
         )}
@@ -567,7 +564,7 @@ export default function TransactionsPage() {
                             {
                               label: "View service",
                               onClick: () => {
-                                window.location.href = `/services/${encodeURIComponent(tx.service_name)}`;
+                                router.push(`/services/detail?name=${encodeURIComponent(tx.service_name)}`);
                               },
                             },
                           ]}
