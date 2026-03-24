@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"github.com/btcsuite/btclog/v2"
+	"github.com/lightninglabs/aperture/agent"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
 	"github.com/lightninglabs/aperture/l402"
@@ -32,6 +33,9 @@ func SetupLoggers(root *build.SubLoggerManager, intercept signal.Interceptor) {
 	lnd.AddSubLogger(root, "LNDC", intercept, lndclient.UseLogger)
 	lnd.AddSubLogger(
 		root, challenger.Subsystem, intercept, challenger.UseLogger,
+	)
+	lnd.AddSubLogger(
+		root, agent.Subsystem, intercept, agent.UseLogger,
 	)
 }
 
