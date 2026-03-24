@@ -29,6 +29,10 @@
     "react-dom": "^19.2.4",
     "swr": "^2.3.3"
   },
+  "overrides": {
+    "react": "$react",
+    "react-dom": "$react-dom"
+  },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
     "@tailwindcss/postcss": "^4.1.8",
