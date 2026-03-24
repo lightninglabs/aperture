@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof" // Blank import to set up profiling HTTP handlers.
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1083,13 +1084,127 @@ func createAdminServer(cfg *Config,
 		// and forwards internally to adminRESTPrefix.
 		const dashboardProxyPrefix = "/api/proxy/"
 
+		// requireLoopback rejects requests that do not originate
+		// from a loopback address (127.0.0.1 / ::1). The
+		// dashboard proxy injects admin credentials server-side,
+		// so it must only be accessible locally.
+		requireLoopback := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					host, _, err := net.SplitHostPort(
+						r.RemoteAddr,
+					)
+					if err != nil {
+						http.Error(
+							w, "forbidden",
+							http.StatusForbidden,
+						)
+						return
+					}
+					ip := net.ParseIP(host)
+					if ip == nil || !ip.IsLoopback() {
+						http.Error(
+							w, "forbidden",
+							http.StatusForbidden,
+						)
+						return
+					}
+					next.ServeHTTP(w, r)
+				},
+			)
+		}
+
+		// addSecurityHeaders wraps a handler to set standard
+		// browser security headers on every response.
+		addSecurityHeaders := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set(
+						"X-Frame-Options", "DENY",
+					)
+					w.Header().Set(
+						"X-Content-Type-Options",
+						"nosniff",
+					)
+					w.Header().Set(
+						"Referrer-Policy",
+						"strict-origin-when-cross-origin",
+					)
+					next.ServeHTTP(w, r)
+				},
+			)
+		}
+
+		// csrfProtect rejects mutating requests (non-GET/HEAD)
+		// whose Origin header does not match the request Host.
+		// This prevents cross-site request forgery against the
+		// unauthenticated dashboard proxy.
+		csrfProtect := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "GET" &&
+						r.Method != "HEAD" {
+
+						origin := r.Header.Get("Origin")
+						if origin == "" {
+							origin = r.Header.Get(
+								"Referer",
+							)
+						}
+						if origin != "" &&
+							!isOriginAllowed(
+								origin,
+								r.Host,
+							) {
+
+							http.Error(
+								w,
+								"forbidden: "+
+									"cross-origin "+
+									"request",
+								http.StatusForbidden,
+							)
+							return
+						}
+					}
+					next.ServeHTTP(w, r)
+				},
+			)
+		}
+
+		// allowedQueryParams is the set of query parameter names
+		// the dashboard proxy forwards to the admin REST API.
+		// All other parameters are stripped.
+		allowedQueryParams := map[string]struct{}{
+			"limit":   {},
+			"offset":  {},
+			"from":    {},
+			"to":      {},
+			"service": {},
+			"state":   {},
+			"name":    {},
+		}
+
 		safeSegment := regexp.MustCompile(`^[\w-]+$`)
 		proxyHandler := http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
 				raw := strings.TrimPrefix(
 					r.URL.Path, dashboardProxyPrefix,
 				)
-				for _, seg := range strings.Split(raw, "/") {
+
+				// Filter empty segments so trailing slashes
+				// do not cause a spurious 400.
+				segments := strings.Split(raw, "/")
+				filtered := segments[:0]
+				for _, seg := range segments {
+					if seg != "" {
+						filtered = append(
+							filtered, seg,
+						)
+					}
+				}
+
+				for _, seg := range filtered {
 					if !safeSegment.MatchString(seg) {
 						http.Error(
 							w, "bad request",
@@ -1098,8 +1213,21 @@ func createAdminServer(cfg *Config,
 						return
 					}
 				}
+
 				r2 := r.Clone(r.Context())
-				r2.URL.Path = adminRESTPrefix + raw
+				r2.URL.Path = adminRESTPrefix +
+					strings.Join(filtered, "/")
+
+				// Allowlist query parameters.
+				orig := r2.URL.Query()
+				clean := make(url.Values)
+				for k, v := range orig {
+					if _, ok := allowedQueryParams[k]; ok {
+						clean[k] = v
+					}
+				}
+				r2.URL.RawQuery = clean.Encode()
+
 				r2.Header = r.Header.Clone()
 				r2.Header.Set(
 					"Grpc-Metadata-Macaroon", macHex,
@@ -1107,9 +1235,15 @@ func createAdminServer(cfg *Config,
 				mux.ServeHTTP(w, r2)
 			},
 		)
+
+		// Wrap the proxy handler with security middleware:
+		// loopback → CSRF → security headers → handler.
+		wrappedProxy := requireLoopback(
+			csrfProtect(addSecurityHeaders(proxyHandler)),
+		)
 		priorityServices = append(
 			priorityServices, proxy.NewLocalService(
-				proxyHandler,
+				wrappedProxy,
 				func(r *http.Request) bool {
 					return strings.HasPrefix(
 						r.URL.Path,
@@ -1149,9 +1283,15 @@ func createAdminServer(cfg *Config,
 				http.ServeFileFS(w, r, dashFS, "index.html")
 			},
 		)
+
+		// Wrap the dashboard static handler with loopback and
+		// security headers.
+		wrappedDash := requireLoopback(
+			addSecurityHeaders(dashHandler),
+		)
 		fallbackServices = append(
 			fallbackServices, proxy.NewLocalService(
-				dashHandler,
+				wrappedDash,
 				func(r *http.Request) bool {
 					return true
 				},
@@ -1214,6 +1354,22 @@ func normalizeDialAddr(addr string) string {
 		return net.JoinHostPort("localhost", port)
 	}
 	return addr
+}
+
+// isOriginAllowed checks whether the given origin URL's host matches the
+// request host. This is used for CSRF protection on the dashboard proxy.
+func isOriginAllowed(origin, requestHost string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	originHost := parsed.Host
+	if originHost == "" {
+		originHost = parsed.Path
+	}
+
+	return originHost == requestHost
 }
 
 // asMintTransactionStore safely converts a concrete transaction store pointer
