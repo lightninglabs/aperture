@@ -7,7 +7,11 @@ import (
 	"io/fs"
 )
 
-//go:embed dashboard/out
+// The all: prefix is required because Next.js outputs assets under _next/
+// which Go's embed would otherwise skip (directories starting with _ or .
+// are excluded by default).
+//
+//go:embed all:dashboard/out
 var dashboardEmbedFS embed.FS
 
 // DashboardFS returns the embedded dashboard static files rooted at
