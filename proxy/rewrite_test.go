@@ -18,6 +18,10 @@ func TestPrepareRewriteValidation(t *testing.T) {
 			rewrite: RewriteConfig{Prefix: "/v1/api"},
 		},
 		{
+			name:    "empty prefix is noop",
+			rewrite: RewriteConfig{Prefix: ""},
+		},
+		{
 			name:    "reject relative prefix",
 			rewrite: RewriteConfig{Prefix: "v1/api"},
 			wantErr: "invalid prefix format",
@@ -25,6 +29,16 @@ func TestPrepareRewriteValidation(t *testing.T) {
 		{
 			name:    "reject prefix with scheme and host",
 			rewrite: RewriteConfig{Prefix: "https://example.com/v1/api"},
+			wantErr: "invalid prefix format",
+		},
+		{
+			name:    "reject prefix with query string",
+			rewrite: RewriteConfig{Prefix: "/v1/api?foo=bar"},
+			wantErr: "invalid prefix format",
+		},
+		{
+			name:    "reject prefix with fragment",
+			rewrite: RewriteConfig{Prefix: "/v1/api#section"},
 			wantErr: "invalid prefix format",
 		},
 	}
@@ -44,40 +58,13 @@ func TestPrepareRewriteValidation(t *testing.T) {
 	}
 }
 
-func TestPrepareRewriteUnknownKeys(t *testing.T) {
-	testCases := []struct {
-		name    string
-		rewrite RewriteConfig
-		wantErr string
-	}{
-		{
-			name:    "reject prefix with query string",
-			rewrite: RewriteConfig{Prefix: "/v1/api?foo=bar"},
-			wantErr: "invalid prefix format",
-		},
-		{
-			name:    "reject prefix with fragment",
-			rewrite: RewriteConfig{Prefix: "/v1/api#section"},
-			wantErr: "invalid prefix format",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			service := &Service{Rewrite: tc.rewrite}
-			err := service.prepareRewrite()
-			require.Error(t, err)
-			require.Contains(t, err.Error(), tc.wantErr)
-		})
-	}
-}
-
 func TestRewriteRequestPath(t *testing.T) {
 	testCases := []struct {
-		name         string
-		prefix       string
-		requestPath  string
-		expectedPath string
+		name            string
+		prefix          string
+		requestPath     string
+		expectedPath    string
+		expectedRawPath string
 	}{
 		{
 			name:         "prefix is prepended",
@@ -86,16 +73,63 @@ func TestRewriteRequestPath(t *testing.T) {
 			expectedPath: "/api/users",
 		},
 		{
-			name:         "joinpath normalizes trailing slashes",
+			name:         "trailing slashes preserved",
 			prefix:       "/api/",
 			requestPath:  "/users/",
 			expectedPath: "/api/users/",
 		},
 		{
-			name:         "joinpath normalizes encoded slash segment",
+			name:   "encoded slash preserved in RawPath",
+			prefix: "/api",
+			// %2F decodes to / in Path but is preserved
+			// in RawPath so backends can distinguish it.
+			requestPath:     "/accounts/%2Fspecial",
+			expectedPath:    "/api/accounts//special",
+			expectedRawPath: "/api/accounts/%2Fspecial",
+		},
+		{
+			name:         "empty request path (root)",
 			prefix:       "/api",
-			requestPath:  "/accounts/%2Fspecial",
-			expectedPath: "/api/accounts/special",
+			requestPath:  "/",
+			expectedPath: "/api/",
+		},
+		{
+			name:         "identity rewrite with root prefix",
+			prefix:       "/",
+			requestPath:  "/users",
+			expectedPath: "/users",
+		},
+		{
+			name:         "double slashes in request normalized",
+			prefix:       "/api",
+			requestPath:  "//users",
+			expectedPath: "/api/users",
+		},
+		{
+			name:         "no prefix is noop",
+			prefix:       "",
+			requestPath:  "/users",
+			expectedPath: "/users",
+		},
+		{
+			name:         "deeply nested prefix",
+			prefix:       "/v1/internal/api",
+			requestPath:  "/users/123",
+			expectedPath: "/v1/internal/api/users/123",
+		},
+		{
+			name:   "encoded space decoded in Path",
+			prefix: "/api",
+			// Spaces are auto-escaped by EscapedPath() so
+			// RawPath is not needed.
+			requestPath:  "/users/John%20Doe",
+			expectedPath: "/api/users/John Doe",
+		},
+		{
+			name:         "dot segments cleaned",
+			prefix:       "/api",
+			requestPath:  "/users/../admin",
+			expectedPath: "/api/admin",
 		},
 	}
 
@@ -104,19 +138,32 @@ func TestRewriteRequestPath(t *testing.T) {
 			service := &Service{
 				Rewrite: RewriteConfig{Prefix: tc.prefix},
 			}
-			err := service.prepareRewrite()
-			require.NoError(t, err)
+
+			// Only run prepareRewrite for non-empty prefixes
+			// since empty prefix is a noop.
+			if tc.prefix != "" {
+				err := service.prepareRewrite()
+				require.NoError(t, err)
+			}
 
 			req := httptest.NewRequest(
-				"GET", "http://example.com"+tc.requestPath, nil,
+				"GET", "http://example.com"+tc.requestPath,
+				nil,
 			)
 			service.rewriteRequestPath(req)
 			require.Equal(t, tc.expectedPath, req.URL.Path)
+
+			if tc.expectedRawPath != "" {
+				require.Equal(
+					t, tc.expectedRawPath,
+					req.URL.RawPath,
+				)
+			}
 		})
 	}
 }
 
-func TestRewriteRequestPathClearsRawPath(t *testing.T) {
+func TestRewriteRequestPathPreservesRawPath(t *testing.T) {
 	service := &Service{
 		Rewrite: RewriteConfig{Prefix: "/api"},
 	}
@@ -126,15 +173,18 @@ func TestRewriteRequestPathClearsRawPath(t *testing.T) {
 	req := httptest.NewRequest(
 		"GET", "http://example.com/users%2Fprofile", nil,
 	)
+
 	// Confirm RawPath is set by the parser before the rewrite.
 	require.NotEmpty(t, req.URL.RawPath)
 
 	service.rewriteRequestPath(req)
 
+	// Path contains the clean decoded form.
 	require.Equal(t, "/api/users/profile", req.URL.Path)
-	require.Empty(t, req.URL.RawPath,
-		"RawPath must be cleared so net/http uses Path unambiguously",
-	)
+
+	// RawPath should preserve the encoded slash rather than being
+	// blanket-cleared.
+	require.Equal(t, "/api/users%2Fprofile", req.URL.RawPath)
 }
 
 func TestDirectorRewritePrefix(t *testing.T) {

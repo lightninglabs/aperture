@@ -153,16 +153,19 @@ func (s *Service) prepareRewrite() error {
 
 	u, err := url.Parse(s.Rewrite.Prefix)
 	if err != nil {
-		return fmt.Errorf("unsupported prefix format for rewrite: %v", err)
+		return fmt.Errorf("invalid prefix format: %v", err)
 	}
 	if u.Host != "" || u.Scheme != "" || u.Path == "" || u.Path[0] != '/' ||
 		u.RawQuery != "" || u.Fragment != "" {
 
-		return fmt.Errorf("invalid prefix format: expected absolute path, "+
-			"got \"%s\" ", u)
+		return fmt.Errorf("invalid prefix format: expected absolute "+
+			"path, got %q", u)
 	}
 
-	s.Rewrite.Prefix = u.EscapedPath()
+	// Store the prefix as-is since it's already validated as an absolute
+	// path. The rewrite function will use it directly without redundant
+	// re-encoding via EscapedPath().
+	s.Rewrite.Prefix = u.Path
 
 	return nil
 }

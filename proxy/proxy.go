@@ -80,20 +80,30 @@ type Proxy struct {
 }
 
 // rewriteRequestPath rewrites the request path according to service config.
+// It prepends the configured prefix to the request path, preserving any
+// percent-encoded characters in the original request via url.URL.JoinPath.
+//
+// NOTE: This does not rewrite Location headers in backend responses. If the
+// backend returns redirects containing the prefixed path, clients will see the
+// internal prefixed path. This is a known limitation.
 func (s *Service) rewriteRequestPath(req *http.Request) {
 	prefix := s.Rewrite.Prefix
 	if prefix == "" {
 		return
 	}
 
-	newPath, err := url.JoinPath(prefix, req.URL.Path)
-	if err != nil {
-		log.Errorf("could not add prefix: %v", err)
-		return
-	}
+	// Build a URL from the prefix so we can use URL.JoinPath, which
+	// correctly handles RawPath and percent-encoded characters (e.g.,
+	// %2F) that the backend may rely on for routing.
+	prefixURL := &url.URL{Path: prefix}
 
-	req.URL.Path = newPath
-	req.URL.RawPath = ""
+	// Use EscapedPath() to preserve percent-encoded characters from the
+	// original request. URL.JoinPath will propagate these into the
+	// result's RawPath automatically.
+	result := prefixURL.JoinPath(req.URL.EscapedPath())
+
+	req.URL.Path = result.Path
+	req.URL.RawPath = result.RawPath
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
