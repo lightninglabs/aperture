@@ -290,9 +290,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 
 	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
 
-	challengerOpts := buildChallengerOpts(
-		txnStore, a.cfg.SettlementQueueSize,
-	)
+	challengerOpts := buildChallengerOpts(txnStore)
 
 	if !a.cfg.Authenticator.Disable {
 		authCfg := a.cfg.Authenticator
@@ -362,17 +360,18 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// safely read and update the service list concurrently with the
 	// proxy.
 	svcHolder := &serviceHolder{services: a.cfg.Services}
-	adminServices, adminCleanup, err := createAdminServer(
-		a.cfg, txnStore, secretStore,
-		svcHolder.get,
-		func(s []*proxy.Service) error {
-			if err := a.UpdateServices(s); err != nil {
-				return err
-			}
-			svcHolder.set(s)
-			return nil
-		},
-	)
+	adminPriority, adminFallback, adminCleanup, err :=
+		createAdminServer(
+			a.cfg, txnStore, secretStore,
+			svcHolder.get,
+			func(s []*proxy.Service) error {
+				if err := a.UpdateServices(s); err != nil {
+					return err
+				}
+				svcHolder.set(s)
+				return nil
+			},
+		)
 	if err != nil {
 		return err
 	}
@@ -382,7 +381,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	mintTxnStore := asMintTransactionStore(txnStore)
 	a.proxy, a.proxyCleanup, err = createProxy(
 		a.cfg, a.challenger, secretStore, mintTxnStore,
-		adminServices...,
+		adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -867,15 +866,10 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 // as settled when invoices are paid.
 func buildChallengerOpts(
 	txnStore *aperturedb.L402TransactionsStore,
-	settlementQueueSize int) []challenger.LndChallengerOption {
+) []challenger.LndChallengerOption {
 
 	var opts []challenger.LndChallengerOption
 	if txnStore != nil {
-		opts = append(
-			opts, challenger.WithSettlementQueueSize(
-				settlementQueueSize,
-			),
-		)
 		opts = append(opts, challenger.WithSettlementCallback(
 			func(hash lntypes.Hash) {
 				ctx, cancel := context.WithTimeout(
@@ -900,23 +894,27 @@ func buildChallengerOpts(
 }
 
 // createAdminServer creates the admin gRPC server and REST gateway following
-// the same pattern as createHashMailServer.
+// the same pattern as createHashMailServer. It returns two slices of local
+// services: priority services (prefix-matched handlers like the gRPC, REST,
+// and dashboard proxy endpoints) and fallback services (catch-all handlers
+// like the dashboard static file server that should only run after proxy
+// backend matching fails).
 func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
 	getServices func() []*proxy.Service,
 	updateServices func([]*proxy.Service) error) (
-	[]proxy.LocalService, func(), error) {
+	[]proxy.LocalService, []proxy.LocalService, func(), error) {
 
 	if cfg.Admin == nil || !cfg.Admin.Enabled {
-		return nil, func() {}, nil
+		return nil, nil, func() {}, nil
 	}
 
 	if txnStore == nil {
 		log.Warnf("Admin API is enabled but the transaction store " +
 			"is not available (etcd backend does not support " +
 			"it). Admin API will not start.")
-		return nil, func() {}, nil
+		return nil, nil, func() {}, nil
 	}
 
 	// Determine the admin root key. We use the SecretStore with a
@@ -930,11 +928,11 @@ func createAdminServer(cfg *Config,
 			context.Background(), adminKeyHash,
 		)
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to create "+
+			return nil, nil, nil, fmt.Errorf("unable to create "+
 				"admin root key: %v", err)
 		}
 	} else if err != nil {
-		return nil, nil, fmt.Errorf("unable to get admin root "+
+		return nil, nil, nil, fmt.Errorf("unable to get admin root "+
 			"key: %v", err)
 	}
 
@@ -951,12 +949,12 @@ func createAdminServer(cfg *Config,
 	if _, statErr := os.Stat(macPath); os.IsNotExist(statErr) {
 		mac, err := admin.GenerateAdminMacaroon(rootKey[:])
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to generate "+
+			return nil, nil, nil, fmt.Errorf("unable to generate "+
 				"admin macaroon: %v", err)
 		}
 
 		if err := admin.WriteAdminMacaroon(mac, macPath); err != nil {
-			return nil, nil, fmt.Errorf("unable to write "+
+			return nil, nil, nil, fmt.Errorf("unable to write "+
 				"admin macaroon: %v", err)
 		}
 
@@ -988,8 +986,11 @@ func createAdminServer(cfg *Config,
 	adminGRPC := grpc.NewServer(serverOpts...)
 	adminrpc.RegisterAdminServer(adminGRPC, adminServer)
 
-	var localServices []proxy.LocalService
-	localServices = append(localServices, proxy.NewLocalService(
+	var (
+		priorityServices []proxy.LocalService
+		fallbackServices []proxy.LocalService
+	)
+	priorityServices = append(priorityServices, proxy.NewLocalService(
 		adminGRPC, func(r *http.Request) bool {
 			return strings.HasPrefix(
 				r.URL.Path, adminGRPCPrefix,
@@ -1037,11 +1038,11 @@ func createAdminServer(cfg *Config,
 	)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	corsHandler := allowCORS(mux, cfg.Admin.CORSOrigins)
-	localServices = append(localServices, proxy.NewLocalService(
+	priorityServices = append(priorityServices, proxy.NewLocalService(
 		corsHandler, func(r *http.Request) bool {
 			return strings.HasPrefix(
 				r.URL.Path, adminRESTPrefix,
@@ -1056,7 +1057,7 @@ func createAdminServer(cfg *Config,
 	dashFS, err := DashboardFS()
 	if err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("unable to load embedded "+
+		return nil, nil, nil, fmt.Errorf("unable to load embedded "+
 			"dashboard: %w", err)
 	}
 
@@ -1066,13 +1067,13 @@ func createAdminServer(cfg *Config,
 		mac, err := admin.GenerateAdminMacaroon(rootKey[:])
 		if err != nil {
 			cleanup()
-			return nil, nil, fmt.Errorf("unable to generate "+
+			return nil, nil, nil, fmt.Errorf("unable to generate "+
 				"dashboard macaroon: %w", err)
 		}
 		macBytes, err := mac.MarshalBinary()
 		if err != nil {
 			cleanup()
-			return nil, nil, fmt.Errorf("unable to marshal "+
+			return nil, nil, nil, fmt.Errorf("unable to marshal "+
 				"dashboard macaroon: %w", err)
 		}
 		macHex := hex.EncodeToString(macBytes)
@@ -1106,17 +1107,23 @@ func createAdminServer(cfg *Config,
 				mux.ServeHTTP(w, r2)
 			},
 		)
-		localServices = append(localServices, proxy.NewLocalService(
-			proxyHandler,
-			func(r *http.Request) bool {
-				return strings.HasPrefix(
-					r.URL.Path, dashboardProxyPrefix,
-				)
-			},
-		))
+		priorityServices = append(
+			priorityServices, proxy.NewLocalService(
+				proxyHandler,
+				func(r *http.Request) bool {
+					return strings.HasPrefix(
+						r.URL.Path,
+						dashboardProxyPrefix,
+					)
+				},
+			),
+		)
 
 		// Catch-all static file server with index.html fallback for
-		// client-side routing (SPA deep-link support).
+		// client-side routing (SPA deep-link support). This is added
+		// to fallbackServices so it is only checked after proxy
+		// backend matching — otherwise it would hijack all traffic
+		// intended for configured backend services.
 		dashHandler := http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
 				path := strings.TrimPrefix(r.URL.Path, "/")
@@ -1142,15 +1149,19 @@ func createAdminServer(cfg *Config,
 				http.ServeFileFS(w, r, dashFS, "index.html")
 			},
 		)
-		localServices = append(localServices, proxy.NewLocalService(
-			dashHandler,
-			func(r *http.Request) bool { return true },
-		))
+		fallbackServices = append(
+			fallbackServices, proxy.NewLocalService(
+				dashHandler,
+				func(r *http.Request) bool {
+					return true
+				},
+			),
+		)
 
 		log.Infof("Admin dashboard embedded and serving")
 	}
 
-	return localServices, cleanup, nil
+	return priorityServices, fallbackServices, cleanup, nil
 }
 
 // initSQLStores creates all SQL-backed stores from a BaseDB instance. This
@@ -1219,9 +1230,13 @@ func asMintTransactionStore(
 }
 
 // createProxy creates the proxy with all the services it needs.
+// adminPriorityServices are checked before proxy backend matching (e.g. admin
+// gRPC, REST, dashboard proxy). adminFallbackServices are checked after proxy
+// backend matching fails (e.g. dashboard catch-all static file server).
 func createProxy(cfg *Config, challenger challenger.Challenger,
 	store mint.SecretStore, txnStore mint.TransactionStore,
-	adminServices ...proxy.LocalService) (*proxy.Proxy, func(), error) {
+	adminPriorityServices, adminFallbackServices []proxy.LocalService,
+) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
 		Challenger:       challenger,
@@ -1268,9 +1283,14 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 		},
 	))
 
+	// Append admin fallback services (e.g. dashboard catch-all) after
+	// hashmail and the static file server so they are checked in the
+	// correct order within localServices.
+	localServices = append(localServices, adminFallbackServices...)
+
 	prxy, err := proxy.New(
 		authenticator, cfg.Services, cfg.Blocklist,
-		adminServices, localServices...,
+		adminPriorityServices, localServices...,
 	)
 	return prxy, proxyCleanup, err
 }
