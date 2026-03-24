@@ -169,28 +169,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "type": "object",
-              "properties": {
-                "address": {
-                  "type": "string"
-                },
-                "protocol": {
-                  "type": "string"
-                },
-                "host_regexp": {
-                  "type": "string"
-                },
-                "path_regexp": {
-                  "type": "string"
-                },
-                "price": {
-                  "type": "string",
-                  "format": "int64"
-                },
-                "auth": {
-                  "type": "string"
-                }
-              }
+              "$ref": "#/definitions/AdminUpdateServiceBody"
             }
           }
         ],
@@ -367,6 +346,30 @@
     }
   },
   "definitions": {
+    "AdminUpdateServiceBody": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "host_regexp": {
+          "type": "string"
+        },
+        "path_regexp": {
+          "type": "string"
+        },
+        "price": {
+          "type": "string",
+          "format": "int64"
+        },
+        "auth": {
+          "type": "string"
+        }
+      }
+    },
     "adminrpcCreateServiceRequest": {
       "type": "object",
       "properties": {
@@ -465,6 +468,10 @@
             "type": "object",
             "$ref": "#/definitions/adminrpcTransaction"
           }
+        },
+        "total_count": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },
@@ -477,6 +484,10 @@
             "type": "object",
             "$ref": "#/definitions/adminrpcTransaction"
           }
+        },
+        "total_count": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },

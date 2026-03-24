@@ -10,13 +10,12 @@ import (
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/queue"
 )
 
 // LndChallengerOption is a functional option that can be used to modify the
 // behavior of the LndChallenger.
 type LndChallengerOption func(*LndChallenger)
-
-const defaultSettlementQueueSize = 100
 
 // WithSettlementCallback sets a callback that will be invoked when an invoice
 // is settled. This can be used to trigger side effects such as recording
@@ -24,15 +23,6 @@ const defaultSettlementQueueSize = 100
 func WithSettlementCallback(fn func(hash lntypes.Hash)) LndChallengerOption {
 	return func(l *LndChallenger) {
 		l.onSettled = fn
-	}
-}
-
-// WithSettlementQueueSize sets the size of the settlement callback queue.
-func WithSettlementQueueSize(size int) LndChallengerOption {
-	return func(l *LndChallenger) {
-		if size > 0 {
-			l.settlementQueueSize = size
-		}
 	}
 }
 
@@ -57,13 +47,9 @@ type LndChallenger struct {
 	// transitions to the settled state.
 	onSettled func(hash lntypes.Hash)
 
-	// settlementQueue is a buffered channel used to serialize settlement
-	// callbacks instead of spawning a goroutine per callback.
-	settlementQueue chan lntypes.Hash
-
-	// settlementQueueSize is the channel buffer size used for settlement
-	// callback serialization.
-	settlementQueueSize int
+	// settlementQueue is an unbounded concurrent queue used to serialize
+	// settlement callbacks without blocking the invoice stream reader.
+	settlementQueue *queue.ConcurrentQueue
 
 	errChan chan<- error
 
@@ -94,17 +80,16 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 
 	invoicesMtx := &sync.Mutex{}
 	challenger := &LndChallenger{
-		client:              client,
-		batchSize:           batchSize,
-		clientCtx:           ctxFunc,
-		genInvoiceReq:       genInvoiceReq,
-		invoiceStates:       make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
-		invoicesMtx:         invoicesMtx,
-		invoicesCond:        sync.NewCond(invoicesMtx),
-		quit:                make(chan struct{}),
-		errChan:             errChan,
-		strictVerify:        strictVerification,
-		settlementQueueSize: defaultSettlementQueueSize,
+		client:        client,
+		batchSize:     batchSize,
+		clientCtx:     ctxFunc,
+		genInvoiceReq: genInvoiceReq,
+		invoiceStates: make(map[lntypes.Hash]lnrpc.Invoice_InvoiceState),
+		invoicesMtx:   invoicesMtx,
+		invoicesCond:  sync.NewCond(invoicesMtx),
+		quit:          make(chan struct{}),
+		errChan:       errChan,
+		strictVerify:  strictVerification,
 	}
 
 	// Apply functional options.
@@ -112,16 +97,19 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		opt(challenger)
 	}
 
-	// If a settlement callback is set, create a buffered channel to
-	// serialize settlement processing.
+	// If a settlement callback is set, create an unbounded concurrent
+	// queue for settlement processing.
 	if challenger.onSettled != nil {
-		challenger.settlementQueue = make(
-			chan lntypes.Hash, challenger.settlementQueueSize,
-		)
+		challenger.settlementQueue = queue.NewConcurrentQueue(100)
+		challenger.settlementQueue.Start()
 	}
 
 	err := challenger.Start()
 	if err != nil {
+		if challenger.settlementQueue != nil {
+			challenger.settlementQueue.Stop()
+		}
+
 		return nil, fmt.Errorf("unable to start challenger: %w", err)
 	}
 
@@ -223,10 +211,6 @@ func (l *LndChallenger) Start() error {
 		log.Debugf("Finished querying invoices")
 	}
 
-	for _, hash := range startupSettled {
-		l.onSettled(hash)
-	}
-
 	// We need to be able to cancel any subscription we make.
 	ctxc, cancel := context.WithCancel(l.clientCtx())
 	l.invoicesCancel = cancel
@@ -251,29 +235,38 @@ func (l *LndChallenger) Start() error {
 	}()
 
 	// If a settlement callback is registered, start a worker goroutine
-	// that processes settlements sequentially from the queue.
+	// that processes settlements sequentially from the unbounded queue,
+	// then enqueue any startup-settled invoices for reconciliation.
 	if l.onSettled != nil {
 		l.wg.Add(1)
 		go func() {
 			defer l.wg.Done()
 			for {
 				select {
-				case hash := <-l.settlementQueue:
+				case item, ok := <-l.settlementQueue.ChanOut():
+					if !ok {
+						return
+					}
+
+					hash, valid := item.(lntypes.Hash)
+					if !valid {
+						continue
+					}
+
 					l.onSettled(hash)
 
 				case <-l.quit:
-					// Drain remaining items.
-					for {
-						select {
-						case hash := <-l.settlementQueue:
-							l.onSettled(hash)
-						default:
-							return
-						}
-					}
+					return
 				}
 			}
 		}()
+
+		// Enqueue startup-settled invoices through the queue
+		// so they are processed asynchronously by the worker
+		// goroutine above. This avoids blocking startup.
+		for _, hash := range startupSettled {
+			l.settlementQueue.ChanIn() <- hash
+		}
 	}
 
 	return nil
@@ -358,34 +351,26 @@ func (l *LndChallenger) readInvoiceStream(
 			l.invoiceStates[hash] = invoice.State
 		}
 
-		// If the invoice just settled and we have a callback
-		// registered, queue it for serialized processing.
-		if invoice.State == lnrpc.Invoice_SETTLED &&
-			l.onSettled != nil {
+		// Determine if we need to enqueue a settlement callback
+		// before releasing the lock.
+		shouldEnqueue := invoice.State == lnrpc.Invoice_SETTLED &&
+			l.onSettled != nil
 
-			if !l.enqueueSettlement(hash) {
-				l.invoicesMtx.Unlock()
-				return
-			}
-		}
-
-		// Before releasing the lock, notify our conditions that listen
-		// for updates on the invoice state.
+		// Notify conditions that listen for invoice state updates,
+		// then release the lock before enqueuing to avoid blocking
+		// the invoice stream reader.
 		l.invoicesCond.Broadcast()
 		l.invoicesMtx.Unlock()
-	}
-}
 
-// enqueueSettlement reliably queues a settled invoice hash for serialized
-// callback processing, applying backpressure instead of dropping updates.
-func (l *LndChallenger) enqueueSettlement(hash lntypes.Hash) bool {
-	for {
-		select {
-		case l.settlementQueue <- hash:
-			return true
-
-		case <-l.quit:
-			return false
+		// Enqueue settlement outside the mutex. The
+		// ConcurrentQueue is unbounded, so this send will never
+		// block.
+		if shouldEnqueue {
+			select {
+			case l.settlementQueue.ChanIn() <- hash:
+			case <-l.quit:
+				return
+			}
 		}
 	}
 }
@@ -397,6 +382,12 @@ func (l *LndChallenger) Stop() {
 	}
 	close(l.quit)
 	l.wg.Wait()
+
+	// Stop the settlement queue after all goroutines have exited so
+	// that any pending items are drained.
+	if l.settlementQueue != nil {
+		l.settlementQueue.Stop()
+	}
 }
 
 // NewChallenge creates a new L402 payment challenge, returning a payment

@@ -2,7 +2,6 @@ package aperture
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
@@ -245,6 +244,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		onionStore  tor.OnionStore
 		lncStore    lnc.Store
 		txnStore    *aperturedb.L402TransactionsStore
+		svcStore    *aperturedb.ServicesStore
 	)
 
 	// Connect to the chosen database backend.
@@ -271,7 +271,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				err)
 		}
 		a.db = db.DB
-		secretStore, onionStore, lncStore, txnStore =
+		secretStore, onionStore, lncStore, txnStore, svcStore =
 			initSQLStores(db.BaseDB)
 
 	case "sqlite":
@@ -281,7 +281,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				err)
 		}
 		a.db = db.DB
-		secretStore, onionStore, lncStore, txnStore =
+		secretStore, onionStore, lncStore, txnStore, svcStore =
 			initSQLStores(db.BaseDB)
 
 	default:
@@ -291,7 +291,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 
 	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
 
-	challengerOpts := buildChallengerOpts(txnStore)
+	// Only enable settlement tracking when the admin API is enabled.
+	// This avoids the startup cost of reconciling historical invoices
+	// for operators that don't use the admin dashboard.
+	var challengerOpts []challenger.LndChallengerOption
+	if a.cfg.Admin != nil && a.cfg.Admin.Enabled {
+		challengerOpts = buildChallengerOpts(txnStore)
+	}
 
 	if !a.cfg.Authenticator.Disable {
 		authCfg := a.cfg.Authenticator
@@ -357,13 +363,18 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}
 	}
 
+	// Load persisted services from the database and merge with config
+	// file services. DB services take precedence (by name) over config
+	// file services so that runtime changes survive restarts.
+	initialServices := mergeServicesFromDB(a.cfg.Services, svcStore)
+
 	// Create a synchronized services holder so the admin server can
 	// safely read and update the service list concurrently with the
 	// proxy.
-	svcHolder := &serviceHolder{services: a.cfg.Services}
+	svcHolder := &serviceHolder{services: initialServices}
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
-			a.cfg, txnStore, secretStore,
+			a.cfg, txnStore, secretStore, svcStore,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
 				if err := a.UpdateServices(s); err != nil {
@@ -903,6 +914,7 @@ func buildChallengerOpts(
 func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
+	svcStore *aperturedb.ServicesStore,
 	getServices func() []*proxy.Service,
 	updateServices func([]*proxy.Service) error) (
 	[]proxy.LocalService, []proxy.LocalService, func(), error) {
@@ -918,37 +930,30 @@ func createAdminServer(cfg *Config,
 		return nil, nil, func() {}, nil
 	}
 
-	// Determine the admin root key. We use the SecretStore with a
-	// well-known hash to persist the root key across restarts.
-	adminKeyHash := sha256.Sum256([]byte("aperture-admin-root-key"))
-	rootKey, err := secretStore.GetSecret(
-		context.Background(), adminKeyHash,
-	)
-	if errors.Is(err, mint.ErrSecretNotFound) {
-		rootKey, err = secretStore.NewSecret(
-			context.Background(), adminKeyHash,
-		)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("unable to create "+
-				"admin root key: %v", err)
-		}
-	} else if err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to get admin root "+
-			"key: %v", err)
-	}
-
-	// Generate the admin macaroon and write it to disk only if it
-	// doesn't already exist. The root key is persisted, so an existing
-	// macaroon file is still valid.
+	// Determine the admin root key. The root key is stored on disk as a
+	// random 32-byte value alongside the macaroon. This avoids storing
+	// the key in the shared SecretStore where its lookup hash would be
+	// publicly derivable.
 	macPath := cfg.Admin.MacaroonPath
 	if macPath == "" {
 		macPath = filepath.Join(
 			apertureDataDir, defaultAdminMacaroonFilename,
 		)
 	}
+	rootKeyPath := strings.TrimSuffix(macPath, ".macaroon") +
+		".rootkey"
 
+	rootKey, err := admin.ReadOrCreateRootKey(rootKeyPath)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("unable to initialize "+
+			"admin root key: %v", err)
+	}
+
+	// Generate the admin macaroon and write it to disk only if it
+	// doesn't already exist. The root key is persisted, so an existing
+	// macaroon file is still valid.
 	if _, statErr := os.Stat(macPath); os.IsNotExist(statErr) {
-		mac, err := admin.GenerateAdminMacaroon(rootKey[:])
+		mac, err := admin.GenerateAdminMacaroon(rootKey)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("unable to generate "+
 				"admin macaroon: %v", err)
@@ -967,10 +972,10 @@ func createAdminServer(cfg *Config,
 	// Create the gRPC server with macaroon authentication.
 	serverOpts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(
-			admin.MacaroonInterceptor(rootKey[:]),
+			admin.MacaroonInterceptor(rootKey),
 		),
 		grpc.ChainStreamInterceptor(
-			admin.MacaroonStreamInterceptor(rootKey[:]),
+			admin.MacaroonStreamInterceptor(rootKey),
 		),
 	}
 
@@ -982,6 +987,7 @@ func createAdminServer(cfg *Config,
 		Services:         getServices,
 		UpdateServices:   updateServices,
 		SecretStore:      secretStore,
+		ServiceStore:     svcStore,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)
@@ -1031,6 +1037,9 @@ func createAdminServer(cfg *Config,
 	// so the loopback connection is routable on all platforms.
 	dialAddr := normalizeDialAddr(cfg.ListenAddr)
 
+	// Use RegisterAdminHandlerFromEndpoint (loopback dial) so that
+	// REST requests go through the full gRPC interceptor chain,
+	// including macaroon authentication.
 	mux := gateway.NewServeMux(customMarshalerOption)
 	err = adminrpc.RegisterAdminHandlerFromEndpoint(
 		ctxc, mux, dialAddr, []grpc.DialOption{
@@ -1065,7 +1074,7 @@ func createAdminServer(cfg *Config,
 	if dashFS != nil {
 		// Generate a macaroon from the root key to attach to
 		// server-side proxied requests to the admin REST API.
-		mac, err := admin.GenerateAdminMacaroon(rootKey[:])
+		mac, err := admin.GenerateAdminMacaroon(rootKey)
 		if err != nil {
 			cleanup()
 			return nil, nil, nil, fmt.Errorf("unable to generate "+
@@ -1310,7 +1319,8 @@ func initSQLStores(db *aperturedb.BaseDB) (
 	*aperturedb.SecretsStore,
 	*aperturedb.OnionStore,
 	*aperturedb.LNCSessionsStore,
-	*aperturedb.L402TransactionsStore) {
+	*aperturedb.L402TransactionsStore,
+	*aperturedb.ServicesStore) {
 
 	dbSecretTxer := aperturedb.NewTransactionExecutor(db,
 		func(tx *sql.Tx) aperturedb.SecretsDB {
@@ -1340,7 +1350,73 @@ func initSQLStores(db *aperturedb.BaseDB) (
 	)
 	txnStore := aperturedb.NewL402TransactionsStore(dbTxnTxer)
 
-	return secretStore, onionStore, lncStore, txnStore
+	dbSvcTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.ServicesDB {
+			return db.WithTx(tx)
+		},
+	)
+	svcStore := aperturedb.NewServicesStore(dbSvcTxer)
+
+	return secretStore, onionStore, lncStore, txnStore, svcStore
+}
+
+// mergeServicesFromDB loads persisted services from the database and merges
+// them with config file services. DB services override config services by name
+// so that runtime changes survive restarts. Config services not in the DB are
+// preserved as-is.
+func mergeServicesFromDB(configServices []*proxy.Service,
+	svcStore *aperturedb.ServicesStore) []*proxy.Service {
+
+	if svcStore == nil {
+		return configServices
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), aperturedb.DefaultStoreTimeout,
+	)
+	defer cancel()
+
+	dbRows, err := svcStore.ListServices(ctx)
+	if err != nil {
+		log.Warnf("Unable to load persisted services from DB, "+
+			"using config only: %v", err)
+		return configServices
+	}
+
+	if len(dbRows) == 0 {
+		return configServices
+	}
+
+	// Build a map of DB services keyed by name.
+	dbByName := make(map[string]*proxy.Service, len(dbRows))
+	for _, row := range dbRows {
+		dbByName[row.Name] = &proxy.Service{
+			Name:       row.Name,
+			Address:    row.Address,
+			Protocol:   row.Protocol,
+			HostRegexp: row.HostRegexp,
+			PathRegexp: row.PathRegexp,
+			Price:      row.Price,
+			Auth:       auth.Level(row.Auth),
+		}
+	}
+
+	// Start with DB services, then add config services that are not
+	// already in the DB.
+	merged := make([]*proxy.Service, 0, len(dbByName)+len(configServices))
+	for _, svc := range dbByName {
+		merged = append(merged, svc)
+	}
+	for _, svc := range configServices {
+		if _, exists := dbByName[svc.Name]; !exists {
+			merged = append(merged, svc)
+		}
+	}
+
+	log.Infof("Loaded %d services from DB, %d from config (%d merged "+
+		"total)", len(dbByName), len(configServices), len(merged))
+
+	return merged
 }
 
 // normalizeDialAddr replaces a wildcard or empty host in an address with
