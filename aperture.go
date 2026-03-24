@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1139,15 +1140,28 @@ func createAdminServer(cfg *Config,
 						"Referrer-Policy",
 						"strict-origin-when-cross-origin",
 					)
+					w.Header().Set(
+						"Content-Security-Policy",
+						"default-src 'self'; "+
+							"style-src 'self' "+
+							"'unsafe-inline'; "+
+							"script-src 'self' "+
+							"'unsafe-inline'",
+					)
 					next.ServeHTTP(w, r)
 				},
 			)
 		}
 
 		// csrfProtect rejects mutating requests (non-GET/HEAD)
-		// whose Origin header does not match the request Host.
-		// This prevents cross-site request forgery against the
-		// unauthenticated dashboard proxy.
+		// that fail CSRF validation. Two checks are applied:
+		//
+		// 1. If an Origin or Referer header is present, it must
+		//    match the request Host.
+		// 2. The X-Requested-With header must be set (to any
+		//    value). Simple cross-origin requests (form posts,
+		//    img tags) cannot set custom headers, so this blocks
+		//    CSRF even when Origin/Referer are absent.
 		csrfProtect := func(next http.Handler) http.Handler {
 			return http.HandlerFunc(
 				func(w http.ResponseWriter, r *http.Request) {
@@ -1175,23 +1189,79 @@ func createAdminServer(cfg *Config,
 							)
 							return
 						}
+
+						// Require X-Requested-With
+						// header on all mutating
+						// requests. This cannot be
+						// set by simple cross-origin
+						// requests.
+						if r.Header.Get(
+							"X-Requested-With",
+						) == "" {
+							http.Error(
+								w,
+								"forbidden: "+
+									"missing "+
+									"X-Requested-With",
+								http.StatusForbidden,
+							)
+							return
+						}
 					}
 					next.ServeHTTP(w, r)
 				},
 			)
 		}
 
-		// allowedQueryParams is the set of query parameter names
-		// the dashboard proxy forwards to the admin REST API.
-		// All other parameters are stripped.
-		allowedQueryParams := map[string]struct{}{
-			"limit":   {},
-			"offset":  {},
-			"from":    {},
-			"to":      {},
-			"service": {},
-			"state":   {},
-			"name":    {},
+		// safeQueryValue validates a query parameter value.
+		// It enforces maximum length and rejects control
+		// characters.
+		safeQueryValue := func(v string, maxLen int) bool {
+			if len(v) > maxLen {
+				return false
+			}
+			for _, c := range v {
+				if c < 0x20 || c == 0x7f {
+					return false
+				}
+			}
+			return true
+		}
+
+		// validateInt checks that a query value is a valid
+		// non-negative integer within the given max.
+		validateInt := func(v string, max int) bool {
+			n, err := strconv.Atoi(v)
+			return err == nil && n >= 0 && n <= max
+		}
+
+		// allowedQueryParams maps parameter names to their
+		// validation functions. Parameters not in this map are
+		// stripped. Parameters whose values fail validation are
+		// also stripped.
+		type queryValidator func(string) bool
+		allowedQueryParams := map[string]queryValidator{
+			"limit": func(v string) bool {
+				return validateInt(v, 1000)
+			},
+			"offset": func(v string) bool {
+				return validateInt(v, 1000000)
+			},
+			"from": func(v string) bool {
+				return safeQueryValue(v, 30)
+			},
+			"to": func(v string) bool {
+				return safeQueryValue(v, 30)
+			},
+			"service": func(v string) bool {
+				return safeQueryValue(v, 128)
+			},
+			"state": func(v string) bool {
+				return safeQueryValue(v, 128)
+			},
+			"name": func(v string) bool {
+				return safeQueryValue(v, 128)
+			},
 		}
 
 		safeSegment := regexp.MustCompile(`^[\w-]+$`)
@@ -1227,17 +1297,35 @@ func createAdminServer(cfg *Config,
 				r2.URL.Path = adminRESTPrefix +
 					strings.Join(filtered, "/")
 
-				// Allowlist query parameters.
+				// Allowlist query parameters by name and
+				// validate their values.
 				orig := r2.URL.Query()
 				clean := make(url.Values)
-				for k, v := range orig {
-					if _, ok := allowedQueryParams[k]; ok {
-						clean[k] = v
+				for k, vals := range orig {
+					validate, ok := allowedQueryParams[k]
+					if !ok {
+						continue
+					}
+					for _, v := range vals {
+						if validate(v) {
+							clean.Add(k, v)
+						}
 					}
 				}
 				r2.URL.RawQuery = clean.Encode()
 
-				r2.Header = r.Header.Clone()
+				// Construct a fresh header set with only
+				// the entries the admin API needs. This
+				// avoids forwarding client-controlled
+				// headers like X-Forwarded-For or
+				// Authorization.
+				r2.Header = make(http.Header)
+				if ct := r.Header.Get("Content-Type"); ct != "" {
+					r2.Header.Set("Content-Type", ct)
+				}
+				if accept := r.Header.Get("Accept"); accept != "" {
+					r2.Header.Set("Accept", accept)
+				}
 				r2.Header.Set(
 					"Grpc-Metadata-Macaroon", macHex,
 				)

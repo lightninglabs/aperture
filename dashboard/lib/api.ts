@@ -36,7 +36,7 @@ export function useStats(from?: string, to?: string) {
           total_revenue_sats: Number(s.total_revenue_sats ?? 0),
         })),
       })),
-    { refreshInterval: 10_000 }
+    { refreshInterval: 30_000 }
   );
 }
 
@@ -83,7 +83,7 @@ export function useTransactions(params: TransactionParams) {
       fetcher<{ transactions: Transaction[] }>(path).then(
         (r) => r.transactions ?? []
       ),
-    { refreshInterval: 10_000 }
+    { refreshInterval: 30_000 }
   );
 }
 
@@ -102,7 +102,10 @@ export async function updateService(
 ) {
   const res = await fetch(`/api/proxy/services/${encodeURIComponent(name)}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -116,7 +119,10 @@ export async function updateService(
 export async function createService(body: ServiceCreateRequest) {
   const res = await fetch("/api/proxy/services", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -130,6 +136,7 @@ export async function createService(body: ServiceCreateRequest) {
 export async function deleteService(name: string) {
   const res = await fetch(`/api/proxy/services/${encodeURIComponent(name)}`, {
     method: "DELETE",
+    headers: { "X-Requested-With": "XMLHttpRequest" },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "request failed" }));
