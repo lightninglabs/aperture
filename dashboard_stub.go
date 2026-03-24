@@ -1,4 +1,4 @@
-//go:build nodashboard
+//go:build !dashboard
 
 package aperture
 
