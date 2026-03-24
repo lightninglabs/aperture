@@ -35,6 +35,17 @@ const (
 	defaultIdleTimeout  = time.Minute * 2
 	defaultReadTimeout  = time.Second * 15
 	defaultWriteTimeout = time.Second * 30
+
+	// defaultWsPingInterval is the default interval at which we send
+	// WebSocket-level pings to connected clients. This keeps the
+	// connection alive through intermediary proxies and load balancers
+	// that may drop idle connections.
+	defaultWsPingInterval = 30 * time.Second
+
+	// defaultWsPongWait is the default duration we wait for a pong
+	// response after sending a WebSocket ping before considering the
+	// connection dead.
+	defaultWsPongWait = 15 * time.Second
 )
 
 type EtcdConfig struct {
@@ -233,6 +244,18 @@ type Config struct {
 	// Logging controls various aspects of aperture logging.
 	Logging *build.LogConfig `group:"logging" namespace:"logging"`
 
+	// WsPingInterval is the interval at which WebSocket-level pings are
+	// sent to connected clients. This keeps the underlying WebSocket
+	// connection alive through intermediary proxies and load balancers.
+	// Set to 0 to disable.
+	WsPingInterval time.Duration `long:"wspinginterval" description:"Interval for WebSocket-level ping messages to keep connections alive through proxies."`
+
+	// WsPongWait is the duration to wait for a pong response after
+	// sending a WebSocket-level ping. If no pong is received within this
+	// duration, the WebSocket connection is considered dead. Must be
+	// strictly less than WsPingInterval when pings are enabled.
+	WsPongWait time.Duration `long:"wspongwait" description:"Duration to wait for a WebSocket pong response before closing the connection."`
+
 	// Blocklist is a list of IPs to deny access to.
 	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
 }
@@ -250,6 +273,18 @@ func (c *Config) validate() error {
 
 	if c.InvoiceBatchSize <= 0 {
 		return fmt.Errorf("invoice batch size must be greater than 0")
+	}
+
+	if c.WsPingInterval < 0 {
+		return fmt.Errorf("wspinginterval must not be negative")
+	}
+	if c.WsPongWait < 0 {
+		return fmt.Errorf("wspongwait must not be negative")
+	}
+	if c.WsPingInterval > 0 && c.WsPongWait >= c.WsPingInterval {
+		return fmt.Errorf("wspongwait (%v) must be less than "+
+			"wspinginterval (%v)", c.WsPongWait,
+			c.WsPingInterval)
 	}
 
 	return nil
@@ -277,6 +312,8 @@ func NewConfig() *Config {
 		IdleTimeout:      defaultIdleTimeout,
 		ReadTimeout:      defaultReadTimeout,
 		WriteTimeout:     defaultWriteTimeout,
+		WsPingInterval:   defaultWsPingInterval,
+		WsPongWait:       defaultWsPongWait,
 		InvoiceBatchSize: defaultInvoiceBatchSize,
 		Logging:          build.DefaultLogConfig(),
 		Blocklist:        []string{},

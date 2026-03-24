@@ -971,8 +971,12 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	}
 
 	// Wrap the default grpc-gateway handler with the WebSocket handler.
+	// We enable WebSocket-level pings to keep the underlying connection
+	// alive through intermediary proxies and load balancers that may
+	// silently drop idle WebSocket connections.
 	restHandler := lnrpc.NewWebSocketProxy(
-		mux, log, 0, 0, clientStreamingURIs,
+		mux, log, cfg.WsPingInterval, cfg.WsPongWait,
+		clientStreamingURIs,
 	)
 
 	// Create our proxy chain now. A request will pass

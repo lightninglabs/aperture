@@ -56,6 +56,17 @@ readtimeout: 15s
 # The maximum amount of time to wait for a response to be fully written.
 writetimeout: 30s
 
+# Interval at which WebSocket-level pings are sent to connected clients. This
+# keeps LNC connections alive through intermediary proxies and load balancers
+# that may drop idle WebSocket connections. Set to 0 to disable.
+# Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+wspinginterval: 30s
+
+# Duration to wait for a WebSocket pong response after sending a ping. If no
+# pong is received within this duration, the connection is considered dead.
+# Must be strictly less than wspinginterval.
+wspongwait: 15s
+
 # Settings for the lnd node used to generate payment requests. All of these
 # options are required.
 authenticator:
