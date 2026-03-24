@@ -167,6 +167,16 @@ services:
     # options include: http, https.
     protocol: https
 
+    # Header fields to always pass to the service. Replace the placeholder
+    # value with a real credential; do not commit secrets to version control.
+    # headers:
+    #   Authorization: "Bearer <your-api-key>"
+
+    # Rewrite options allow prepending an absolute path prefix to every
+    # request before it is forwarded to the backend.
+    # rewrite:
+    #   prefix: "/path/to/api"
+
     # If required, a path to the service's TLS certificate to successfully
     # establish a secure connection.
     tlscertpath: "path-to-optional-tls-cert/tls.cert"
