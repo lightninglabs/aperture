@@ -56,6 +56,14 @@ type (
 
 	// L402Transaction is the database model for an L402 transaction.
 	L402Transaction = sqlc.L402Transaction
+
+	// ListL402TxFilteredParams contains parameters for the combined
+	// filter query.
+	ListL402TxFilteredParams = sqlc.ListL402TransactionsFilteredParams
+
+	// CountL402TxFilteredParams contains parameters for the combined
+	// filter count query.
+	CountL402TxFilteredParams = sqlc.CountL402TransactionsFilteredParams
 )
 
 // L402TransactionsDB is an interface that defines the set of operations that
@@ -68,8 +76,9 @@ type L402TransactionsDB interface {
 
 	// UpdateL402TransactionState updates the state and settled_at
 	// timestamp of a transaction identified by its payment hash.
+	// Returns the number of rows affected.
 	UpdateL402TransactionState(ctx context.Context,
-		arg UpdateL402TxState) error
+		arg UpdateL402TxState) (int64, error)
 
 	// GetL402TransactionsByPaymentHash returns transactions matching the
 	// given payment hash.
@@ -144,6 +153,16 @@ type L402TransactionsDB interface {
 	// token ID.
 	DeleteL402TransactionByTokenID(ctx context.Context,
 		tokenID []byte) (int64, error)
+
+	// ListL402TransactionsFiltered returns a paginated list of
+	// transactions with optional combined filters.
+	ListL402TransactionsFiltered(ctx context.Context,
+		arg ListL402TxFilteredParams) ([]L402Transaction, error)
+
+	// CountL402TransactionsFiltered returns the count of transactions
+	// matching the combined filters.
+	CountL402TransactionsFiltered(ctx context.Context,
+		arg CountL402TxFilteredParams) (int64, error)
 }
 
 // L402TransactionsDBTxOptions defines the set of db txn options the
@@ -225,14 +244,27 @@ func (s *L402TransactionsStore) SettleTransaction(ctx context.Context,
 
 	var writeTxOpts L402TransactionsDBTxOptions
 	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx L402TransactionsDB) error {
-		return tx.UpdateL402TransactionState(ctx, UpdateL402TxState{
-			State: "settled",
-			SettledAt: sql.NullTime{
-				Time:  s.clock.Now().UTC(),
-				Valid: true,
+		nRows, err := tx.UpdateL402TransactionState(
+			ctx, UpdateL402TxState{
+				State: "settled",
+				SettledAt: sql.NullTime{
+					Time:  s.clock.Now().UTC(),
+					Valid: true,
+				},
+				PaymentHash: paymentHash,
 			},
-			PaymentHash: paymentHash,
-		})
+		)
+		if err != nil {
+			return err
+		}
+
+		if nRows == 0 {
+			log.Debugf("SettleTransaction affected 0 rows "+
+				"(hash=%x); transaction may already be "+
+				"settled", paymentHash)
+		}
+
+		return nil
 	})
 
 	if err != nil {
@@ -329,10 +361,16 @@ func (s *L402TransactionsStore) ListByDateRange(ctx context.Context,
 		var err error
 		txns, err = tx.ListL402TransactionsByDateRange(
 			ctx, ListL402TxByDateRangeParams{
-				CreatedAt:   from,
-				CreatedAt_2: to,
-				Limit:       limit,
-				Offset:      offset,
+				SettledAt: sql.NullTime{
+					Time:  from,
+					Valid: true,
+				},
+				SettledAt_2: sql.NullTime{
+					Time:  to,
+					Valid: true,
+				},
+				Limit:  limit,
+				Offset: offset,
 			},
 		)
 		return err
@@ -542,4 +580,91 @@ func (s *L402TransactionsStore) DeleteByTokenID(ctx context.Context,
 	}
 
 	return nil
+}
+
+// ListFiltered returns a paginated list of transactions matching the given
+// combined filters. Empty strings and zero values disable the corresponding
+// filter.
+func (s *L402TransactionsStore) ListFiltered(ctx context.Context,
+	service, state string, hasDateRange bool,
+	from, to time.Time, limit, offset int32) ([]L402Transaction, error) {
+
+	var txns []L402Transaction
+	readOpts := NewL402TransactionsDBReadTx()
+
+	dateFlag := int64(0)
+	if hasDateRange {
+		dateFlag = 1
+	}
+
+	err := s.db.ExecTx(ctx, &readOpts, func(tx L402TransactionsDB) error {
+		var err error
+		txns, err = tx.ListL402TransactionsFiltered(
+			ctx, ListL402TxFilteredParams{
+				FilterService: service,
+				FilterState:   state,
+				HasDateRange:  dateFlag,
+				DateFrom: sql.NullTime{
+					Time:  from,
+					Valid: hasDateRange,
+				},
+				DateTo: sql.NullTime{
+					Time:  to,
+					Valid: hasDateRange,
+				},
+				RowLimit:  limit,
+				RowOffset: offset,
+			},
+		)
+		return err
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("unable to list filtered L402 "+
+			"transactions: %w", err)
+	}
+
+	return txns, nil
+}
+
+// CountFiltered returns the count of transactions matching the given combined
+// filters.
+func (s *L402TransactionsStore) CountFiltered(ctx context.Context,
+	service, state string, hasDateRange bool,
+	from, to time.Time) (int64, error) {
+
+	var count int64
+	readOpts := NewL402TransactionsDBReadTx()
+
+	dateFlag := int64(0)
+	if hasDateRange {
+		dateFlag = 1
+	}
+
+	err := s.db.ExecTx(ctx, &readOpts, func(tx L402TransactionsDB) error {
+		var err error
+		count, err = tx.CountL402TransactionsFiltered(
+			ctx, CountL402TxFilteredParams{
+				FilterService: service,
+				FilterState:   state,
+				HasDateRange:  dateFlag,
+				DateFrom: sql.NullTime{
+					Time:  from,
+					Valid: hasDateRange,
+				},
+				DateTo: sql.NullTime{
+					Time:  to,
+					Valid: hasDateRange,
+				},
+			},
+		)
+		return err
+	})
+
+	if err != nil {
+		return 0, fmt.Errorf("unable to count filtered L402 "+
+			"transactions: %w", err)
+	}
+
+	return count, nil
 }

@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -11,6 +13,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon.v2"
+)
+
+const (
+	// rootKeySize is the size in bytes of the admin root key.
+	rootKeySize = 32
 )
 
 const (
@@ -153,6 +160,37 @@ func WriteAdminMacaroon(mac *macaroon.Macaroon, path string) error {
 	}
 
 	return os.WriteFile(path, macBytes, 0600)
+}
+
+// ReadOrCreateRootKey reads a root key from the given file path, or generates
+// a new random 32-byte key and writes it to disk if the file does not exist.
+// Storing the root key on disk rather than in the shared SecretStore avoids
+// the root key being accessible via a well-known deterministic hash.
+func ReadOrCreateRootKey(path string) ([]byte, error) {
+	keyBytes, err := os.ReadFile(path)
+	if err == nil && len(keyBytes) == rootKeySize {
+		return keyBytes, nil
+	}
+
+	// Generate a new random root key.
+	rootKey := make([]byte, rootKeySize)
+	if _, err := rand.Read(rootKey); err != nil {
+		return nil, fmt.Errorf("unable to generate random root "+
+			"key: %w", err)
+	}
+
+	// Ensure the directory exists.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("unable to create directory for "+
+			"root key: %w", err)
+	}
+
+	if err := os.WriteFile(path, rootKey, 0600); err != nil {
+		return nil, fmt.Errorf("unable to write root key: %w", err)
+	}
+
+	return rootKey, nil
 }
 
 // ReadAdminMacaroon reads and deserializes a macaroon from the given path.

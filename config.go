@@ -20,7 +20,6 @@ var (
 	defaultLogLevel         = "info"
 	defaultLogFilename      = "aperture.log"
 	defaultInvoiceBatchSize = 100000
-	defaultSettlementQueue  = 1000
 	defaultStrictVerify     = false
 
 	defaultSqliteDatabaseFileName = "aperture.db"
@@ -243,10 +242,6 @@ type Config struct {
 	// request.
 	InvoiceBatchSize int `long:"invoicebatchsize" description:"The number of invoices to fetch in a single request."`
 
-	// SettlementQueueSize is the number of settled invoice hashes that can be
-	// queued while waiting for transaction-settlement callbacks.
-	SettlementQueueSize int `long:"settlementqueuesize" description:"Maximum number of settled invoice callbacks queued for processing."`
-
 	// StrictVerify is a flag that indicates whether we should verify the
 	// invoice status strictly or not. If set to true, then this requires
 	// all invoices to be read from disk at start up.
@@ -300,9 +295,8 @@ func NewConfig() *Config {
 		IdleTimeout:         defaultIdleTimeout,
 		ReadTimeout:         defaultReadTimeout,
 		WriteTimeout:        defaultWriteTimeout,
-		InvoiceBatchSize:    defaultInvoiceBatchSize,
-		SettlementQueueSize: defaultSettlementQueue,
-		Logging:             build.DefaultLogConfig(),
+		InvoiceBatchSize: defaultInvoiceBatchSize,
+		Logging:          build.DefaultLogConfig(),
 		Blocklist:           []string{},
 		StrictVerify:        defaultStrictVerify,
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/queue"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -135,6 +136,12 @@ func newInvoice(hash lntypes.Hash, addIndex uint64,
 		CreationDate:   time.Now().Unix(),
 		Expiry:         10,
 	}
+}
+
+func newSettlementQueue() *queue.ConcurrentQueue {
+	q := queue.NewConcurrentQueue(100)
+	q.Start()
+	return q
 }
 
 func TestLndChallenger(t *testing.T) {
@@ -301,7 +308,7 @@ func TestSettlementQueue(t *testing.T) {
 			settled = append(settled, hash)
 			mu.Unlock()
 		},
-		settlementQueue: make(chan lntypes.Hash, 100),
+		settlementQueue: newSettlementQueue(),
 	}
 
 	err := c.Start()
@@ -351,30 +358,33 @@ func TestSettlementReconcilesHistoricalInvoicesOnStart(t *testing.T) {
 	}
 	invoicesMtx := &sync.Mutex{}
 	c := &LndChallenger{
-		client:        mockClient,
-		batchSize:     10,
-		clientCtx:     context.Background,
-		genInvoiceReq: func(int64) (*lnrpc.Invoice, error) { return nil, nil },
+		client:    mockClient,
+		batchSize: 10,
+		clientCtx: context.Background,
+		genInvoiceReq: func(int64) (*lnrpc.Invoice, error) {
+			return nil, nil
+		},
 		invoiceStates: make(
 			map[lntypes.Hash]lnrpc.Invoice_InvoiceState,
 		),
-		quit:                make(chan struct{}),
-		invoicesMtx:         invoicesMtx,
-		invoicesCond:        sync.NewCond(invoicesMtx),
-		errChan:             make(chan error),
-		strictVerify:        false,
-		settlementQueueSize: 1,
-		settlementQueue:     make(chan lntypes.Hash, 1),
+		quit:         make(chan struct{}),
+		invoicesMtx:  invoicesMtx,
+		invoicesCond: sync.NewCond(invoicesMtx),
+		errChan:      make(chan error),
+		strictVerify: false,
 		onSettled: func(hash lntypes.Hash) {
 			mu.Lock()
 			settled = append(settled, hash)
 			mu.Unlock()
 		},
+		settlementQueue: newSettlementQueue(),
 	}
 
 	err := c.Start()
 	require.NoError(t, err)
 
+	// Historical settled invoices should be reconciled asynchronously
+	// through the queue.
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -423,7 +433,7 @@ func TestSettlementQueueDrainOnStop(t *testing.T) {
 			settled = append(settled, hash)
 			mu.Unlock()
 		},
-		settlementQueue: make(chan lntypes.Hash, 100),
+		settlementQueue: newSettlementQueue(),
 	}
 
 	err := c.Start()

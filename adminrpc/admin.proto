@@ -77,7 +77,10 @@ message ListTransactionsRequest {
   int32 offset = 6;
 }
 
-message ListTransactionsResponse { repeated Transaction transactions = 1; }
+message ListTransactionsResponse {
+  repeated Transaction transactions = 1;
+  int64 total_count = 2;
+}
 
 message Transaction {
   int32 id = 1;
@@ -95,7 +98,10 @@ message ListTokensRequest {
   int32 offset = 2;
 }
 
-message ListTokensResponse { repeated Transaction tokens = 1; }
+message ListTokensResponse {
+  repeated Transaction tokens = 1;
+  int64 total_count = 2;
+}
 
 message RevokeTokenRequest { string token_id = 1; }
 

@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/lightninglabs/aperture/adminrpc"
@@ -33,7 +32,23 @@ const (
 
 	// defaultProtocol is the default protocol for new services.
 	defaultProtocol = "http"
+
+	// maxRegexpLen is the maximum length of a user-supplied regular
+	// expression for host or path matching.
+	maxRegexpLen = 1024
 )
+
+// ServiceStore is an interface for persisting service configurations across
+// restarts. When provided, service CRUD operations write through to both the
+// in-memory proxy and the persistent store.
+type ServiceStore interface {
+	// UpsertService creates or updates a persisted service configuration.
+	UpsertService(ctx context.Context, name, address, protocol,
+		hostRegexp, pathRegexp, auth string, price int64) error
+
+	// DeleteService removes a persisted service by name.
+	DeleteService(ctx context.Context, name string) error
+}
 
 // ServerConfig holds the dependencies for the admin gRPC server.
 type ServerConfig struct {
@@ -58,14 +73,19 @@ type ServerConfig struct {
 
 	// SecretStore is the secret store for token revocation.
 	SecretStore mint.SecretStore
+
+	// ServiceStore is an optional persistent store for service
+	// configurations. If nil, service changes are held in memory only.
+	ServiceStore ServiceStore
 }
 
-// Server implements the adminrpc.AdminServer gRPC interface.
+// Server implements the adminrpc.AdminServer gRPC interface. Thread safety
+// for service reads/updates is provided by the serviceHolder and proxy
+// mutexes; the Server itself does not need its own lock.
 type Server struct {
 	adminrpc.UnimplementedAdminServer
 
-	cfg         ServerConfig
-	servicesMtx sync.RWMutex
+	cfg ServerConfig
 }
 
 // NewServer creates a new admin gRPC server with the given configuration.
@@ -98,9 +118,6 @@ func (s *Server) ListServices(_ context.Context,
 	_ *adminrpc.ListServicesRequest) (
 	*adminrpc.ListServicesResponse, error) {
 
-	s.servicesMtx.RLock()
-	defer s.servicesMtx.RUnlock()
-
 	services := s.cfg.Services()
 	resp := make([]*adminrpc.Service, 0, len(services))
 
@@ -119,12 +136,11 @@ func (s *Server) ListServices(_ context.Context,
 	return &adminrpc.ListServicesResponse{Services: resp}, nil
 }
 
-// CreateService creates a new backend service.
-func (s *Server) CreateService(_ context.Context,
+// CreateService creates a new backend service. When a ServiceStore is
+// configured, the service is persisted to the database and will survive
+// restarts.
+func (s *Server) CreateService(ctx context.Context,
 	req *adminrpc.CreateServiceRequest) (*adminrpc.Service, error) {
-
-	s.servicesMtx.Lock()
-	defer s.servicesMtx.Unlock()
 
 	if req.Name == "" {
 		return nil, status.Error(
@@ -153,6 +169,13 @@ func (s *Server) CreateService(_ context.Context,
 	if hostRegexp == "" {
 		hostRegexp = ".*"
 	}
+	if len(hostRegexp) > maxRegexpLen {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"host_regexp exceeds max length %d",
+			maxRegexpLen,
+		)
+	}
 	if _, err := regexp.Compile(hostRegexp); err != nil {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
@@ -160,6 +183,13 @@ func (s *Server) CreateService(_ context.Context,
 		)
 	}
 	if req.PathRegexp != "" {
+		if len(req.PathRegexp) > maxRegexpLen {
+			return nil, status.Errorf(
+				codes.InvalidArgument,
+				"path_regexp exceeds max length %d",
+				maxRegexpLen,
+			)
+		}
 		if _, err := regexp.Compile(req.PathRegexp); err != nil {
 			return nil, status.Errorf(
 				codes.InvalidArgument,
@@ -215,6 +245,19 @@ func (s *Server) CreateService(_ context.Context,
 		)
 	}
 
+	// Persist the new service to the database if a store is
+	// configured.
+	if s.cfg.ServiceStore != nil {
+		if err := s.cfg.ServiceStore.UpsertService(
+			ctx, newSvc.Name, newSvc.Address,
+			newSvc.Protocol, newSvc.HostRegexp,
+			newSvc.PathRegexp, string(newSvc.Auth),
+			newSvc.Price,
+		); err != nil {
+			log.Errorf("Error persisting service: %v", err)
+		}
+	}
+
 	return &adminrpc.Service{
 		Name:       newSvc.Name,
 		Address:    newSvc.Address,
@@ -226,12 +269,10 @@ func (s *Server) CreateService(_ context.Context,
 	}, nil
 }
 
-// UpdateService updates a service's mutable fields.
-func (s *Server) UpdateService(_ context.Context,
+// UpdateService updates a service's mutable fields. When a ServiceStore is
+// configured, the updated service is persisted to the database.
+func (s *Server) UpdateService(ctx context.Context,
 	req *adminrpc.UpdateServiceRequest) (*adminrpc.Service, error) {
-
-	s.servicesMtx.Lock()
-	defer s.servicesMtx.Unlock()
 
 	if req.Name == "" {
 		return nil, status.Error(
@@ -271,6 +312,13 @@ func (s *Server) UpdateService(_ context.Context,
 		updated.Protocol = req.Protocol
 	}
 	if req.HostRegexp != "" {
+		if len(req.HostRegexp) > maxRegexpLen {
+			return nil, status.Errorf(
+				codes.InvalidArgument,
+				"host_regexp exceeds max length %d",
+				maxRegexpLen,
+			)
+		}
 		if _, err := regexp.Compile(req.HostRegexp); err != nil {
 			return nil, status.Errorf(
 				codes.InvalidArgument,
@@ -280,6 +328,13 @@ func (s *Server) UpdateService(_ context.Context,
 		updated.HostRegexp = req.HostRegexp
 	}
 	if req.PathRegexp != "" {
+		if len(req.PathRegexp) > maxRegexpLen {
+			return nil, status.Errorf(
+				codes.InvalidArgument,
+				"path_regexp exceeds max length %d",
+				maxRegexpLen,
+			)
+		}
 		if _, err := regexp.Compile(req.PathRegexp); err != nil {
 			return nil, status.Errorf(
 				codes.InvalidArgument,
@@ -322,6 +377,20 @@ func (s *Server) UpdateService(_ context.Context,
 		)
 	}
 
+	// Persist the updated service to the database if a store is
+	// configured.
+	if s.cfg.ServiceStore != nil {
+		if err := s.cfg.ServiceStore.UpsertService(
+			ctx, updated.Name, updated.Address,
+			updated.Protocol, updated.HostRegexp,
+			updated.PathRegexp, string(updated.Auth),
+			updated.Price,
+		); err != nil {
+			log.Errorf("Error persisting updated service: %v",
+				err)
+		}
+	}
+
 	return &adminrpc.Service{
 		Name:       updated.Name,
 		Address:    updated.Address,
@@ -334,12 +403,9 @@ func (s *Server) UpdateService(_ context.Context,
 }
 
 // DeleteService removes a backend service by name.
-func (s *Server) DeleteService(_ context.Context,
+func (s *Server) DeleteService(ctx context.Context,
 	req *adminrpc.DeleteServiceRequest) (
 	*adminrpc.DeleteServiceResponse, error) {
-
-	s.servicesMtx.Lock()
-	defer s.servicesMtx.Unlock()
 
 	if req.Name == "" {
 		return nil, status.Error(
@@ -369,6 +435,16 @@ func (s *Server) DeleteService(_ context.Context,
 		return nil, status.Error(
 			codes.Internal, "failed to delete service",
 		)
+	}
+
+	// Remove the service from the persistent store if configured.
+	if s.cfg.ServiceStore != nil {
+		if err := s.cfg.ServiceStore.DeleteService(
+			ctx, req.Name,
+		); err != nil {
+			log.Errorf("Error deleting persisted service: %v",
+				err)
+		}
 	}
 
 	return &adminrpc.DeleteServiceResponse{Status: "deleted"}, nil
@@ -401,45 +477,8 @@ func (s *Server) ListTransactions(ctx context.Context,
 		)
 	}
 
-	// Ensure at most one filter is set to avoid silently dropping
-	// filters.
-	filterCount := 0
-	if req.Service != "" {
-		filterCount++
-	}
+	// Validate state filter if provided.
 	if req.State != "" {
-		filterCount++
-	}
-	if req.StartDate != "" || req.EndDate != "" {
-		if req.StartDate == "" || req.EndDate == "" {
-			return nil, status.Error(
-				codes.InvalidArgument,
-				"both start_date and end_date must be "+
-					"set together",
-			)
-		}
-		filterCount++
-	}
-	if filterCount > 1 {
-		return nil, status.Error(
-			codes.InvalidArgument,
-			"only one filter (service, state, or date range) "+
-				"may be set at a time",
-		)
-	}
-
-	var (
-		txns []aperturedb.L402Transaction
-		err  error
-	)
-
-	switch {
-	case req.Service != "":
-		txns, err = s.cfg.TransactionStore.ListByService(
-			ctx, req.Service, limit, offset,
-		)
-
-	case req.State != "":
 		switch req.State {
 		case "pending", "settled":
 		default:
@@ -450,19 +489,31 @@ func (s *Server) ListTransactions(ctx context.Context,
 				req.State,
 			)
 		}
-		txns, err = s.cfg.TransactionStore.ListByState(
-			ctx, req.State, limit, offset,
-		)
+	}
 
-	case req.StartDate != "" && req.EndDate != "":
-		from, parseErr := time.Parse(time.RFC3339, req.StartDate)
+	// Parse date range if provided.
+	var (
+		from, to     time.Time
+		hasDateRange bool
+	)
+	if req.StartDate != "" || req.EndDate != "" {
+		if req.StartDate == "" || req.EndDate == "" {
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"both start_date and end_date must be "+
+					"set together",
+			)
+		}
+
+		var parseErr error
+		from, parseErr = time.Parse(time.RFC3339, req.StartDate)
 		if parseErr != nil {
 			return nil, status.Error(
 				codes.InvalidArgument,
 				"invalid start_date format",
 			)
 		}
-		to, parseErr := time.Parse(time.RFC3339, req.EndDate)
+		to, parseErr = time.Parse(time.RFC3339, req.EndDate)
 		if parseErr != nil {
 			return nil, status.Error(
 				codes.InvalidArgument,
@@ -475,16 +526,15 @@ func (s *Server) ListTransactions(ctx context.Context,
 				"end_date must be >= start_date",
 			)
 		}
-		txns, err = s.cfg.TransactionStore.ListByDateRange(
-			ctx, from, to, limit, offset,
-		)
-
-	default:
-		txns, err = s.cfg.TransactionStore.ListTransactions(
-			ctx, limit, offset,
-		)
+		hasDateRange = true
 	}
 
+	// Use combined filter query that supports any combination of
+	// service, state, and date range filters.
+	txns, err := s.cfg.TransactionStore.ListFiltered(
+		ctx, req.Service, req.State, hasDateRange,
+		from, to, limit, offset,
+	)
 	if err != nil {
 		log.Errorf("Error listing transactions: %v", err)
 		return nil, status.Error(
@@ -492,8 +542,17 @@ func (s *Server) ListTransactions(ctx context.Context,
 		)
 	}
 
+	// Get total count matching the same filters for pagination.
+	totalCount, countErr := s.cfg.TransactionStore.CountFiltered(
+		ctx, req.Service, req.State, hasDateRange, from, to,
+	)
+	if countErr != nil {
+		log.Errorf("Error counting transactions: %v", countErr)
+	}
+
 	return &adminrpc.ListTransactionsResponse{
 		Transactions: txnsToProto(txns),
+		TotalCount:   totalCount,
 	}, nil
 }
 
@@ -534,8 +593,16 @@ func (s *Server) ListTokens(ctx context.Context,
 		)
 	}
 
+	// Total count for settled tokens (same as CountTransactions which
+	// counts settled only).
+	totalCount, countErr := s.cfg.TransactionStore.CountTransactions(ctx)
+	if countErr != nil {
+		log.Errorf("Error counting tokens: %v", countErr)
+	}
+
 	return &adminrpc.ListTokensResponse{
-		Tokens: txnsToProto(txns),
+		Tokens:     txnsToProto(txns),
+		TotalCount: totalCount,
 	}, nil
 }
 
@@ -572,7 +639,7 @@ func (s *Server) RevokeToken(ctx context.Context,
 		)
 	}
 
-	// Look up the transaction to get the payment hash.
+	// Look up the transaction to get the payment hash before deleting.
 	txn, err := s.cfg.TransactionStore.GetSettledByTokenID(ctx, tokenID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -587,23 +654,29 @@ func (s *Server) RevokeToken(ctx context.Context,
 		)
 	}
 
-	err = revokeSecretByTokenIDAndHash(
-		ctx, s.cfg.SecretStore, txn.TokenID, txn.PaymentHash,
-	)
-	if err != nil {
-		log.Errorf("Error revoking secret: %v", err)
-		return nil, status.Error(
-			codes.Internal, "failed to revoke token",
-		)
-	}
-
+	// Delete the transaction record first so it no longer appears in
+	// the dashboard. If the subsequent secret revocation fails, the
+	// token is gone from listings but the secret still exists -- a
+	// safer partial-failure state than the reverse.
 	if err := s.cfg.TransactionStore.DeleteByTokenID(
 		ctx, tokenID,
 	); err != nil {
 		log.Errorf("Error deleting transaction: %v", err)
 		return nil, status.Error(
+			codes.Internal, "failed to delete transaction",
+		)
+	}
+
+	err = revokeSecretByTokenIDAndHash(
+		ctx, s.cfg.SecretStore, txn.TokenID, txn.PaymentHash,
+	)
+	if err != nil {
+		log.Errorf("Error revoking secret (transaction already "+
+			"deleted): %v", err)
+
+		return nil, status.Error(
 			codes.Internal,
-			"token revoked but failed to delete transaction",
+			"transaction deleted but failed to revoke secret",
 		)
 	}
 

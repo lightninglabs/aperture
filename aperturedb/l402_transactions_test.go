@@ -114,8 +114,12 @@ func TestListByService(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	betaTokenID := make([]byte, 32)
+	betaTokenID[0] = byte(99)
+	betaHash := make([]byte, 32)
+	betaHash[0] = byte(99)
 	err := store.RecordTransaction(
-		ctxt, make([]byte, 32), make([]byte, 32), "beta", 200, nil,
+		ctxt, betaTokenID, betaHash, "beta", 200, nil,
 	)
 	require.NoError(t, err)
 
@@ -182,6 +186,11 @@ func TestListByDateRange(t *testing.T) {
 	err := store.RecordTransaction(
 		ctxt, tokenID, paymentHash, "svc", 100, nil,
 	)
+	require.NoError(t, err)
+
+	// Settle the transaction so it has a settled_at timestamp for
+	// date range filtering.
+	err = store.SettleTransaction(ctxt, paymentHash)
 	require.NoError(t, err)
 
 	now := time.Now().UTC()

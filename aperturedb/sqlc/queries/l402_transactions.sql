@@ -6,7 +6,7 @@ INSERT INTO l402_transactions (
     $1, $2, $3, $4, $5, $6, $7
 ) RETURNING id;
 
--- name: UpdateL402TransactionState :exec
+-- name: UpdateL402TransactionState :execrows
 UPDATE l402_transactions
 SET state = $1, settled_at = $2
 WHERE payment_hash = $3 AND state = 'pending';
@@ -39,8 +39,8 @@ LIMIT $2 OFFSET $3;
 -- name: ListL402TransactionsByDateRange :many
 SELECT *
 FROM l402_transactions
-WHERE created_at >= $1 AND created_at <= $2
-ORDER BY created_at DESC
+WHERE state = 'settled' AND settled_at >= $1 AND settled_at <= $2
+ORDER BY settled_at DESC
 LIMIT $3 OFFSET $4;
 
 -- name: CountL402Transactions :one
@@ -93,3 +93,21 @@ WHERE token_id = $1 AND state = 'settled';
 -- name: DeleteL402TransactionByTokenID :execrows
 DELETE FROM l402_transactions
 WHERE token_id = $1;
+
+-- name: ListL402TransactionsFiltered :many
+SELECT *
+FROM l402_transactions
+WHERE (sqlc.arg(filter_service) = '' OR service_name = sqlc.arg(filter_service))
+  AND (sqlc.arg(filter_state) = '' OR state = sqlc.arg(filter_state))
+  AND (sqlc.arg(has_date_range) = 0 OR settled_at >= sqlc.arg(date_from))
+  AND (sqlc.arg(has_date_range) = 0 OR settled_at <= sqlc.arg(date_to))
+ORDER BY created_at DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountL402TransactionsFiltered :one
+SELECT count(*)
+FROM l402_transactions
+WHERE (sqlc.arg(filter_service) = '' OR service_name = sqlc.arg(filter_service))
+  AND (sqlc.arg(filter_state) = '' OR state = sqlc.arg(filter_state))
+  AND (sqlc.arg(has_date_range) = 0 OR settled_at >= sqlc.arg(date_from))
+  AND (sqlc.arg(has_date_range) = 0 OR settled_at <= sqlc.arg(date_to));
