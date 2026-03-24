@@ -45,7 +45,7 @@ const (
 	// defaultWsPongWait is the default duration we wait for a pong
 	// response after sending a WebSocket ping before considering the
 	// connection dead.
-	defaultWsPongWait = 10 * time.Second
+	defaultWsPongWait = 15 * time.Second
 )
 
 type EtcdConfig struct {

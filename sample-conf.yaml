@@ -59,7 +59,7 @@ wspinginterval: 30s
 # Duration to wait for a WebSocket pong response after sending a ping. If no
 # pong is received within this duration, the connection is considered dead.
 # Must be strictly less than wspinginterval.
-wspongwait: 10s
+wspongwait: 15s
 
 # Settings for the lnd node used to generate payment requests. All of these
 # options are required.
