@@ -252,7 +252,8 @@ type Config struct {
 
 	// WsPongWait is the duration to wait for a pong response after
 	// sending a WebSocket-level ping. If no pong is received within this
-	// duration, the WebSocket connection is considered dead.
+	// duration, the WebSocket connection is considered dead. Must be
+	// strictly less than WsPingInterval when pings are enabled.
 	WsPongWait time.Duration `long:"wspongwait" description:"Duration to wait for a WebSocket pong response before closing the connection."`
 
 	// Blocklist is a list of IPs to deny access to.
@@ -272,6 +273,18 @@ func (c *Config) validate() error {
 
 	if c.InvoiceBatchSize <= 0 {
 		return fmt.Errorf("invoice batch size must be greater than 0")
+	}
+
+	if c.WsPingInterval < 0 {
+		return fmt.Errorf("wspinginterval must not be negative")
+	}
+	if c.WsPongWait < 0 {
+		return fmt.Errorf("wspongwait must not be negative")
+	}
+	if c.WsPingInterval > 0 && c.WsPongWait >= c.WsPingInterval {
+		return fmt.Errorf("wspongwait (%v) must be less than "+
+			"wspinginterval (%v)", c.WsPongWait,
+			c.WsPingInterval)
 	}
 
 	return nil
