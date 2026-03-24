@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useCallback, useMemo, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   useServices,
   useTransactions,
+  useStats,
   useInfo,
   updateService,
   deleteService,
@@ -276,6 +277,7 @@ const Styled = {
 
 function ServiceDetailContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const decodedName = decodeURIComponent(searchParams.get("name") ?? "");
   const {
     data: services,
@@ -292,6 +294,7 @@ function ServiceDetailContent() {
     limit: 50,
   });
   const { data: info, error: infoError, mutate: mutateInfo } = useInfo();
+  const { data: stats } = useStats();
 
   const [editingPrice, setEditingPrice] = useState(false);
   const [priceValue, setPriceValue] = useState("");
@@ -307,13 +310,14 @@ function ServiceDetailContent() {
 
   const svc = services?.find((s) => s.name === decodedName);
 
+  // Use the stats endpoint for accurate total revenue instead of
+  // summing from the limited transaction list.
   const totalRevenue = useMemo(
     () =>
-      transactions?.reduce((sum, tx) => {
-        if (tx.state === "settled") return sum + tx.price_sats;
-        return sum;
-      }, 0) ?? 0,
-    [transactions]
+      stats?.service_breakdown?.find(
+        (s) => s.service_name === decodedName,
+      )?.total_revenue_sats ?? 0,
+    [stats, decodedName]
   );
 
   const settledCount = useMemo(
@@ -429,7 +433,7 @@ function ServiceDetailContent() {
     try {
       await deleteService(decodedName);
       toast(`Service "${decodedName}" deleted`);
-      window.location.href = "/services";
+      router.push("/services");
     } catch (e: unknown) {
       toast(
         e instanceof Error ? e.message : "Failed to delete service",
