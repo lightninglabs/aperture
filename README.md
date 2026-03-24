@@ -46,6 +46,13 @@ services and APIs.
   Aperture doesn't support creating its own certificate through Let's Encrypt yet.
   If there is no `tls.cert` and `tls.key` found, a self-signed pair will be
   created.
+* If Aperture is behind a TLS-terminating load balancer/ingress, make sure the
+  load balancer's ALPN policy advertises `h2` (for example, AWS NLB
+  `HTTP2Preferred` or `HTTP2Only`). Some gRPC clients fail with
+  `missing selected ALPN property` if no ALPN protocol is negotiated.
+  On AWS NLB, the default ALPN policy is `None`, which does not negotiate ALPN.
+  If you use TCP passthrough instead of TLS termination at the load balancer,
+  Aperture negotiates ALPN directly.
 * Make sure all required configuration items are set in `~/.aperture/aperture.yaml`,
   compare with `sample-conf.yaml`.
 * Start aperture without any command line parameters (`./aperture`), all configuration

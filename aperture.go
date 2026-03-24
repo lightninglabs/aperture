@@ -681,11 +681,11 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 				log.Errorf("autocert http: %v", err)
 			}
 		}()
-		return &tls.Config{
-			GetCertificate: manager.GetCertificate,
-			CipherSuites:   http2TLSCipherSuites,
-			MinVersion:     tls.VersionTLS10,
-		}, nil
+		tlsCfg := manager.TLSConfig()
+		tlsCfg.CipherSuites = http2TLSCipherSuites
+		tlsCfg.MinVersion = tls.VersionTLS10
+
+		return tlsCfg, nil
 	}
 
 	// If we're not using autocert, we want to create self-signed TLS certs
