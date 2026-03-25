@@ -440,9 +440,9 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, secretStore, mppSessionStore,
-		paymentSender, mintTxnStore, txnRecorder,
-		adminPriority, adminFallback,
+		a.cfg, initialServices, a.challenger, secretStore,
+		mppSessionStore, paymentSender, mintTxnStore,
+		txnRecorder, adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -1627,7 +1627,8 @@ func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
 // adminPriorityServices are checked before proxy backend matching (e.g. admin
 // gRPC, REST, dashboard proxy). adminFallbackServices are checked after proxy
 // backend matching fails (e.g. dashboard catch-all static file server).
-func createProxy(cfg *Config, challenger challenger.Challenger,
+func createProxy(cfg *Config, services []*proxy.Service,
+	challenger challenger.Challenger,
 	store mint.SecretStore, mppSessionStore auth.SessionStore,
 	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
 	txnRecorder auth.TransactionRecorder,
@@ -1637,7 +1638,7 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 	minter := mint.New(&mint.Config{
 		Challenger:       challenger,
 		Secrets:          store,
-		ServiceLimiter:   newStaticServiceLimiter(cfg.Services),
+		ServiceLimiter:   newStaticServiceLimiter(services),
 		Now:              time.Now,
 		TransactionStore: txnStore,
 	})
@@ -1751,7 +1752,7 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 	))
 
 	prxy, err := proxy.New(
-		authenticator, cfg.Services, cfg.Blocklist,
+		authenticator, services, cfg.Blocklist,
 		adminPriorityServices, localServices...,
 	)
 	return prxy, proxyCleanup, err
