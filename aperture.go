@@ -1599,6 +1599,11 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 		proxyCleanup = cleanup
 	}
 
+	// Append admin fallback services (e.g. dashboard catch-all) before
+	// the static file server so the embedded dashboard is served when
+	// available.
+	localServices = append(localServices, adminFallbackServices...)
+
 	// The static file server must be last since it will match all calls
 	// that make it to it.
 	localServices = append(localServices, proxy.NewLocalService(
@@ -1606,11 +1611,6 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 			return true
 		},
 	))
-
-	// Append admin fallback services (e.g. dashboard catch-all) after
-	// hashmail and the static file server so they are checked in the
-	// correct order within localServices.
-	localServices = append(localServices, adminFallbackServices...)
 
 	prxy, err := proxy.New(
 		authenticator, cfg.Services, cfg.Blocklist,
