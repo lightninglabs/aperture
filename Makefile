@@ -55,6 +55,7 @@ $(GOACC_BIN):
 build:
 	@$(call print, "Building aperture.")
 	$(GOBUILD) $(PKG)/cmd/aperture
+	$(GOBUILD) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
 
 build-dashboard:
 	@$(call print, "Building dashboard static export.")
@@ -65,8 +66,9 @@ build-withdashboard: build-dashboard
 	$(GOBUILD) -tags=dashboard $(PKG)/cmd/aperture
 
 install:
-	@$(call print, "Installing aperture.")
+	@$(call print, "Installing aperture and aperturecli.")
 	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
+	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
 
 docker-tools:
 	@$(call print, "Building tools docker image.")
@@ -167,5 +169,6 @@ rpc-check: rpc
 clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) ./aperture
+	$(RM) ./aperturecli
 	$(RM) coverage.txt
 	$(RM) -r dashboard/out
