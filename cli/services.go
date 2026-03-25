@@ -40,8 +40,11 @@ func newServicesListCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.ListServices(
-				cmd.Context(),
+				rpcCtx,
 				&adminrpc.ListServicesRequest{},
 			)
 			if err != nil {
@@ -121,8 +124,11 @@ func newServicesCreateCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.CreateService(
-				cmd.Context(), req,
+				rpcCtx, req,
 			)
 			if err != nil {
 				return mapGRPCError(err)
@@ -234,8 +240,11 @@ Examples:
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.UpdateService(
-				cmd.Context(), req,
+				rpcCtx, req,
 			)
 			if err != nil {
 				return mapGRPCError(err)
@@ -307,8 +316,11 @@ func newServicesDeleteCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.DeleteService(
-				cmd.Context(), req,
+				rpcCtx, req,
 			)
 			if err != nil {
 				return mapGRPCError(err)

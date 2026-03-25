@@ -21,8 +21,11 @@ func NewHealthCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.GetHealth(
-				cmd.Context(),
+				rpcCtx,
 				&adminrpc.GetHealthRequest{},
 			)
 			if err != nil {

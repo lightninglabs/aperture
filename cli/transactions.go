@@ -41,8 +41,11 @@ func newTransactionsListCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.ListTransactions(
-				cmd.Context(),
+				rpcCtx,
 				&adminrpc.ListTransactionsRequest{
 					Service:   service,
 					State:     state,

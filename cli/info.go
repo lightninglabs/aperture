@@ -23,8 +23,11 @@ func NewInfoCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.GetInfo(
-				cmd.Context(),
+				rpcCtx,
 				&adminrpc.GetInfoRequest{},
 			)
 			if err != nil {

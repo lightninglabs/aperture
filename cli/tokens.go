@@ -41,8 +41,11 @@ func newTokensListCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.ListTokens(
-				cmd.Context(),
+				rpcCtx,
 				&adminrpc.ListTokensRequest{
 					Limit:  limit,
 					Offset: offset,
@@ -121,8 +124,11 @@ func newTokensRevokeCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.RevokeToken(
-				cmd.Context(), req,
+				rpcCtx, req,
 			)
 			if err != nil {
 				return mapGRPCError(err)

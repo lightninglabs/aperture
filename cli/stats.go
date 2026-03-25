@@ -28,8 +28,11 @@ func NewStatsCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			rpcCtx, cancel := rpcTimeout(cmd.Context())
+			defer cancel()
+
 			resp, err := client.GetStats(
-				cmd.Context(),
+				rpcCtx,
 				&adminrpc.GetStatsRequest{
 					From: from,
 					To:   to,
