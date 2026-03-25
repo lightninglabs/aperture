@@ -393,9 +393,7 @@ export default function TransactionsPage() {
             variant="ghost"
             compact
             onClick={exportCSV}
-            disabled={
-              isLoading || (!transactions?.length && !sorted?.length)
-            }
+            disabled={isLoading || (!transactions?.length && !sorted?.length)}
           >
             Export CSV
           </Button>
@@ -564,7 +562,9 @@ export default function TransactionsPage() {
                             {
                               label: "View service",
                               onClick: () => {
-                                router.push(`/services/detail?name=${encodeURIComponent(tx.service_name)}`);
+                                router.push(
+                                  `/services/detail?name=${encodeURIComponent(tx.service_name)}`
+                                );
                               },
                             },
                           ]}

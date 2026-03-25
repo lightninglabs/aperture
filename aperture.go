@@ -213,6 +213,8 @@ func NewAperture(cfg *Config) *Aperture {
 }
 
 // Start sets up the proxy server and starts it.
+//
+//nolint:gocyclo
 func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// Start the prometheus exporter.
 	err := StartPrometheusExporter(a.cfg.Prometheus, shutdown)
@@ -912,6 +914,7 @@ func buildChallengerOpts(
 // and dashboard proxy endpoints) and fallback services (catch-all handlers
 // like the dashboard static file server that should only run after proxy
 // backend matching fails).
+//nolint:gocyclo
 func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,

@@ -54,7 +54,7 @@ func TestServiceTimeoutsComputedPerCall(t *testing.T) {
 			"from init time")
 }
 
-func TestStaticServiceLimiterIgnoresRuntimePriceChanges(t *testing.T) {
+func TestStaticServiceLimiterAllCaveatTypes(t *testing.T) {
 	t.Parallel()
 
 	limiter := newStaticServiceLimiter([]*proxy.Service{
@@ -72,7 +72,7 @@ func TestStaticServiceLimiterIgnoresRuntimePriceChanges(t *testing.T) {
 	service := l402.Service{
 		Name:  "svc",
 		Tier:  l402.BaseTier,
-		Price: 250,
+		Price: 100,
 	}
 
 	capabilities, err := limiter.ServiceCapabilities(

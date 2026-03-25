@@ -314,9 +314,8 @@ function ServiceDetailContent() {
   // summing from the limited transaction list.
   const totalRevenue = useMemo(
     () =>
-      stats?.service_breakdown?.find(
-        (s) => s.service_name === decodedName,
-      )?.total_revenue_sats ?? 0,
+      stats?.service_breakdown?.find((s) => s.service_name === decodedName)
+        ?.total_revenue_sats ?? 0,
     [stats, decodedName]
   );
 

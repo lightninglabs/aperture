@@ -1,7 +1,6 @@
 package proxy_test
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,5 +131,4 @@ func TestCatchAllPriorityHijacksBackend(t *testing.T) {
 	require.Equal(t, backendBody, string(body),
 		"Backend should handle all /api/* paths")
 
-	_ = fmt.Sprintf("test complete")
 }

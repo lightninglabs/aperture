@@ -148,7 +148,6 @@ list:
 rpc:
 	@$(call print, "Compiling protos.")
 	cd ./pricesrpc; ./gen_protos_docker.sh
-	cd ./adminrpc; ./gen_protos.sh
 
 rpc-format:
 	@$(call print, "Formatting protos.")
