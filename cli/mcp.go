@@ -50,7 +50,7 @@ list_transactions, list_tokens, revoke_token, get_stats`,
 			)
 			defer cancel()
 
-			return aperturemcp.Run(ctx, client)
+			return aperturemcp.Run(ctx, client, Version)
 		},
 	}
 }

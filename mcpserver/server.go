@@ -12,13 +12,15 @@ import (
 )
 
 // NewServer creates a new MCP server with all aperturecli tools
-// registered. The server uses the provided gRPC admin client for all
-// operations.
-func NewServer(client adminrpc.AdminClient) *gomcp.Server {
+// registered. The version parameter is injected from the CLI's build
+// version to avoid import cycles.
+func NewServer(client adminrpc.AdminClient,
+	version string) *gomcp.Server {
+
 	server := gomcp.NewServer(
 		&gomcp.Implementation{
 			Name:    "aperturecli",
-			Version: "0.1.0",
+			Version: version,
 		},
 		nil,
 	)
@@ -30,8 +32,10 @@ func NewServer(client adminrpc.AdminClient) *gomcp.Server {
 
 // Run starts the MCP server on the stdio transport and blocks until
 // the context is cancelled or the transport closes.
-func Run(ctx context.Context, client adminrpc.AdminClient) error {
-	server := NewServer(client)
+func Run(ctx context.Context, client adminrpc.AdminClient,
+	version string) error {
+
+	server := NewServer(client, version)
 
 	return server.Run(ctx, &gomcp.StdioTransport{})
 }

@@ -154,14 +154,27 @@ func registerTools(
 			*gomcp.CallToolResult, *protoResult, error) {
 
 			updateReq := &adminrpc.UpdateServiceRequest{
-				Name:       args.Name,
-				Address:    args.Address,
-				Protocol:   args.Protocol,
-				HostRegexp: args.HostRegexp,
-				PathRegexp: args.PathRegexp,
-				Auth:       args.Auth,
+				Name: args.Name,
 			}
 
+			// Only populate fields that were explicitly
+			// provided by the agent to avoid clearing
+			// unset fields on the server.
+			if args.Address != nil {
+				updateReq.Address = *args.Address
+			}
+			if args.Protocol != nil {
+				updateReq.Protocol = *args.Protocol
+			}
+			if args.HostRegexp != nil {
+				updateReq.HostRegexp = *args.HostRegexp
+			}
+			if args.PathRegexp != nil {
+				updateReq.PathRegexp = *args.PathRegexp
+			}
+			if args.Auth != nil {
+				updateReq.Auth = *args.Auth
+			}
 			if args.Price != nil {
 				updateReq.Price = proto.Int64(*args.Price)
 			}
@@ -339,15 +352,16 @@ type createServiceArgs struct {
 }
 
 // updateServiceArgs are the input parameters for the update_service
-// tool.
+// tool. All fields except Name are pointers so the handler can
+// distinguish "not provided" from "set to empty/zero".
 type updateServiceArgs struct {
-	Name       string `json:"name" jsonschema:"required,description=Service name to update"`
-	Address    string `json:"address,omitempty" jsonschema:"description=New backend address"`
-	Protocol   string `json:"protocol,omitempty" jsonschema:"description=New protocol: http or https"`
-	HostRegexp string `json:"host_regexp,omitempty" jsonschema:"description=New host regexp pattern"`
-	PathRegexp string `json:"path_regexp,omitempty" jsonschema:"description=New path regexp pattern"`
-	Price      *int64 `json:"price,omitempty" jsonschema:"description=New price in satoshis"`
-	Auth       string `json:"auth,omitempty" jsonschema:"description=New auth level"`
+	Name       string  `json:"name" jsonschema:"required,description=Service name to update"`
+	Address    *string `json:"address,omitempty" jsonschema:"description=New backend address"`
+	Protocol   *string `json:"protocol,omitempty" jsonschema:"description=New protocol: http or https"`
+	HostRegexp *string `json:"host_regexp,omitempty" jsonschema:"description=New host regexp pattern"`
+	PathRegexp *string `json:"path_regexp,omitempty" jsonschema:"description=New path regexp pattern"`
+	Price      *int64  `json:"price,omitempty" jsonschema:"description=New price in satoshis"`
+	Auth       *string `json:"auth,omitempty" jsonschema:"description=New auth level"`
 }
 
 // deleteServiceArgs are the input parameters for the delete_service
