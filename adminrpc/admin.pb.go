@@ -574,8 +574,9 @@ type UpdateServiceRequest struct {
 	PathRegexp string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
 	Price      *int64                 `protobuf:"varint,6,opt,name=price,proto3,oneof" json:"price,omitempty"`
 	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
-	// auth_scheme specifies which payment auth scheme(s) to use.
-	AuthScheme    AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
+	// auth_scheme specifies which payment auth scheme(s) to use. When not
+	// set, the existing auth_scheme is preserved (not reset to L402).
+	AuthScheme    *AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme,oneof" json:"auth_scheme,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -660,8 +661,8 @@ func (x *UpdateServiceRequest) GetAuth() string {
 }
 
 func (x *UpdateServiceRequest) GetAuthScheme() AuthScheme {
-	if x != nil {
-		return x.AuthScheme
+	if x != nil && x.AuthScheme != nil {
+		return *x.AuthScheme
 	}
 	return AuthScheme_AUTH_SCHEME_L402
 }
@@ -1390,7 +1391,7 @@ const file_admin_proto_rawDesc = "" +
 	"\x05price\x18\x06 \x01(\x03R\x05price\x12\x12\n" +
 	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
 	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
-	"authScheme\"\x92\x02\n" +
+	"authScheme\"\xa7\x02\n" +
 	"\x14UpdateServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1400,10 +1401,11 @@ const file_admin_proto_rawDesc = "" +
 	"\vpath_regexp\x18\x05 \x01(\tR\n" +
 	"pathRegexp\x12\x19\n" +
 	"\x05price\x18\x06 \x01(\x03H\x00R\x05price\x88\x01\x01\x12\x12\n" +
-	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
-	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
-	"authSchemeB\b\n" +
-	"\x06_price\"*\n" +
+	"\x04auth\x18\a \x01(\tR\x04auth\x12:\n" +
+	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeH\x01R\n" +
+	"authScheme\x88\x01\x01B\b\n" +
+	"\x06_priceB\x0e\n" +
+	"\f_auth_scheme\"*\n" +
 	"\x14DeleteServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"/\n" +
 	"\x15DeleteServiceResponse\x12\x16\n" +

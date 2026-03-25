@@ -105,6 +105,33 @@ authenticator:
   # Set to true to skip verification of the mailbox server's tls cert.
   devserver: false
 
+  # Enable the Payment HTTP Authentication Scheme (MPP) alongside L402.
+  # When enabled, 402 responses include both L402 and Payment challenges.
+  # enablempp: true
+
+  # Realm string used in MPP challenge headers. Defaults to the server's
+  # listen address.
+  # mpprealm: "api.example.com"
+
+  # Enable MPP session intent for prepaid sessions with deposit, bearer,
+  # top-up, and close operations. Requires enablempp to be true.
+  # enablesessions: true
+
+  # Number of service units per session deposit. Determines the deposit
+  # invoice amount as (service price * multiplier). Default: 20.
+  # sessiondepositmultiplier: 20
+
+  # Session idle timeout in seconds. Default: 300 (5 minutes).
+  # sessionidletimeout: 300
+
+# Admin API configuration. Provides gRPC/REST endpoints for managing services,
+# transactions, and tokens at runtime. Disabled by default.
+# admin:
+#   enabled: true
+#   macaroonpath: "/path/to/aperture/data/admin.macaroon"
+#   corsorigin:
+#     - "https://dashboard.example.com"
+
 # List of IPs to block from accessing the proxy.
 blocklist:
   - "1.1.1.1"
@@ -177,6 +204,10 @@ services:
     # The HTTP protocol that should be used to connect to the service. Valid
     # options include: http, https.
     protocol: https
+
+    # Payment auth scheme for this service. Valid values: "l402" (default),
+    # "mpp" (Payment HTTP Auth only), or "l402+mpp" (both schemes).
+    # authscheme: "l402"
 
     # Header fields to always pass to the service. Replace the placeholder
     # value with a real credential; do not commit secrets to version control.

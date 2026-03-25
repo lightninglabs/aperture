@@ -89,19 +89,22 @@ func ParseCredential(h *http.Header) (*Credential, error) {
 		return nil, fmt.Errorf("mpp: empty credential token")
 	}
 
+	// Reject oversized credentials before decoding to avoid allocating
+	// memory for payloads that will be rejected anyway. The encoded form
+	// of maxCredentialSize bytes is roughly 4/3 of that size.
+	const maxCredentialSize = 64 * 1024 // 64KB.
+	maxEncodedLen := maxCredentialSize*4/3 + 4
+	if len(token) > maxEncodedLen {
+		return nil, fmt.Errorf("mpp: credential too large "+
+			"(%d encoded bytes, max %d)", len(token),
+			maxEncodedLen)
+	}
+
 	// Decode from base64url.
 	decoded, err := Base64URLDecode(token)
 	if err != nil {
 		return nil, fmt.Errorf("mpp: failed to decode credential "+
 			"token: %w", err)
-	}
-
-	// Reject oversized credentials to prevent memory exhaustion.
-	const maxCredentialSize = 64 * 1024 // 64KB.
-	if len(decoded) > maxCredentialSize {
-		return nil, fmt.Errorf("mpp: credential too large "+
-			"(%d bytes, max %d)", len(decoded),
-			maxCredentialSize)
 	}
 
 	// Unmarshal the JSON credential.

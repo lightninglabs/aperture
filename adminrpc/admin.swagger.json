@@ -192,7 +192,7 @@
                 },
                 "auth_scheme": {
                   "$ref": "#/definitions/adminrpcAuthScheme",
-                  "description": "auth_scheme specifies which payment auth scheme(s) to use."
+                  "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
                 }
               }
             }

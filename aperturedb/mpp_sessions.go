@@ -40,6 +40,11 @@ type MPPSessionsDB interface {
 	// CloseMPPSession marks the session as closed.
 	CloseMPPSession(ctx context.Context,
 		arg sqlc.CloseMPPSessionParams) (sql.Result, error)
+
+	// CloseMPPSessionReturningBalance atomically closes the session and
+	// returns the remaining balance (deposit_sats - spent_sats).
+	CloseMPPSessionReturningBalance(ctx context.Context,
+		arg sqlc.CloseMPPSessionReturningBalanceParams) (int64, error)
 }
 
 // MPPSessionsTxOptions defines the set of db txn options the
@@ -285,4 +290,38 @@ func (s *MPPSessionsStore) CloseSession(ctx context.Context,
 	}
 
 	return nil
+}
+
+// CloseSessionAndGetBalance atomically closes the session and returns the
+// remaining balance (deposit_sats - spent_sats). This prevents the TOCTOU race
+// where a concurrent bearer request could deduct balance between a separate
+// GetSession read and CloseSession write.
+//
+// NOTE: This implements the auth.SessionStore interface.
+func (s *MPPSessionsStore) CloseSessionAndGetBalance(ctx context.Context,
+	sessionID string) (int64, error) {
+
+	var remainingBalance int64
+
+	var writeTxOpts MPPSessionsTxOptions
+	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx MPPSessionsDB) error {
+		balance, err := tx.CloseMPPSessionReturningBalance(ctx,
+			sqlc.CloseMPPSessionReturningBalanceParams{
+				UpdatedAt: s.clock.Now().UTC(),
+				SessionID: sessionID,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		remainingBalance = balance
+		return nil
+	})
+
+	if err != nil {
+		return 0, fmt.Errorf("unable to close session %s: %w",
+			sessionID, err)
+	}
+
+	return remainingBalance, nil
 }

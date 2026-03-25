@@ -268,8 +268,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// required for the given resource. The call to Accept is
 		// called in each case body rather than outside the switch so
 		// as to avoid calling this possibly expensive call for static
-		// resources.
-		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		// resources. If the service specifies an auth scheme, only
+		// authenticators matching that scheme are tried.
+		acceptAuth := p.acceptForService(
+			&r.Header, resourceName, target,
+		)
 		if !acceptAuth {
 			if skipInvoiceCreation {
 				addCorsHeaders(w.Header())
@@ -316,7 +319,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		acceptAuth := p.acceptForService(
+			&r.Header, resourceName, target,
+		)
 		if !acceptAuth {
 			ok, err := target.freebieDB.CanPass(r, remoteIP)
 			if err != nil {
@@ -390,6 +395,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
 	p.proxyBackend.ServeHTTP(w, r)
+}
+
+// acceptForService checks authentication, respecting the service's per-service
+// AuthScheme setting. If the authenticator is a MultiAuthenticator and the
+// service has an AuthScheme set, only matching sub-authenticators are tried.
+func (p *Proxy) acceptForService(header *http.Header, resourceName string,
+	target *Service) bool {
+
+	multi, ok := p.authenticator.(*auth.MultiAuthenticator)
+	if ok && target.AuthScheme != "" {
+		return multi.AcceptForScheme(
+			header, resourceName, target.AuthScheme,
+		)
+	}
+
+	return p.authenticator.Accept(header, resourceName)
 }
 
 // UpdateServices re-configures the proxy to use a new set of backend services.

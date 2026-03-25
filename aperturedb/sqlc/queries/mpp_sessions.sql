@@ -27,3 +27,9 @@ WHERE session_id = $3
 UPDATE mpp_sessions
 SET status = 'closed', updated_at = $1
 WHERE session_id = $2 AND status = 'open';
+
+-- name: CloseMPPSessionReturningBalance :one
+UPDATE mpp_sessions
+SET status = 'closed', updated_at = $1
+WHERE session_id = $2 AND status = 'open'
+RETURNING CAST(deposit_sats - spent_sats AS BIGINT);

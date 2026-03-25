@@ -168,11 +168,24 @@ func WriteAdminMacaroon(mac *macaroon.Macaroon, path string) error {
 // the root key being accessible via a well-known deterministic hash.
 func ReadOrCreateRootKey(path string) ([]byte, error) {
 	keyBytes, err := os.ReadFile(path)
-	if err == nil && len(keyBytes) == rootKeySize {
+	switch {
+	case err == nil && len(keyBytes) == rootKeySize:
 		return keyBytes, nil
+
+	case err == nil:
+		// File exists but has wrong size — corrupted.
+		return nil, fmt.Errorf("root key file %s has invalid "+
+			"size %d (expected %d)", path, len(keyBytes),
+			rootKeySize)
+
+	case !os.IsNotExist(err):
+		// File read failed for a reason other than not existing
+		// (e.g., permission denied). Don't silently regenerate.
+		return nil, fmt.Errorf("unable to read root key from "+
+			"%s: %w", path, err)
 	}
 
-	// Generate a new random root key.
+	// File does not exist — generate a new random root key.
 	rootKey := make([]byte, rootKeySize)
 	if _, err := rand.Read(rootKey); err != nil {
 		return nil, fmt.Errorf("unable to generate random root "+

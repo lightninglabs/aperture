@@ -11,6 +11,7 @@ import (
 
 type Querier interface {
 	CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams) (sql.Result, error)
+	CloseMPPSessionReturningBalance(ctx context.Context, arg CloseMPPSessionReturningBalanceParams) (int64, error)
 	CountL402Transactions(ctx context.Context) (int64, error)
 	CountL402TransactionsByDateRange(ctx context.Context, arg CountL402TransactionsByDateRangeParams) (int64, error)
 	CountL402TransactionsByService(ctx context.Context, serviceName string) (int64, error)

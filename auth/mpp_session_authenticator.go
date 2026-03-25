@@ -8,12 +8,12 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/mpp"
+	"github.com/lightninglabs/neutrino/cache/lru"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/zpay32"
@@ -67,9 +67,10 @@ type MPPSessionAuthenticator struct {
 
 	// closeResults caches refund outcomes from close actions keyed by
 	// sessionID so ReceiptHeader can include the correct refund data.
-	// Using sync.Map avoids the race where concurrent closes could
-	// overwrite each other's results.
-	closeResults sync.Map
+	// The LRU cache bounds memory usage — old entries are evicted when
+	// capacity is reached, preventing leaks if ReceiptHeader is never
+	// called (e.g., connection drops).
+	closeResults *lru.Cache[string, *closeResult]
 }
 
 // closeResult stores the outcome of a session close for receipt generation.
@@ -78,6 +79,20 @@ type closeResult struct {
 	refundSats   int64
 	refundStatus string // "succeeded", "failed", or "skipped"
 }
+
+// Size returns the size of the close result for the LRU cache. Each entry
+// counts as 1 unit since we bound by count, not bytes.
+//
+// NOTE: This implements the cache.Value interface.
+func (c *closeResult) Size() (uint64, error) {
+	return 1, nil
+}
+
+const (
+	// maxCloseResults is the maximum number of close results to cache.
+	// This bounds memory usage in case ReceiptHeader is never called.
+	maxCloseResults = 1000
+)
 
 // Compile-time interface checks.
 var _ Authenticator = (*MPPSessionAuthenticator)(nil)
@@ -121,7 +136,18 @@ func NewMPPSessionAuthenticator(
 		depositMultiplier: multiplier,
 		idleTimeout:       timeout,
 		chainParams:       networkToChainParams(cfg.Network),
+		closeResults: lru.NewCache[string, *closeResult](
+			maxCloseResults,
+		),
 	}
+}
+
+// Scheme returns the authentication scheme identifier for the MPP session
+// authenticator.
+//
+// NOTE: This implements the SchemeTagged interface.
+func (a *MPPSessionAuthenticator) Scheme() string {
+	return AuthSchemeMPP
 }
 
 // Accept returns whether the header contains a valid Payment credential for
@@ -255,6 +281,15 @@ func (a *MPPSessionAuthenticator) handleOpen(ctx context.Context,
 		return false
 	}
 
+	// Reject already-expired return invoices so the refund on close has
+	// a chance of succeeding.
+	invoiceExpiry := inv.Timestamp.Add(inv.Expiry())
+	if time.Now().After(invoiceExpiry) {
+		log.Debugf("MPP Session: Return invoice already expired "+
+			"at %v", invoiceExpiry)
+		return false
+	}
+
 	// Parse deposit amount from the request.
 	var depositSats int64
 	if sessReq.DepositAmount != "" {
@@ -299,6 +334,18 @@ func (a *MPPSessionAuthenticator) handleBearer(ctx context.Context,
 		log.Debugf("MPP Session: Challenge ID verification " +
 			"failed for bearer")
 		return false
+	}
+
+	// Check expiry.
+	if cred.Challenge.Expires != "" {
+		expiresAt, err := time.Parse(
+			time.RFC3339, cred.Challenge.Expires,
+		)
+		if err != nil || time.Now().After(expiresAt) {
+			log.Debugf("MPP Session: Challenge expired " +
+				"for bearer")
+			return false
+		}
 	}
 
 	if payload.SessionID == "" || payload.Preimage == "" {
@@ -484,13 +531,25 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 		return false
 	}
 
+	// Check expiry.
+	if cred.Challenge.Expires != "" {
+		expiresAt, err := time.Parse(
+			time.RFC3339, cred.Challenge.Expires,
+		)
+		if err != nil || time.Now().After(expiresAt) {
+			log.Debugf("MPP Session: Challenge expired " +
+				"for close")
+			return false
+		}
+	}
+
 	if payload.SessionID == "" || payload.Preimage == "" {
 		log.Debugf("MPP Session: Missing sessionId or preimage " +
 			"for close")
 		return false
 	}
 
-	// Look up session.
+	// Look up session to verify preimage before closing.
 	session, err := a.sessionStore.GetSession(ctx, payload.SessionID)
 	if err != nil {
 		log.Debugf("MPP Session: Session not found for close: %v",
@@ -517,49 +576,81 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 		return false
 	}
 
-	// Mark session as closed first (before attempting refund).
-	if err := a.sessionStore.CloseSession(
+	// Atomically close the session and get the remaining balance. This
+	// prevents the TOCTOU race where a concurrent bearer request could
+	// deduct balance between a separate GetSession and CloseSession.
+	refundSats, err := a.sessionStore.CloseSessionAndGetBalance(
 		ctx, payload.SessionID,
-	); err != nil {
+	)
+	if err != nil {
 		log.Errorf("MPP Session: Failed to close session: %v", err)
 		return false
 	}
 
-	// Compute refund and track the result for receipt generation.
-	refundSats := session.DepositSats - session.SpentSats
-	refundStatus := "skipped"
+	// Cache an initial close result for ReceiptHeader immediately so the
+	// HTTP response can proceed. The refund runs asynchronously.
+	_, _ = a.closeResults.Put(payload.SessionID, &closeResult{
+		sessionID:    payload.SessionID,
+		refundSats:   refundSats,
+		refundStatus: "pending",
+	})
 
+	// Fire the refund asynchronously so the close response isn't blocked
+	// by LN payment routing (which can take many seconds).
 	if refundSats > 0 && a.paymentSender != nil {
-		_, err := a.paymentSender.SendPayment(
-			ctx, session.ReturnInvoice, refundSats,
-		)
-		if err != nil {
-			log.Errorf("MPP Session: Refund failed for "+
-				"session %s (%d sats): %v",
-				payload.SessionID, refundSats, err)
-			refundStatus = "failed"
-		} else {
-			log.Infof("MPP Session: Refunded %d sats to "+
-				"session %s", refundSats, payload.SessionID)
-			refundStatus = "succeeded"
-		}
+		go func() {
+			// Use a dedicated context with a generous timeout
+			// for payment routing, independent of the HTTP
+			// handler's context.
+			refundCtx, cancel := context.WithTimeout(
+				context.Background(), 60*time.Second,
+			)
+			defer cancel()
+
+			_, err := a.paymentSender.SendPayment(
+				refundCtx, session.ReturnInvoice,
+				refundSats,
+			)
+
+			status := "succeeded"
+			if err != nil {
+				log.Errorf("MPP Session: Refund failed "+
+					"for session %s (%d sats): %v",
+					payload.SessionID, refundSats,
+					err)
+				status = "failed"
+			} else {
+				log.Infof("MPP Session: Refunded %d "+
+					"sats to session %s",
+					refundSats, payload.SessionID)
+			}
+
+			// Update the cached result with the final status.
+			_, _ = a.closeResults.Put(
+				payload.SessionID, &closeResult{
+					sessionID:    payload.SessionID,
+					refundSats:   refundSats,
+					refundStatus: status,
+				},
+			)
+		}()
 	} else if refundSats > 0 {
 		// PaymentSender not configured, can't refund.
 		log.Warnf("MPP Session: No payment sender configured, "+
 			"cannot refund %d sats for session %s",
 			refundSats, payload.SessionID)
-		refundStatus = "failed"
+
+		_, _ = a.closeResults.Put(
+			payload.SessionID, &closeResult{
+				sessionID:    payload.SessionID,
+				refundSats:   refundSats,
+				refundStatus: "failed",
+			},
+		)
 	}
 
-	// Cache the close result for ReceiptHeader, keyed by sessionID.
-	a.closeResults.Store(payload.SessionID, &closeResult{
-		sessionID:    payload.SessionID,
-		refundSats:   refundSats,
-		refundStatus: refundStatus,
-	})
-
-	log.Infof("MPP Session: Closed session %s (refund=%d status=%s)",
-		payload.SessionID, refundSats, refundStatus)
+	log.Infof("MPP Session: Closed session %s (refund=%d sats)",
+		payload.SessionID, refundSats)
 	return true
 }
 
@@ -654,13 +745,11 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 			Timestamp: now,
 		}
 
-		// Retrieve and delete the cached close result for this
-		// session. LoadAndDelete is atomic and ensures each close
-		// result is consumed exactly once.
-		if val, ok := a.closeResults.LoadAndDelete(
-			payload.SessionID,
-		); ok {
-			cr := val.(*closeResult)
+		// Retrieve the cached close result for this session. The
+		// LRU cache naturally evicts old entries, so there is no
+		// need for explicit deletion.
+		cr, err := a.closeResults.Get(payload.SessionID)
+		if err == nil {
 			sessReceipt.RefundSats = cr.refundSats
 			sessReceipt.RefundStatus = cr.refundStatus
 		}

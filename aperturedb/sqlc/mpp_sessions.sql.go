@@ -26,6 +26,25 @@ func (q *Queries) CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams
 	return q.db.ExecContext(ctx, closeMPPSession, arg.UpdatedAt, arg.SessionID)
 }
 
+const closeMPPSessionReturningBalance = `-- name: CloseMPPSessionReturningBalance :one
+UPDATE mpp_sessions
+SET status = 'closed', updated_at = $1
+WHERE session_id = $2 AND status = 'open'
+RETURNING CAST(deposit_sats - spent_sats AS BIGINT)
+`
+
+type CloseMPPSessionReturningBalanceParams struct {
+	UpdatedAt time.Time
+	SessionID string
+}
+
+func (q *Queries) CloseMPPSessionReturningBalance(ctx context.Context, arg CloseMPPSessionReturningBalanceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, closeMPPSessionReturningBalance, arg.UpdatedAt, arg.SessionID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getMPPSessionByID = `-- name: GetMPPSessionByID :one
 SELECT id, session_id, payment_hash, deposit_sats, spent_sats, return_invoice, status, created_at, updated_at
 FROM mpp_sessions

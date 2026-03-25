@@ -86,6 +86,13 @@ type SessionStore interface {
 	// CloseSession marks the session as closed. No further operations are
 	// accepted on a closed session.
 	CloseSession(ctx context.Context, sessionID string) error
+
+	// CloseSessionAndGetBalance atomically closes the session and returns
+	// the remaining balance (deposit_sats - spent_sats). This prevents
+	// the TOCTOU race where a concurrent bearer request could deduct
+	// balance between a separate read and close.
+	CloseSessionAndGetBalance(ctx context.Context,
+		sessionID string) (int64, error)
 }
 
 // Session represents an MPP prepaid session. The session is identified by the

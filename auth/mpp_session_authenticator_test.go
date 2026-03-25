@@ -104,9 +104,31 @@ func (m *mockSessionStore) CloseSession(_ context.Context,
 	if !ok {
 		return fmt.Errorf("session not found")
 	}
+	if s.Status != "open" {
+		return fmt.Errorf("session already closed")
+	}
 	s.Status = "closed"
 	s.UpdatedAt = time.Now()
 	return nil
+}
+
+func (m *mockSessionStore) CloseSessionAndGetBalance(_ context.Context,
+	sessionID string) (int64, error) {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return 0, fmt.Errorf("session not found")
+	}
+	if s.Status != "open" {
+		return 0, fmt.Errorf("session already closed")
+	}
+	s.Status = "closed"
+	s.UpdatedAt = time.Now()
+
+	return s.DepositSats - s.SpentSats, nil
 }
 
 // mockPaymentSender implements PaymentSender for testing.
@@ -427,10 +449,18 @@ func TestSessionCloseWithRefund(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "closed", session.Status)
 
+	// Wait for async refund goroutine to complete.
+	require.Eventually(t, func() bool {
+		sender.mu.Lock()
+		defer sender.mu.Unlock()
+		return len(sender.payments) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
 	// Verify refund was sent to the return invoice.
-	require.Len(t, sender.payments, 1)
+	sender.mu.Lock()
 	require.NotEmpty(t, sender.payments[0].invoice)
 	require.Equal(t, int64(200), sender.payments[0].amtSats) // 300-100
+	sender.mu.Unlock()
 }
 
 // TestSessionCloseAlreadyClosed verifies that closing an already-closed
@@ -593,8 +623,13 @@ func TestSessionConcurrentCloseReceipts(t *testing.T) {
 		require.Equal(t, "closed", session.Status)
 	}
 
-	// Verify refunds were sent for all sessions.
-	require.Len(t, sender.payments, numSessions)
+	// Wait for async refund goroutines to complete. The mock sender
+	// is instant, so a short poll is sufficient.
+	require.Eventually(t, func() bool {
+		sender.mu.Lock()
+		defer sender.mu.Unlock()
+		return len(sender.payments) == numSessions
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 // TestSessionConcurrentBearerAccept verifies that concurrent bearer requests

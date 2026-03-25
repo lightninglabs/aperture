@@ -68,6 +68,14 @@ func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
 	}
 }
 
+// Scheme returns the authentication scheme identifier for the MPP charge
+// authenticator.
+//
+// NOTE: This implements the SchemeTagged interface.
+func (a *MPPAuthenticator) Scheme() string {
+	return AuthSchemeMPP
+}
+
 // Accept returns whether the header contains a valid Payment credential for
 // the Lightning charge intent.
 //

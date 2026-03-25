@@ -96,8 +96,9 @@ message UpdateServiceRequest {
   optional int64 price = 6;
   string auth = 7;
 
-  // auth_scheme specifies which payment auth scheme(s) to use.
-  AuthScheme auth_scheme = 8;
+  // auth_scheme specifies which payment auth scheme(s) to use. When not
+  // set, the existing auth_scheme is preserved (not reset to L402).
+  optional AuthScheme auth_scheme = 8;
 }
 
 message DeleteServiceRequest { string name = 1; }
