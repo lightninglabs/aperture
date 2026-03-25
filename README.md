@@ -33,14 +33,10 @@ services and APIs.
 
 **aperture**
 
-* Compilation requires go `1.19.x` or later.
-* To build `aperture` in the current directory, run `make build` and then copy the
-  file `./aperture` from the local directory to the server.
-* To build and install `aperture` directly on the machine it will be used, run the
-  `make install` command which will place the binary into your `$GOPATH/bin`
-  folder.
-* Make sure port `8081` is reachable from outside (or whatever port we choose,
-  could also be 443 at some point)
+* Compilation requires Go `1.25` or later.
+* To build both `aperture` and `aperturecli`, run `make build`. To install
+  them into your `$GOPATH/bin`, run `make install`.
+* Make sure port `8081` is reachable from outside (or whatever port you choose).
 * Make sure there is a valid `tls.cert` and `tls.key` file located in the
   `~/.aperture` directory that is valid for the domain that aperture is running on.
   Aperture doesn't support creating its own certificate through Let's Encrypt yet.
@@ -57,6 +53,115 @@ services and APIs.
   compare with `sample-conf.yaml`.
 * Start aperture without any command line parameters (`./aperture`), all configuration
   is done in the `~/.aperture/aperture.yaml` file.
+
+## Admin API
+
+Aperture ships with an optional gRPC and REST admin API for managing services
+at runtime, querying transaction history, and monitoring revenue. Enable it by
+adding an `admin` section to your config:
+
+```yaml
+admin:
+  enabled: true
+  macaroonpath: "/path/to/admin.macaroon"  # defaults to ~/.aperture/admin.macaroon
+```
+
+On first startup Aperture generates a random root key and writes an admin
+macaroon to the configured path. All admin endpoints (except health) require
+this macaroon for authentication, passed as hex-encoded gRPC metadata or an
+HTTP header.
+
+The admin API exposes ten RPCs covering the full lifecycle of the proxy:
+
+| RPC | REST | Description |
+|-----|------|-------------|
+| `GetHealth` | `GET /api/admin/health` | Health check (no auth required) |
+| `GetInfo` | `GET /api/admin/info` | Server info: network, listen address, TLS status |
+| `ListServices` | `GET /api/admin/services` | List all proxied backend services |
+| `CreateService` | `POST /api/admin/services` | Register a new service with pricing and auth |
+| `UpdateService` | `PUT /api/admin/services/{name}` | Update service config (pricing, address, auth) |
+| `DeleteService` | `DELETE /api/admin/services/{name}` | Remove a service |
+| `ListTransactions` | `GET /api/admin/transactions` | Query L402 transactions with filters |
+| `ListTokens` | `GET /api/admin/tokens` | List issued L402 tokens |
+| `RevokeToken` | `DELETE /api/admin/tokens/{token_id}` | Revoke a token |
+| `GetStats` | `GET /api/admin/stats` | Revenue statistics with per-service breakdown |
+
+Services created through the admin API are persisted to the database and
+survive restarts. Changes take effect immediately — the proxy's routing table
+is updated in-place, so you can adjust pricing or swap backends without
+downtime.
+
+See [docs/admin-api.md](docs/admin-api.md) for full configuration details.
+
+## Dashboard
+
+When built with the `dashboard` build tag (`make build-withdashboard`),
+Aperture embeds a Next.js web dashboard served at the root path. The dashboard
+provides a visual interface for everything the admin API exposes: service
+management, transaction history with filtering and pagination, revenue charts,
+and token administration.
+
+The dashboard communicates with the admin API through a server-side proxy that
+injects the macaroon automatically, so no client-side credentials are needed.
+Access is restricted to loopback connections for security.
+
+See [docs/dashboard.md](docs/dashboard.md) for setup and screenshots.
+
+## CLI (`aperturecli`)
+
+`aperturecli` is a standalone command-line tool for the admin gRPC API. It
+connects directly over gRPC (not REST) and authenticates with the same admin
+macaroon.
+
+```bash
+# Install
+make install
+
+# Basic usage
+aperturecli --insecure health
+aperturecli --insecure services list
+aperturecli --insecure services create --name myapi --address 127.0.0.1:8080 --price 100
+aperturecli --insecure services update --name myapi --price 500
+aperturecli --insecure stats
+```
+
+The CLI is designed to work well for both humans and AI agents. When stdout is
+a TTY it renders tables; when piped it emits JSON. Errors carry semantic exit
+codes (connection failure, auth failure, not found, etc.) and structured JSON
+on stderr, so scripts and agents can branch on the exit code without parsing
+error text.
+
+A `schema` command dumps the full command tree as machine-readable JSON for
+agent discovery:
+
+```bash
+aperturecli schema --all
+```
+
+All mutating commands support `--dry-run`, which prints the request that would
+be sent without actually calling the server.
+
+See [docs/cli.md](docs/cli.md) for the full command reference.
+
+### MCP Server
+
+`aperturecli` also embeds an MCP (Model Context Protocol) server, started with
+`aperturecli mcp serve`. This exposes every admin RPC as a typed tool over
+stdio JSON-RPC, letting agent frameworks like Claude Code manage Aperture
+directly. Add it to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "aperture": {
+      "command": "aperturecli",
+      "args": ["--insecure", "mcp", "serve"]
+    }
+  }
+}
+```
+
+See [docs/mcp-server.md](docs/mcp-server.md) for setup details.
 
 ## Rate Limiting
 
