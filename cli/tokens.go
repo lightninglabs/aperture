@@ -55,7 +55,7 @@ func newTokensListCmd() *cobra.Command {
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 
@@ -135,7 +135,7 @@ func newTokensRevokeCmd() *cobra.Command {
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 

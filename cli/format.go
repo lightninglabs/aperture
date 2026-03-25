@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -23,7 +22,7 @@ const (
 // priority order): the --json flag, the --human flag, and then TTY
 // detection. When stdout is not a TTY, JSON is the default so agents
 // piping output always get machine-readable results.
-func resolveOutputFormat(cmd *cobra.Command) string {
+func resolveOutputFormat() string {
 	if flags.jsonOutput {
 		return outputJSON
 	}
@@ -42,8 +41,8 @@ func resolveOutputFormat(cmd *cobra.Command) string {
 
 // isJSONOutput is a convenience wrapper that returns true when the
 // resolved format is JSON.
-func isJSONOutput(cmd *cobra.Command) bool {
-	return resolveOutputFormat(cmd) == outputJSON
+func isJSONOutput() bool {
+	return resolveOutputFormat() == outputJSON
 }
 
 // isTTY reports whether stdout is connected to an interactive terminal.

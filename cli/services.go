@@ -51,7 +51,7 @@ func newServicesListCmd() *cobra.Command {
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 
@@ -134,7 +134,7 @@ func newServicesCreateCmd() *cobra.Command {
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 
@@ -250,7 +250,7 @@ Examples:
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 
@@ -327,7 +327,7 @@ func newServicesDeleteCmd() *cobra.Command {
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 

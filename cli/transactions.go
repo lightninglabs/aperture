@@ -59,7 +59,7 @@ func newTransactionsListCmd() *cobra.Command {
 				return mapGRPCError(err)
 			}
 
-			if isJSONOutput(cmd) {
+			if isJSONOutput() {
 				return printProto(resp)
 			}
 
