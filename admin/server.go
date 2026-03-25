@@ -431,11 +431,10 @@ func (s *Server) UpdateService(ctx context.Context,
 		updated.Auth = auth.Level(normalizedAuth)
 	}
 
-	// Update auth scheme if explicitly set (non-zero enum value means
-	// the caller wants to change it).
-	if req.AuthScheme != adminrpc.AuthScheme_AUTH_SCHEME_L402 {
-		updated.AuthScheme = authSchemeToString(req.AuthScheme)
-	}
+	// Always apply auth_scheme. Since AUTH_SCHEME_L402 is the zero
+	// value, this defaults to "l402" when the field is not explicitly
+	// provided, which is the correct backwards-compatible behavior.
+	updated.AuthScheme = authSchemeToString(req.AuthScheme)
 
 	// Replace the pointer in the slice with the updated copy.
 	for i, svc := range services {
