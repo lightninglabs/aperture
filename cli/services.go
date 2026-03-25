@@ -286,6 +286,7 @@ Examples:
 	return cmd
 }
 
+//nolint:dupl
 func newServicesDeleteCmd() *cobra.Command {
 	var name string
 

@@ -92,6 +92,7 @@ func newTokensListCmd() *cobra.Command {
 	return cmd
 }
 
+//nolint:dupl
 func newTokensRevokeCmd() *cobra.Command {
 	var tokenID string
 

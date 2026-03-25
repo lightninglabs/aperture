@@ -11,33 +11,39 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	// outputJSON is the JSON output format identifier.
+	outputJSON = "json"
+
+	// outputHuman is the human-readable output format identifier.
+	outputHuman = "human"
+)
+
 // resolveOutputFormat determines the output format by checking (in
 // priority order): the --json flag, the --human flag, and then TTY
 // detection. When stdout is not a TTY, JSON is the default so agents
 // piping output always get machine-readable results.
 func resolveOutputFormat(cmd *cobra.Command) string {
-	jsonFlag, _ := cmd.Flags().GetBool("json")
-	if jsonFlag {
-		return "json"
+	if flags.jsonOutput {
+		return outputJSON
 	}
 
-	humanFlag, _ := cmd.Flags().GetBool("human")
-	if humanFlag {
-		return "human"
+	if flags.humanOutput {
+		return outputHuman
 	}
 
 	// Fall back to TTY detection: non-TTY defaults to JSON.
 	if !isTTY() {
-		return "json"
+		return outputJSON
 	}
 
-	return "human"
+	return outputHuman
 }
 
 // isJSONOutput is a convenience wrapper that returns true when the
 // resolved format is JSON.
 func isJSONOutput(cmd *cobra.Command) bool {
-	return resolveOutputFormat(cmd) == "json"
+	return resolveOutputFormat(cmd) == outputJSON
 }
 
 // isTTY reports whether stdout is connected to an interactive terminal.
