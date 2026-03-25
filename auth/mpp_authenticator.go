@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,10 @@ type MPPAuthenticator struct {
 
 	// checker verifies that invoices have been settled.
 	checker InvoiceChecker
+
+	// txnRecorder optionally records MPP transactions for the admin
+	// dashboard. If nil, transactions are not tracked.
+	txnRecorder TransactionRecorder
 
 	// realm is the protection space identifier used in challenges.
 	realm string
@@ -49,12 +54,13 @@ var _ ReceiptProvider = (*MPPAuthenticator)(nil)
 const defaultChallengeExpiry = 15 * time.Minute
 
 func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
-	realm string, hmacSecret []byte,
-	network string) *MPPAuthenticator {
+	realm string, hmacSecret []byte, network string,
+	txnRecorder TransactionRecorder) *MPPAuthenticator {
 
 	return &MPPAuthenticator{
 		challenger:      challenger,
 		checker:         checker,
+		txnRecorder:     txnRecorder,
 		realm:           realm,
 		hmacSecret:      hmacSecret,
 		network:         network,
@@ -222,6 +228,18 @@ func (a *MPPAuthenticator) FreshChallengeHeader(serviceName string,
 
 	log.Debugf("MPP: Created charge challenge with payment hash %x",
 		paymentHash[:])
+
+	// Record the pending transaction for admin dashboard tracking.
+	if a.txnRecorder != nil {
+		ctx := context.Background()
+		if err := a.txnRecorder.RecordMPPTransaction(
+			ctx, paymentHash[:], serviceName, servicePrice,
+			"mpp_charge",
+		); err != nil {
+			log.Warnf("MPP: Failed to record transaction: %v",
+				err)
+		}
+	}
 
 	return header, nil
 }

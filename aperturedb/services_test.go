@@ -155,80 +155,74 @@ func TestListFilteredTransactions(t *testing.T) {
 	require.NoError(t, store.SettleTransaction(ctxt, hashC))
 
 	// No filters -- returns all 3.
-	txns, err := store.ListFiltered(
-		ctxt, "", "", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err := store.ListFiltered(ctxt, TransactionFilter{
+		Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 3)
 
 	// Filter by service only.
-	txns, err = store.ListFiltered(
-		ctxt, "alpha", "", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		Service: "alpha", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
 	// Filter by state only.
-	txns, err = store.ListFiltered(
-		ctxt, "", "settled", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		State: "settled", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
-	txns, err = store.ListFiltered(
-		ctxt, "", "pending", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		State: "pending", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 1)
 
 	// Combined filter: service + state.
-	txns, err = store.ListFiltered(
-		ctxt, "alpha", "settled", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		Service: "alpha", State: "settled", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
-	txns, err = store.ListFiltered(
-		ctxt, "beta", "settled", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		Service: "beta", State: "settled", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 0)
 
 	// Count filtered.
-	count, err := store.CountFiltered(
-		ctxt, "alpha", "", false,
-		time.Time{}, time.Time{},
-	)
+	count, err := store.CountFiltered(ctxt, TransactionFilter{
+		Service: "alpha",
+	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), count)
 
-	count, err = store.CountFiltered(
-		ctxt, "", "settled", false,
-		time.Time{}, time.Time{},
-	)
+	count, err = store.CountFiltered(ctxt, TransactionFilter{
+		State: "settled",
+	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), count)
 
 	// Date range filter.
 	now := time.Now().UTC()
-	txns, err = store.ListFiltered(
-		ctxt, "", "settled", true,
-		now.Add(-time.Hour), now.Add(time.Hour), 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		State: "settled", HasDateRange: true,
+		From: now.Add(-time.Hour), To: now.Add(time.Hour),
+		Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
 	// Future date range -- no results.
-	txns, err = store.ListFiltered(
-		ctxt, "", "", true,
-		now.Add(24*time.Hour), now.Add(25*time.Hour), 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		HasDateRange: true,
+		From: now.Add(24 * time.Hour), To: now.Add(25 * time.Hour),
+		Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 0)
 }

@@ -431,9 +431,18 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 
 	// Create the proxy and connect it to lnd.
 	mintTxnStore := asMintTransactionStore(txnStore)
+	// Convert the concrete transaction store to the TransactionRecorder
+	// interface for MPP payment tracking. Use a nil interface if the
+	// store is nil.
+	var txnRecorder auth.TransactionRecorder
+	if txnStore != nil {
+		txnRecorder = txnStore
+	}
+
 	a.proxy, a.proxyCleanup, err = createProxy(
 		a.cfg, a.challenger, secretStore, mppSessionStore,
-		paymentSender, mintTxnStore, adminPriority, adminFallback,
+		paymentSender, mintTxnStore, txnRecorder,
+		adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -1621,6 +1630,7 @@ func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
 func createProxy(cfg *Config, challenger challenger.Challenger,
 	store mint.SecretStore, mppSessionStore auth.SessionStore,
 	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
+	txnRecorder auth.TransactionRecorder,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
 ) (*proxy.Proxy, func(), error) {
 
@@ -1656,6 +1666,7 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 
 		mppAuth := auth.NewMPPAuthenticator(
 			challenger, challenger, realm, hmacSecret, network,
+			txnRecorder,
 		)
 
 		auths := []auth.Authenticator{l402Auth, mppAuth}

@@ -1,9 +1,9 @@
 -- name: InsertL402Transaction :one
 INSERT INTO l402_transactions (
-    token_id, payment_hash, service_name, price_sats, state, created_at,
-    identifier_hash
+    token_id, payment_hash, service_name, price_sats, state, auth_type,
+    created_at, identifier_hash
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    $1, $2, $3, $4, $5, $6, $7, $8
 ) RETURNING id;
 
 -- name: UpdateL402TransactionState :execrows
@@ -99,6 +99,7 @@ SELECT *
 FROM l402_transactions
 WHERE (sqlc.arg(filter_service) = '' OR service_name = sqlc.arg(filter_service))
   AND (sqlc.arg(filter_state) = '' OR state = sqlc.arg(filter_state))
+  AND (sqlc.arg(filter_auth_type) = '' OR auth_type = sqlc.arg(filter_auth_type))
   AND (sqlc.arg(has_date_range) = 0 OR settled_at >= sqlc.arg(date_from))
   AND (sqlc.arg(has_date_range) = 0 OR settled_at <= sqlc.arg(date_to))
 ORDER BY created_at DESC
@@ -109,5 +110,6 @@ SELECT count(*)
 FROM l402_transactions
 WHERE (sqlc.arg(filter_service) = '' OR service_name = sqlc.arg(filter_service))
   AND (sqlc.arg(filter_state) = '' OR state = sqlc.arg(filter_state))
+  AND (sqlc.arg(filter_auth_type) = '' OR auth_type = sqlc.arg(filter_auth_type))
   AND (sqlc.arg(has_date_range) = 0 OR settled_at >= sqlc.arg(date_from))
   AND (sqlc.arg(has_date_range) = 0 OR settled_at <= sqlc.arg(date_to));

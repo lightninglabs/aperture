@@ -95,7 +95,7 @@ func TestMPPAuthenticatorAcceptValid(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, checker,
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	// Build a charge request.
@@ -150,7 +150,7 @@ func TestMPPAuthenticatorAcceptInvalidPreimage(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, checker,
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	chargeReq := &mpp.ChargeRequest{
@@ -197,7 +197,7 @@ func TestMPPAuthenticatorAcceptInvalidHMAC(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, checker,
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	chargeReq := &mpp.ChargeRequest{
@@ -237,7 +237,7 @@ func TestMPPAuthenticatorAcceptExpired(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, checker,
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	chargeReq := &mpp.ChargeRequest{
@@ -289,7 +289,7 @@ func TestMPPAuthenticatorAcceptUnsettled(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, checker,
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	chargeReq := &mpp.ChargeRequest{
@@ -331,7 +331,7 @@ func TestMPPAuthenticatorAcceptNonPayment(t *testing.T) {
 	hmacSecret := []byte("test-hmac-secret-key-32-bytes!!")
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, newMockInvoiceChecker(),
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	// L402 header should be silently rejected.
@@ -358,7 +358,7 @@ func TestMPPAuthenticatorFreshChallengeHeader(t *testing.T) {
 			paymentHash:    paymentHash,
 		},
 		newMockInvoiceChecker(),
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	header, err := auth.FreshChallengeHeader("test-service", 100)
@@ -402,7 +402,7 @@ func TestMPPAuthenticatorReceiptHeader(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, newMockInvoiceChecker(),
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	chargeReq := &mpp.ChargeRequest{
@@ -455,7 +455,7 @@ func TestMPPAuthenticatorAcceptWrongIntent(t *testing.T) {
 
 	auth := NewMPPAuthenticator(
 		&mockChallenger{}, newMockInvoiceChecker(),
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	// Build a credential with session intent.
@@ -497,7 +497,7 @@ func TestMPPAuthenticatorEndToEnd(t *testing.T) {
 			paymentHash:    paymentHash,
 		},
 		checker,
-		"api.example.com", hmacSecret, "regtest",
+		"api.example.com", hmacSecret, "regtest", nil,
 	)
 
 	// Step 1: Generate a challenge.

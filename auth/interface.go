@@ -119,6 +119,18 @@ type Session struct {
 	UpdatedAt time.Time
 }
 
+// TransactionRecorder records payment transactions for admin dashboard
+// tracking. Both L402 and MPP payments use this to populate the transactions
+// table.
+type TransactionRecorder interface {
+	// RecordMPPTransaction records a pending MPP charge or session
+	// payment. The authType distinguishes between "mpp_charge" and
+	// "mpp_session".
+	RecordMPPTransaction(ctx context.Context, paymentHash []byte,
+		serviceName string, priceSats int64,
+		authType string) error
+}
+
 // PaymentSender is an interface for sending Lightning payments. This is used
 // by the session authenticator to refund unspent balance when a session is
 // closed.

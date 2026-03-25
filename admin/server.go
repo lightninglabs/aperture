@@ -614,8 +614,15 @@ func (s *Server) ListTransactions(ctx context.Context,
 	// Use combined filter query that supports any combination of
 	// service, state, and date range filters.
 	txns, err := s.cfg.TransactionStore.ListFiltered(
-		ctx, req.Service, req.State, hasDateRange,
-		from, to, limit, offset,
+		ctx, aperturedb.TransactionFilter{
+			Service:      req.Service,
+			State:        req.State,
+			HasDateRange: hasDateRange,
+			From:         from,
+			To:           to,
+			Limit:        limit,
+			Offset:       offset,
+		},
 	)
 	if err != nil {
 		log.Errorf("Error listing transactions: %v", err)
@@ -626,7 +633,13 @@ func (s *Server) ListTransactions(ctx context.Context,
 
 	// Get total count matching the same filters for pagination.
 	totalCount, countErr := s.cfg.TransactionStore.CountFiltered(
-		ctx, req.Service, req.State, hasDateRange, from, to,
+		ctx, aperturedb.TransactionFilter{
+			Service:      req.Service,
+			State:        req.State,
+			HasDateRange: hasDateRange,
+			From:         from,
+			To:           to,
+		},
 	)
 	if countErr != nil {
 		log.Errorf("Error counting transactions: %v", countErr)

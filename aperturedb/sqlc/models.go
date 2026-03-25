@@ -17,6 +17,7 @@ type L402Transaction struct {
 	ServiceName    string
 	PriceSats      int64
 	State          string
+	AuthType       string
 	CreatedAt      time.Time
 	SettledAt      sql.NullTime
 }
