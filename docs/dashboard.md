@@ -54,9 +54,9 @@ The main overview page shows key metrics and charts:
 
 Manage the APIs behind your L402 paywall:
 
-- View all configured services with name, address, protocol, price, and auth level
-- Create new services with the "Add Service" form
-- Edit service configuration inline
+- View all configured services with name, address, protocol, price, auth level, and **auth scheme**
+- Create new services with the "Add Service" form (includes auth scheme selector: L402, MPP, or L402+MPP)
+- Edit service configuration inline, including switching auth schemes
 - Delete services via the overflow menu
 
 ![Services Page](images/services-page.png)
@@ -68,7 +68,7 @@ Manage the APIs behind your L402 paywall:
 Click a service name to view its detail page:
 
 - Revenue and settled payment count for this service
-- Full configuration (protocol, address, price, auth, host/path regexps)
+- Full configuration (protocol, address, price, auth, auth scheme, host/path regexps)
 - Test endpoint with a ready-to-use curl command
 - Recent transactions for this service
 
