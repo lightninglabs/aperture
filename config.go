@@ -333,7 +333,6 @@ func NewConfig() *Config {
 		WsPingInterval:      defaultWsPingInterval,
 		WsPongWait:          defaultWsPongWait,
 		InvoiceBatchSize:    defaultInvoiceBatchSize,
-		SettlementQueueSize: defaultSettlementQueue,
 		Logging:             build.DefaultLogConfig(),
 		Blocklist:           []string{},
 		StrictVerify:        defaultStrictVerify,
