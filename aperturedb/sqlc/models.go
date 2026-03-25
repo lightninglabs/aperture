@@ -17,6 +17,7 @@ type L402Transaction struct {
 	ServiceName    string
 	PriceSats      int64
 	State          string
+	AuthType       string
 	CreatedAt      time.Time
 	SettledAt      sql.NullTime
 }
@@ -31,6 +32,18 @@ type LncSession struct {
 	CreatedAt          time.Time
 	Expiry             sql.NullTime
 	DevServer          bool
+}
+
+type MppSession struct {
+	ID            int32
+	SessionID     string
+	PaymentHash   []byte
+	DepositSats   int64
+	SpentSats     int64
+	ReturnInvoice string
+	Status        string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Onion struct {
@@ -56,4 +69,5 @@ type Service struct {
 	Auth       string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	AuthScheme string
 }

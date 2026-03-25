@@ -74,8 +74,8 @@ func pathRegexpConflictsWithReserved(pattern string) bool {
 // in-memory proxy and the persistent store.
 type ServiceStore interface {
 	// UpsertService creates or updates a persisted service configuration.
-	UpsertService(ctx context.Context, name, address, protocol,
-		hostRegexp, pathRegexp, auth string, price int64) error
+	UpsertService(ctx context.Context,
+		params aperturedb.ServiceParams) error
 
 	// DeleteService removes a persisted service by name.
 	DeleteService(ctx context.Context, name string) error
@@ -108,6 +108,15 @@ type ServerConfig struct {
 	// ServiceStore is an optional persistent store for service
 	// configurations. If nil, service changes are held in memory only.
 	ServiceStore ServiceStore
+
+	// MPPEnabled indicates whether MPP is enabled globally.
+	MPPEnabled bool
+
+	// SessionsEnabled indicates whether MPP sessions are enabled.
+	SessionsEnabled bool
+
+	// MPPRealm is the realm string used in MPP challenge headers.
+	MPPRealm string
 }
 
 // Server implements the adminrpc.AdminServer gRPC interface. Thread safety
@@ -129,9 +138,12 @@ func (s *Server) GetInfo(_ context.Context,
 	_ *adminrpc.GetInfoRequest) (*adminrpc.GetInfoResponse, error) {
 
 	return &adminrpc.GetInfoResponse{
-		Network:    s.cfg.Network,
-		ListenAddr: s.cfg.ListenAddr,
-		Insecure:   s.cfg.Insecure,
+		Network:         s.cfg.Network,
+		ListenAddr:      s.cfg.ListenAddr,
+		Insecure:        s.cfg.Insecure,
+		MppEnabled:      s.cfg.MPPEnabled,
+		SessionsEnabled: s.cfg.SessionsEnabled,
+		MppRealm:        s.cfg.MPPRealm,
 	}, nil
 }
 
@@ -161,6 +173,7 @@ func (s *Server) ListServices(_ context.Context,
 			PathRegexp: svc.PathRegexp,
 			Price:      svc.Price,
 			Auth:       string(svc.Auth),
+			AuthScheme: stringToAuthScheme(svc.AuthScheme),
 		})
 	}
 
@@ -263,6 +276,8 @@ func (s *Server) CreateService(ctx context.Context,
 		}
 	}
 
+	authScheme := authSchemeToString(req.AuthScheme)
+
 	newSvc := &proxy.Service{
 		Name:       req.Name,
 		Address:    req.Address,
@@ -270,6 +285,7 @@ func (s *Server) CreateService(ctx context.Context,
 		HostRegexp: hostRegexp,
 		PathRegexp: req.PathRegexp,
 		Price:      req.Price,
+		AuthScheme: authScheme,
 	}
 	if normalizedAuth != "" {
 		newSvc.Auth = auth.Level(normalizedAuth)
@@ -287,10 +303,16 @@ func (s *Server) CreateService(ctx context.Context,
 	// configured.
 	if s.cfg.ServiceStore != nil {
 		if err := s.cfg.ServiceStore.UpsertService(
-			ctx, newSvc.Name, newSvc.Address,
-			newSvc.Protocol, newSvc.HostRegexp,
-			newSvc.PathRegexp, string(newSvc.Auth),
-			newSvc.Price,
+			ctx, aperturedb.ServiceParams{
+				Name:       newSvc.Name,
+				Address:    newSvc.Address,
+				Protocol:   newSvc.Protocol,
+				HostRegexp: newSvc.HostRegexp,
+				PathRegexp: newSvc.PathRegexp,
+				Auth:       string(newSvc.Auth),
+				AuthScheme: newSvc.AuthScheme,
+				Price:      newSvc.Price,
+			},
 		); err != nil {
 			log.Errorf("Error persisting service: %v", err)
 		}
@@ -304,6 +326,7 @@ func (s *Server) CreateService(ctx context.Context,
 		PathRegexp: newSvc.PathRegexp,
 		Price:      newSvc.Price,
 		Auth:       string(newSvc.Auth),
+		AuthScheme: stringToAuthScheme(newSvc.AuthScheme),
 	}, nil
 }
 
@@ -408,6 +431,13 @@ func (s *Server) UpdateService(ctx context.Context,
 		updated.Auth = auth.Level(normalizedAuth)
 	}
 
+	// Only apply auth_scheme when explicitly set. Since AUTH_SCHEME_L402
+	// is the proto enum zero value, using `optional` ensures we can
+	// distinguish "not set" from "set to L402".
+	if req.AuthScheme != nil {
+		updated.AuthScheme = authSchemeToString(*req.AuthScheme)
+	}
+
 	// Replace the pointer in the slice with the updated copy.
 	for i, svc := range services {
 		if svc.Name == req.Name {
@@ -427,10 +457,16 @@ func (s *Server) UpdateService(ctx context.Context,
 	// configured.
 	if s.cfg.ServiceStore != nil {
 		if err := s.cfg.ServiceStore.UpsertService(
-			ctx, updated.Name, updated.Address,
-			updated.Protocol, updated.HostRegexp,
-			updated.PathRegexp, string(updated.Auth),
-			updated.Price,
+			ctx, aperturedb.ServiceParams{
+				Name:       updated.Name,
+				Address:    updated.Address,
+				Protocol:   updated.Protocol,
+				HostRegexp: updated.HostRegexp,
+				PathRegexp: updated.PathRegexp,
+				Auth:       string(updated.Auth),
+				AuthScheme: updated.AuthScheme,
+				Price:      updated.Price,
+			},
 		); err != nil {
 			log.Errorf("Error persisting updated service: %v",
 				err)
@@ -445,6 +481,7 @@ func (s *Server) UpdateService(ctx context.Context,
 		PathRegexp: updated.PathRegexp,
 		Price:      updated.Price,
 		Auth:       string(updated.Auth),
+		AuthScheme: stringToAuthScheme(updated.AuthScheme),
 	}, nil
 }
 
@@ -578,8 +615,15 @@ func (s *Server) ListTransactions(ctx context.Context,
 	// Use combined filter query that supports any combination of
 	// service, state, and date range filters.
 	txns, err := s.cfg.TransactionStore.ListFiltered(
-		ctx, req.Service, req.State, hasDateRange,
-		from, to, limit, offset,
+		ctx, aperturedb.TransactionFilter{
+			Service:      req.Service,
+			State:        req.State,
+			HasDateRange: hasDateRange,
+			From:         from,
+			To:           to,
+			Limit:        limit,
+			Offset:       offset,
+		},
 	)
 	if err != nil {
 		log.Errorf("Error listing transactions: %v", err)
@@ -590,7 +634,13 @@ func (s *Server) ListTransactions(ctx context.Context,
 
 	// Get total count matching the same filters for pagination.
 	totalCount, countErr := s.cfg.TransactionStore.CountFiltered(
-		ctx, req.Service, req.State, hasDateRange, from, to,
+		ctx, aperturedb.TransactionFilter{
+			Service:      req.Service,
+			State:        req.State,
+			HasDateRange: hasDateRange,
+			From:         from,
+			To:           to,
+		},
 	)
 	if countErr != nil {
 		log.Errorf("Error counting transactions: %v", countErr)
@@ -897,6 +947,31 @@ func txnsToProto(txns []aperturedb.L402Transaction) []*adminrpc.Transaction {
 	}
 
 	return resp
+}
+
+// authSchemeToString converts a proto AuthScheme enum to its string
+// representation for database storage and proxy.Service.AuthScheme.
+func authSchemeToString(scheme adminrpc.AuthScheme) string {
+	switch scheme {
+	case adminrpc.AuthScheme_AUTH_SCHEME_MPP:
+		return "mpp"
+	case adminrpc.AuthScheme_AUTH_SCHEME_L402_MPP:
+		return "l402+mpp"
+	default:
+		return "l402"
+	}
+}
+
+// stringToAuthScheme converts a string auth scheme to the proto enum.
+func stringToAuthScheme(s string) adminrpc.AuthScheme {
+	switch s {
+	case "mpp":
+		return adminrpc.AuthScheme_AUTH_SCHEME_MPP
+	case "l402+mpp":
+		return adminrpc.AuthScheme_AUTH_SCHEME_L402_MPP
+	default:
+		return adminrpc.AuthScheme_AUTH_SCHEME_L402
+	}
 }
 
 // validateAuthLevel checks that an auth string is a valid auth.Level value

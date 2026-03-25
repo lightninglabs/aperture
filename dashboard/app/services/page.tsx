@@ -10,7 +10,9 @@ import {
 } from "@/lib/api";
 import styled from "@emotion/styled";
 import { toast } from "@/components/Toast";
-import type { ServiceCreateRequest } from "@/lib/types";
+import type { ServiceCreateRequest, AuthScheme } from "@/lib/types";
+import { authSchemeLabels } from "@/lib/types";
+import { useInfo } from "@/lib/api";
 import Button from "@/components/Button";
 import PageHeader from "@/components/PageHeader";
 import EmptyState from "@/components/EmptyState";
@@ -20,6 +22,11 @@ import SortHeader, { useSort } from "@/components/SortHeader";
 import ErrorBanner from "@/components/ErrorBanner";
 
 const authOptions = ["on", "off", "freebie 1", "freebie 5", "freebie 10"];
+const authSchemeOptions: AuthScheme[] = [
+  "AUTH_SCHEME_L402",
+  "AUTH_SCHEME_MPP",
+  "AUTH_SCHEME_L402_MPP",
+];
 
 const initialForm: ServiceCreateRequest = {
   name: "",
@@ -29,6 +36,7 @@ const initialForm: ServiceCreateRequest = {
   pathregexp: "",
   price: 0,
   auth: "on",
+  auth_scheme: "AUTH_SCHEME_L402",
 };
 
 const Styled = {
@@ -460,6 +468,29 @@ export default function ServicesPage() {
                   ))}
                 </Select>
               </div>
+              <div>
+                <Label>
+                  Auth Scheme
+                  <Tooltip
+                    text={`"L402" = macaroon+preimage (default). "MPP" = Payment HTTP Auth. "L402 + MPP" = both schemes.`}
+                  />
+                </Label>
+                <Select
+                  value={form.auth_scheme ?? "AUTH_SCHEME_L402"}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      auth_scheme: e.target.value as AuthScheme,
+                    })
+                  }
+                >
+                  {authSchemeOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {authSchemeLabels[opt]}
+                    </option>
+                  ))}
+                </Select>
+              </div>
             </Grid2>
             <AdvancedToggle
               type="button"
@@ -559,6 +590,16 @@ export default function ServicesPage() {
                     />
                   }
                 />
+                <SortHeader
+                  label="Scheme"
+                  field="auth_scheme"
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  tooltip={
+                    <Tooltip text="Payment auth scheme: L402 (default), MPP, or both." />
+                  }
+                />
                 <th style={{ padding: "10px 16px", width: 48 }} />
               </HeadRow>
             </thead>
@@ -566,7 +607,7 @@ export default function ServicesPage() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <Styled.Row key={i}>
-                    {Array.from({ length: 6 }).map((_, j) => (
+                    {Array.from({ length: 7 }).map((_, j) => (
                       <Td key={j}>
                         <Skeleton $width={j === 5 ? 24 : 80} />
                       </Td>
@@ -618,6 +659,7 @@ export default function ServicesPage() {
                         {svc.auth || "on"}
                       </AuthBadge>
                     </Td>
+                    <Td>{authSchemeLabels[svc.auth_scheme] ?? "L402"}</Td>
                     <Td style={{ textAlign: "right" }}>
                       <OverflowMenu
                         items={[

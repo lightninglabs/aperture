@@ -34,10 +34,16 @@ func TestUpsertAndListServices(t *testing.T) {
 	require.Len(t, svcs, 0)
 
 	// Insert a service.
-	err = store.UpsertService(
-		ctxt, "svc-alpha", "localhost:8080", "http",
-		".*", "/api/.*", "", 100,
-	)
+	err = store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-alpha",
+		Address:    "localhost:8080",
+		Protocol:   "http",
+		HostRegexp: ".*",
+		PathRegexp: "/api/.*",
+		Auth:       "",
+		AuthScheme: "l402",
+		Price:      100,
+	})
 	require.NoError(t, err)
 
 	svcs, err = store.ListServices(ctxt)
@@ -46,12 +52,19 @@ func TestUpsertAndListServices(t *testing.T) {
 	require.Equal(t, "svc-alpha", svcs[0].Name)
 	require.Equal(t, "localhost:8080", svcs[0].Address)
 	require.Equal(t, int64(100), svcs[0].Price)
+	require.Equal(t, "l402", svcs[0].AuthScheme)
 
-	// Upsert (update) the same service.
-	err = store.UpsertService(
-		ctxt, "svc-alpha", "localhost:9090", "https",
-		".*", "/api/.*", "on", 200,
-	)
+	// Upsert (update) the same service with a different scheme.
+	err = store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-alpha",
+		Address:    "localhost:9090",
+		Protocol:   "https",
+		HostRegexp: ".*",
+		PathRegexp: "/api/.*",
+		Auth:       "on",
+		AuthScheme: "mpp",
+		Price:      200,
+	})
 	require.NoError(t, err)
 
 	svcs, err = store.ListServices(ctxt)
@@ -61,6 +74,7 @@ func TestUpsertAndListServices(t *testing.T) {
 	require.Equal(t, "https", svcs[0].Protocol)
 	require.Equal(t, int64(200), svcs[0].Price)
 	require.Equal(t, "on", svcs[0].Auth)
+	require.Equal(t, "mpp", svcs[0].AuthScheme)
 }
 
 func TestDeleteService(t *testing.T) {
@@ -73,15 +87,23 @@ func TestDeleteService(t *testing.T) {
 	defer cancel()
 
 	// Insert two services.
-	err := store.UpsertService(
-		ctxt, "svc-a", "localhost:1111", "http",
-		".*", "", "", 10,
-	)
+	err := store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-a",
+		Address:    "localhost:1111",
+		Protocol:   "http",
+		HostRegexp: ".*",
+		AuthScheme: "l402",
+		Price:      10,
+	})
 	require.NoError(t, err)
-	err = store.UpsertService(
-		ctxt, "svc-b", "localhost:2222", "http",
-		".*", "", "", 20,
-	)
+	err = store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-b",
+		Address:    "localhost:2222",
+		Protocol:   "http",
+		HostRegexp: ".*",
+		AuthScheme: "l402+mpp",
+		Price:      20,
+	})
 	require.NoError(t, err)
 
 	svcs, err := store.ListServices(ctxt)
@@ -96,6 +118,7 @@ func TestDeleteService(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
 	require.Equal(t, "svc-b", svcs[0].Name)
+	require.Equal(t, "l402+mpp", svcs[0].AuthScheme)
 }
 
 func TestListFilteredTransactions(t *testing.T) {
@@ -132,80 +155,74 @@ func TestListFilteredTransactions(t *testing.T) {
 	require.NoError(t, store.SettleTransaction(ctxt, hashC))
 
 	// No filters -- returns all 3.
-	txns, err := store.ListFiltered(
-		ctxt, "", "", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err := store.ListFiltered(ctxt, TransactionFilter{
+		Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 3)
 
 	// Filter by service only.
-	txns, err = store.ListFiltered(
-		ctxt, "alpha", "", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		Service: "alpha", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
 	// Filter by state only.
-	txns, err = store.ListFiltered(
-		ctxt, "", "settled", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		State: "settled", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
-	txns, err = store.ListFiltered(
-		ctxt, "", "pending", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		State: "pending", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 1)
 
 	// Combined filter: service + state.
-	txns, err = store.ListFiltered(
-		ctxt, "alpha", "settled", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		Service: "alpha", State: "settled", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
-	txns, err = store.ListFiltered(
-		ctxt, "beta", "settled", false,
-		time.Time{}, time.Time{}, 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		Service: "beta", State: "settled", Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 0)
 
 	// Count filtered.
-	count, err := store.CountFiltered(
-		ctxt, "alpha", "", false,
-		time.Time{}, time.Time{},
-	)
+	count, err := store.CountFiltered(ctxt, TransactionFilter{
+		Service: "alpha",
+	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), count)
 
-	count, err = store.CountFiltered(
-		ctxt, "", "settled", false,
-		time.Time{}, time.Time{},
-	)
+	count, err = store.CountFiltered(ctxt, TransactionFilter{
+		State: "settled",
+	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), count)
 
 	// Date range filter.
 	now := time.Now().UTC()
-	txns, err = store.ListFiltered(
-		ctxt, "", "settled", true,
-		now.Add(-time.Hour), now.Add(time.Hour), 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		State: "settled", HasDateRange: true,
+		From: now.Add(-time.Hour), To: now.Add(time.Hour),
+		Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 2)
 
 	// Future date range -- no results.
-	txns, err = store.ListFiltered(
-		ctxt, "", "", true,
-		now.Add(24*time.Hour), now.Add(25*time.Hour), 50, 0,
-	)
+	txns, err = store.ListFiltered(ctxt, TransactionFilter{
+		HasDateRange: true,
+		From:         now.Add(24 * time.Hour), To: now.Add(25 * time.Hour),
+		Limit: 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, txns, 0)
 }

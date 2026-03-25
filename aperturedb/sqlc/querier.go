@@ -6,9 +6,12 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
+	CloseMPPSession(ctx context.Context, arg CloseMPPSessionParams) (sql.Result, error)
+	CloseMPPSessionReturningBalance(ctx context.Context, arg CloseMPPSessionReturningBalanceParams) (int64, error)
 	CountL402Transactions(ctx context.Context) (int64, error)
 	CountL402TransactionsByDateRange(ctx context.Context, arg CountL402TransactionsByDateRangeParams) (int64, error)
 	CountL402TransactionsByService(ctx context.Context, serviceName string) (int64, error)
@@ -24,9 +27,11 @@ type Querier interface {
 	GetL402TotalRevenueByDateRange(ctx context.Context, arg GetL402TotalRevenueByDateRangeParams) (int64, error)
 	GetL402TransactionByIdentifierHash(ctx context.Context, identifierHash []byte) (L402Transaction, error)
 	GetL402TransactionsByPaymentHash(ctx context.Context, paymentHash []byte) ([]L402Transaction, error)
+	GetMPPSessionByID(ctx context.Context, sessionID string) (MppSession, error)
 	GetSecretByHash(ctx context.Context, hash []byte) ([]byte, error)
 	GetSession(ctx context.Context, passphraseEntropy []byte) (LncSession, error)
 	InsertL402Transaction(ctx context.Context, arg InsertL402TransactionParams) (int32, error)
+	InsertMPPSession(ctx context.Context, arg InsertMPPSessionParams) (int32, error)
 	InsertSecret(ctx context.Context, arg InsertSecretParams) (int32, error)
 	InsertSession(ctx context.Context, arg InsertSessionParams) error
 	ListL402Transactions(ctx context.Context, arg ListL402TransactionsParams) ([]L402Transaction, error)
@@ -39,6 +44,8 @@ type Querier interface {
 	SetExpiry(ctx context.Context, arg SetExpiryParams) error
 	SetRemotePubKey(ctx context.Context, arg SetRemotePubKeyParams) error
 	UpdateL402TransactionState(ctx context.Context, arg UpdateL402TransactionStateParams) (int64, error)
+	UpdateMPPSessionDeposit(ctx context.Context, arg UpdateMPPSessionDepositParams) (sql.Result, error)
+	UpdateMPPSessionSpent(ctx context.Context, arg UpdateMPPSessionSpentParams) (sql.Result, error)
 	UpsertOnion(ctx context.Context, arg UpsertOnionParams) error
 	UpsertService(ctx context.Context, arg UpsertServiceParams) error
 }

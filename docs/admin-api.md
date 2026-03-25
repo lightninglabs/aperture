@@ -46,7 +46,7 @@ The admin REST API is served under the `/api/admin/` prefix via gRPC-gateway.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/admin/health` | No | Health check, returns `{"status": "ok"}` |
-| GET | `/api/admin/info` | Yes | Server info (network, listen address, insecure flag) |
+| GET | `/api/admin/info` | Yes | Server info (network, listen address, insecure flag, MPP config) |
 | GET | `/api/admin/services` | Yes | List all configured proxy services |
 | POST | `/api/admin/services` | Yes | Create a new service |
 | PUT | `/api/admin/services/{name}` | Yes | Update an existing service (partial update) |
@@ -87,6 +87,7 @@ curl -X POST \
 | `path_regexp` | No | — | Regex matching request URL path. **Must not match reserved paths** (`/api/admin/`, `/api/proxy/`, `/_next/`). |
 | `price` | No | 0 | Price in satoshis per request |
 | `auth` | No | `""` | Auth level: `on`, `off`, or `freebie N` (N free requests per IP) |
+| `auth_scheme` | No | `AUTH_SCHEME_L402` | Payment auth scheme: `AUTH_SCHEME_L402` (0), `AUTH_SCHEME_MPP` (1), or `AUTH_SCHEME_L402_MPP` (2) |
 
 ### Update a Service
 
@@ -183,6 +184,55 @@ grpcurl -plaintext \
   -H "macaroon: $(xxd -ps -c 1000 admin.macaroon)" \
   localhost:8081 adminrpc.Admin/GetInfo
 ```
+
+## MPP (Payment HTTP Authentication Scheme)
+
+When `enablempp: true` is set in the authenticator config, Aperture supports
+the Payment HTTP Authentication Scheme alongside L402. The `GetInfo` endpoint
+reports MPP availability:
+
+```json
+{
+  "network": "regtest",
+  "listen_addr": "localhost:8081",
+  "insecure": true,
+  "mpp_enabled": true,
+  "sessions_enabled": false,
+  "mpp_realm": "localhost:8081"
+}
+```
+
+### Per-Service Auth Scheme
+
+Each service can be configured with a specific auth scheme via the
+`auth_scheme` enum field:
+
+| Value | Enum Name | Description |
+|-------|-----------|-------------|
+| 0 | `AUTH_SCHEME_L402` | L402 only (default, backwards compatible) |
+| 1 | `AUTH_SCHEME_MPP` | MPP Payment scheme only |
+| 2 | `AUTH_SCHEME_L402_MPP` | Both L402 and MPP (client chooses) |
+
+Example — create an MPP-only service:
+
+```bash
+curl -X POST \
+  -H "Grpc-Metadata-Macaroon: $ADMIN_MAC" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "mpp-api",
+    "address": "127.0.0.1:8080",
+    "path_regexp": "^/api/mpp/.*",
+    "price": 50,
+    "auth": "on",
+    "auth_scheme": 1
+  }' \
+  http://localhost:8081/api/admin/services
+```
+
+When `auth_scheme` is `AUTH_SCHEME_L402_MPP`, the 402 response includes both
+`WWW-Authenticate: L402` and `WWW-Authenticate: Payment` headers, and the
+response body uses RFC 9457 Problem Details JSON.
 
 ## Security
 

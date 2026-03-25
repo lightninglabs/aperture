@@ -224,6 +224,7 @@ func (s *L402TransactionsStore) RecordTransaction(ctx context.Context,
 			ServiceName:    serviceName,
 			PriceSats:      priceSats,
 			State:          "pending",
+			AuthType:       "l402",
 			CreatedAt:      s.clock.Now().UTC(),
 			IdentifierHash: identifierHash,
 		})
@@ -232,6 +233,33 @@ func (s *L402TransactionsStore) RecordTransaction(ctx context.Context,
 
 	if err != nil {
 		return fmt.Errorf("unable to record L402 transaction: %w", err)
+	}
+
+	return nil
+}
+
+// RecordMPPTransaction records a new pending MPP charge or session
+// transaction. Unlike L402, MPP transactions have no token_id or
+// identifier_hash.
+func (s *L402TransactionsStore) RecordMPPTransaction(ctx context.Context,
+	paymentHash []byte, serviceName string, priceSats int64,
+	authType string) error {
+
+	var writeTxOpts L402TransactionsDBTxOptions
+	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx L402TransactionsDB) error {
+		_, err := tx.InsertL402Transaction(ctx, NewL402Transaction{
+			PaymentHash: paymentHash,
+			ServiceName: serviceName,
+			PriceSats:   priceSats,
+			State:       "pending",
+			AuthType:    authType,
+			CreatedAt:   s.clock.Now().UTC(),
+		})
+		return err
+	})
+
+	if err != nil {
+		return fmt.Errorf("unable to record MPP transaction: %w", err)
 	}
 
 	return nil
@@ -582,18 +610,29 @@ func (s *L402TransactionsStore) DeleteByTokenID(ctx context.Context,
 	return nil
 }
 
+// TransactionFilter contains the filter criteria for listing or counting
+// transactions.
+type TransactionFilter struct {
+	Service      string
+	State        string
+	AuthType     string
+	HasDateRange bool
+	From         time.Time
+	To           time.Time
+	Limit        int32
+	Offset       int32
+}
+
 // ListFiltered returns a paginated list of transactions matching the given
-// combined filters. Empty strings and zero values disable the corresponding
-// filter.
+// combined filters. Empty strings disable the corresponding filter.
 func (s *L402TransactionsStore) ListFiltered(ctx context.Context,
-	service, state string, hasDateRange bool,
-	from, to time.Time, limit, offset int32) ([]L402Transaction, error) {
+	filter TransactionFilter) ([]L402Transaction, error) {
 
 	var txns []L402Transaction
 	readOpts := NewL402TransactionsDBReadTx()
 
 	dateFlag := int64(0)
-	if hasDateRange {
+	if filter.HasDateRange {
 		dateFlag = 1
 	}
 
@@ -601,26 +640,27 @@ func (s *L402TransactionsStore) ListFiltered(ctx context.Context,
 		var err error
 		txns, err = tx.ListL402TransactionsFiltered(
 			ctx, ListL402TxFilteredParams{
-				FilterService: service,
-				FilterState:   state,
-				HasDateRange:  dateFlag,
+				FilterService:  filter.Service,
+				FilterState:    filter.State,
+				FilterAuthType: filter.AuthType,
+				HasDateRange:   dateFlag,
 				DateFrom: sql.NullTime{
-					Time:  from,
-					Valid: hasDateRange,
+					Time:  filter.From,
+					Valid: filter.HasDateRange,
 				},
 				DateTo: sql.NullTime{
-					Time:  to,
-					Valid: hasDateRange,
+					Time:  filter.To,
+					Valid: filter.HasDateRange,
 				},
-				RowLimit:  limit,
-				RowOffset: offset,
+				RowLimit:  filter.Limit,
+				RowOffset: filter.Offset,
 			},
 		)
 		return err
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("unable to list filtered L402 "+
+		return nil, fmt.Errorf("unable to list filtered "+
 			"transactions: %w", err)
 	}
 
@@ -630,14 +670,13 @@ func (s *L402TransactionsStore) ListFiltered(ctx context.Context,
 // CountFiltered returns the count of transactions matching the given combined
 // filters.
 func (s *L402TransactionsStore) CountFiltered(ctx context.Context,
-	service, state string, hasDateRange bool,
-	from, to time.Time) (int64, error) {
+	filter TransactionFilter) (int64, error) {
 
 	var count int64
 	readOpts := NewL402TransactionsDBReadTx()
 
 	dateFlag := int64(0)
-	if hasDateRange {
+	if filter.HasDateRange {
 		dateFlag = 1
 	}
 
@@ -645,16 +684,17 @@ func (s *L402TransactionsStore) CountFiltered(ctx context.Context,
 		var err error
 		count, err = tx.CountL402TransactionsFiltered(
 			ctx, CountL402TxFilteredParams{
-				FilterService: service,
-				FilterState:   state,
-				HasDateRange:  dateFlag,
+				FilterService:  filter.Service,
+				FilterState:    filter.State,
+				FilterAuthType: filter.AuthType,
+				HasDateRange:   dateFlag,
 				DateFrom: sql.NullTime{
-					Time:  from,
-					Valid: hasDateRange,
+					Time:  filter.From,
+					Valid: filter.HasDateRange,
 				},
 				DateTo: sql.NullTime{
-					Time:  to,
-					Valid: hasDateRange,
+					Time:  filter.To,
+					Valid: filter.HasDateRange,
 				},
 			},
 		)

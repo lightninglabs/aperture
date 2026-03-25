@@ -9,6 +9,17 @@ export interface ServiceRevenueItem {
   total_revenue_sats: number;
 }
 
+export type AuthScheme =
+  | "AUTH_SCHEME_L402"
+  | "AUTH_SCHEME_MPP"
+  | "AUTH_SCHEME_L402_MPP";
+
+export const authSchemeLabels: Record<AuthScheme, string> = {
+  AUTH_SCHEME_L402: "L402",
+  AUTH_SCHEME_MPP: "MPP",
+  AUTH_SCHEME_L402_MPP: "L402 + MPP",
+};
+
 export interface Service {
   name: string;
   address: string;
@@ -17,6 +28,7 @@ export interface Service {
   path_regexp: string;
   price: number;
   auth: string;
+  auth_scheme: AuthScheme;
 }
 
 export interface Transaction {
@@ -47,10 +59,14 @@ export interface ServiceCreateRequest {
   pathregexp?: string;
   price?: number;
   auth?: string;
+  auth_scheme?: AuthScheme;
 }
 
 export interface InfoResponse {
   network: string;
   listen_addr: string;
   insecure: boolean;
+  mpp_enabled: boolean;
+  sessions_enabled: boolean;
+  mpp_realm: string;
 }

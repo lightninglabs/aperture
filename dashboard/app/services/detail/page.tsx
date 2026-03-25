@@ -13,12 +13,19 @@ import {
 } from "@/lib/api";
 import styled from "@emotion/styled";
 import { toast } from "@/components/Toast";
+import type { AuthScheme } from "@/lib/types";
+import { authSchemeLabels } from "@/lib/types";
 import Button from "@/components/Button";
 import StatTile from "@/components/StatTile";
 import EmptyState from "@/components/EmptyState";
 import ErrorBanner from "@/components/ErrorBanner";
 
 const authOptions = ["on", "off", "freebie 1", "freebie 5", "freebie 10"];
+const authSchemeOptions: AuthScheme[] = [
+  "AUTH_SCHEME_L402",
+  "AUTH_SCHEME_MPP",
+  "AUTH_SCHEME_L402_MPP",
+];
 
 const Styled = {
   Breadcrumb: styled(Link)`
@@ -425,6 +432,23 @@ function ServiceDetailContent() {
     [decodedName]
   );
 
+  const handleAuthSchemeChange = useCallback(
+    async (scheme: AuthScheme) => {
+      setSaving(true);
+      try {
+        await updateService(decodedName, { auth_scheme: scheme });
+        toast(`Auth scheme updated to "${authSchemeLabels[scheme]}"`);
+      } catch (e: unknown) {
+        toast(
+          e instanceof Error ? e.message : "Failed to update auth scheme",
+          "error"
+        );
+      }
+      setSaving(false);
+    },
+    [decodedName]
+  );
+
   const handleDelete = useCallback(async () => {
     if (!confirm(`Delete service "${decodedName}"? This cannot be undone.`))
       return;
@@ -683,6 +707,23 @@ function ServiceDetailContent() {
               </ConfigValue>
             </ConfigRow>
             <ConfigRow>
+              <ConfigLabel>Auth Scheme</ConfigLabel>
+              <ConfigValue>
+                <AuthSelect
+                  value={svc.auth_scheme || "AUTH_SCHEME_L402"}
+                  onChange={(e) =>
+                    handleAuthSchemeChange(e.target.value as AuthScheme)
+                  }
+                >
+                  {authSchemeOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {authSchemeLabels[opt]}
+                    </option>
+                  ))}
+                </AuthSelect>
+              </ConfigValue>
+            </ConfigRow>
+            <ConfigRow>
               <ConfigLabel>Host Regexp</ConfigLabel>
               <ConfigValue $mono>
                 {editingHostregexp ? (
@@ -738,8 +779,9 @@ function ServiceDetailContent() {
           </CodeBlock>
           <HelpText>
             Aperture will respond with HTTP 402 and a{" "}
-            <Code>WWW-Authenticate: L402</Code> header containing a macaroon and
-            Lightning invoice.
+            <Code>WWW-Authenticate</Code> header. For L402, this contains a
+            macaroon and Lightning invoice. For MPP (Payment scheme), it
+            contains a JSON charge intent with a BOLT-11 invoice.
           </HelpText>
         </Card>
       </ConfigGrid>

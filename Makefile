@@ -91,10 +91,16 @@ migrate-create: $(MIGRATE_BIN)
 sqlc:
 	@$(call print, "Generating sql models and queries in Go")
 	./scripts/gen_sqlc_docker.sh
+	@$(call print, "Merging SQL migrations into consolidated schema")
+	go run ./cmd/merge-sql-schemas/main.go
 
 sqlc-check: sqlc
 	@$(call print, "Verifying sql code generation.")
-	if test -n "$$(git status --porcelain '*.go')"; then echo "SQL models not properly generated!"; git status --porcelain '*.go'; exit 1; fi
+	@if [ ! -f aperturedb/sqlc/schemas/generated_schema.sql ]; then \
+		echo "Missing file: aperturedb/sqlc/schemas/generated_schema.sql"; \
+		exit 1; \
+	fi
+	@if test -n "$$(git status --porcelain '*.go')"; then echo "SQL models not properly generated!"; git status --porcelain '*.go'; exit 1; fi
 
 # =======
 # TESTING

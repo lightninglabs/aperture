@@ -1,0 +1,1 @@
+ALTER TABLE services ADD COLUMN auth_scheme TEXT NOT NULL DEFAULT 'l402';

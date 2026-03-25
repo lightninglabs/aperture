@@ -6,6 +6,7 @@ import type {
   Transaction,
   TransactionParams,
   InfoResponse,
+  AuthScheme,
 } from "./types";
 
 async function fetcher<T>(path: string): Promise<T> {
@@ -59,6 +60,9 @@ export function useServices() {
           path_regexp: String(s.path_regexp ?? ""),
           price: Number(s.price ?? 0),
           auth: String(s.auth ?? ""),
+          auth_scheme: String(
+            s.auth_scheme ?? "AUTH_SCHEME_L402"
+          ) as AuthScheme,
         }))
       ),
     { refreshInterval: 30_000 }
@@ -98,6 +102,7 @@ export async function updateService(
     pathregexp?: string;
     price?: number;
     auth?: string;
+    auth_scheme?: AuthScheme;
   }
 ) {
   const res = await fetch(`/api/proxy/services/${encodeURIComponent(name)}`, {

@@ -71,6 +71,14 @@ func (l *L402Authenticator) Accept(header *http.Header, serviceName string) bool
 	return true
 }
 
+// Scheme returns the authentication scheme identifier for the L402
+// authenticator.
+//
+// NOTE: This implements the SchemeTagged interface.
+func (l *L402Authenticator) Scheme() string {
+	return AuthSchemeL402
+}
+
 const (
 	// lsatAuthScheme is an outdated RFC 7235 auth-scheme used by aperture.
 	lsatAuthScheme = "LSAT"

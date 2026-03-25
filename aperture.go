@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
@@ -243,11 +244,12 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 
 	var (
-		secretStore mint.SecretStore
-		onionStore  tor.OnionStore
-		lncStore    lnc.Store
-		txnStore    *aperturedb.L402TransactionsStore
-		svcStore    *aperturedb.ServicesStore
+		secretStore     mint.SecretStore
+		onionStore      tor.OnionStore
+		lncStore        lnc.Store
+		txnStore        *aperturedb.L402TransactionsStore
+		svcStore        *aperturedb.ServicesStore
+		mppSessionStore auth.SessionStore
 	)
 
 	// Connect to the chosen database backend.
@@ -267,7 +269,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		secretStore = newSecretStore(a.etcdClient)
 		onionStore = newOnionStore(a.etcdClient)
 
-	case "postgres":
+	case "postgres": //nolint:dupl
 		db, err := aperturedb.NewPostgresStore(a.cfg.Postgres)
 		if err != nil {
 			return fmt.Errorf("unable to connect to postgres: %v",
@@ -277,7 +279,14 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		secretStore, onionStore, lncStore, txnStore, svcStore =
 			initSQLStores(db.BaseDB)
 
-	case "sqlite":
+		dbMPPTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPSessionsDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
+
+	case "sqlite": //nolint:dupl
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
 			return fmt.Errorf("unable to connect to sqlite: %v",
@@ -286,6 +295,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		a.db = db.DB
 		secretStore, onionStore, lncStore, txnStore, svcStore =
 			initSQLStores(db.BaseDB)
+
+		dbMPPTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPSessionsDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
 
 	default:
 		return fmt.Errorf("unknown database backend: %s",
@@ -392,11 +408,41 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 	a.adminCleanup = adminCleanup
 
+	// Create a payment sender for MPP session refunds if sessions are
+	// enabled and we have a direct LND connection.
+	var paymentSender auth.PaymentSender
+	if a.cfg.Authenticator.EnableSessions &&
+		a.cfg.Authenticator.LndHost != "" {
+
+		authCfg := a.cfg.Authenticator
+		adminClient, err := lndclient.NewBasicClient(
+			authCfg.LndHost, authCfg.TLSPath,
+			authCfg.MacDir, authCfg.Network,
+		)
+		if err != nil {
+			log.Warnf("MPP: Unable to create admin LND client "+
+				"for session refunds: %v", err)
+		} else {
+			paymentSender = challenger.NewLndPaymentSender(
+				adminClient,
+			)
+		}
+	}
+
 	// Create the proxy and connect it to lnd.
 	mintTxnStore := asMintTransactionStore(txnStore)
+	// Convert the concrete transaction store to the TransactionRecorder
+	// interface for MPP payment tracking. Use a nil interface if the
+	// store is nil.
+	var txnRecorder auth.TransactionRecorder
+	if txnStore != nil {
+		txnRecorder = txnStore
+	}
+
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, secretStore, mintTxnStore,
-		adminPriority, adminFallback,
+		a.cfg, initialServices, a.challenger, secretStore,
+		mppSessionStore, paymentSender, mintTxnStore,
+		txnRecorder, adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -993,6 +1039,9 @@ func createAdminServer(cfg *Config,
 		UpdateServices:   updateServices,
 		SecretStore:      secretStore,
 		ServiceStore:     svcStore,
+		MPPEnabled:       cfg.Authenticator.EnableMPP,
+		SessionsEnabled:  cfg.Authenticator.EnableSessions,
+		MPPRealm:         cfg.Authenticator.MPPRealm,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)
@@ -1490,6 +1539,7 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 			PathRegexp: row.PathRegexp,
 			Price:      row.Price,
 			Auth:       auth.Level(row.Auth),
+			AuthScheme: row.AuthScheme,
 		}
 	}
 
@@ -1553,23 +1603,112 @@ func asMintTransactionStore(
 	return txnStore
 }
 
+// deriveHMACSecret derives a deterministic HMAC secret for MPP challenge
+// binding. It uses a well-known key hash with the secret store. If the secret
+// doesn't exist yet, it creates one.
+func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
+	// Use a deterministic key hash for the MPP HMAC secret.
+	keyHash := sha256.Sum256([]byte("aperture-mpp-hmac-secret-v1"))
+
+	secret, err := store.GetSecret(context.Background(), keyHash)
+	if err != nil {
+		// Secret doesn't exist yet, create it.
+		secret, err = store.NewSecret(context.Background(), keyHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to derive MPP "+
+				"HMAC secret: %w", err)
+		}
+	}
+
+	return secret[:], nil
+}
+
 // createProxy creates the proxy with all the services it needs.
 // adminPriorityServices are checked before proxy backend matching (e.g. admin
 // gRPC, REST, dashboard proxy). adminFallbackServices are checked after proxy
 // backend matching fails (e.g. dashboard catch-all static file server).
-func createProxy(cfg *Config, challenger challenger.Challenger,
-	store mint.SecretStore, txnStore mint.TransactionStore,
+func createProxy(cfg *Config, services []*proxy.Service,
+	challenger challenger.Challenger,
+	store mint.SecretStore, mppSessionStore auth.SessionStore,
+	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
+	txnRecorder auth.TransactionRecorder,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
 ) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
 		Challenger:       challenger,
 		Secrets:          store,
-		ServiceLimiter:   newStaticServiceLimiter(cfg.Services),
+		ServiceLimiter:   newStaticServiceLimiter(services),
 		Now:              time.Now,
 		TransactionStore: txnStore,
 	})
-	authenticator := auth.NewL402Authenticator(minter, challenger)
+	l402Auth := auth.NewL402Authenticator(minter, challenger)
+
+	// Build the authenticator, optionally composing with MPP.
+	var authenticator auth.Authenticator
+	if cfg.Authenticator.EnableMPP {
+		realm := cfg.Authenticator.MPPRealm
+		if realm == "" {
+			realm = cfg.ListenAddr
+		}
+
+		// Generate an HMAC secret for challenge binding. We derive
+		// it from a deterministic key stored via the secret store.
+		hmacSecret, err := deriveHMACSecret(store)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP HMAC secret: %w",
+				err)
+		}
+
+		network := cfg.Authenticator.Network
+		if network == "" {
+			network = "mainnet"
+		}
+
+		mppAuth := auth.NewMPPAuthenticator(
+			challenger, challenger, realm, hmacSecret, network,
+			txnRecorder,
+		)
+
+		auths := []auth.Authenticator{l402Auth, mppAuth}
+
+		// Optionally add the session authenticator.
+		if cfg.Authenticator.EnableSessions && mppSessionStore != nil {
+			multiplier := cfg.Authenticator.SessionDepositMultiplier
+			if multiplier <= 0 {
+				multiplier = 20
+			}
+			idleTimeout := time.Duration(
+				cfg.Authenticator.SessionIdleTimeout,
+			) * time.Second
+			if idleTimeout <= 0 {
+				idleTimeout = 5 * time.Minute
+			}
+
+			sessAuth := auth.NewMPPSessionAuthenticator(
+				&auth.MPPSessionConfig{
+					Challenger:        challenger,
+					Checker:           challenger,
+					SessionStore:      mppSessionStore,
+					PaymentSender:     paymentSender,
+					Realm:             realm,
+					HMACSecret:        hmacSecret,
+					Network:           network,
+					DepositMultiplier: multiplier,
+					IdleTimeout:       idleTimeout,
+				},
+			)
+			auths = append(auths, sessAuth)
+		}
+
+		authenticator = auth.NewMultiAuthenticator(auths...)
+
+		log.Infof("MPP (Payment HTTP Auth) enabled with realm=%s "+
+			"network=%s sessions=%v", realm, network,
+			cfg.Authenticator.EnableSessions)
+	} else {
+		authenticator = l402Auth
+	}
 
 	// By default the static file server only returns 404 answers for
 	// security reasons. Serving files from the staticRoot directory has to
@@ -1613,7 +1752,7 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 	))
 
 	prxy, err := proxy.New(
-		authenticator, cfg.Services, cfg.Blocklist,
+		authenticator, services, cfg.Blocklist,
 		adminPriorityServices, localServices...,
 	)
 	return prxy, proxyCleanup, err

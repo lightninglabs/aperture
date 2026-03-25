@@ -60,22 +60,25 @@ SELECT count(*)
 FROM l402_transactions
 WHERE ($1 = '' OR service_name = $1)
   AND ($2 = '' OR state = $2)
-  AND ($3 = 0 OR settled_at >= $4)
-  AND ($3 = 0 OR settled_at <= $5)
+  AND ($3 = '' OR auth_type = $3)
+  AND ($4 = 0 OR settled_at >= $5)
+  AND ($4 = 0 OR settled_at <= $6)
 `
 
 type CountL402TransactionsFilteredParams struct {
-	FilterService interface{}
-	FilterState   interface{}
-	HasDateRange  interface{}
-	DateFrom      sql.NullTime
-	DateTo        sql.NullTime
+	FilterService  interface{}
+	FilterState    interface{}
+	FilterAuthType interface{}
+	HasDateRange   interface{}
+	DateFrom       sql.NullTime
+	DateTo         sql.NullTime
 }
 
 func (q *Queries) CountL402TransactionsFiltered(ctx context.Context, arg CountL402TransactionsFilteredParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countL402TransactionsFiltered,
 		arg.FilterService,
 		arg.FilterState,
+		arg.FilterAuthType,
 		arg.HasDateRange,
 		arg.DateFrom,
 		arg.DateTo,
@@ -174,7 +177,7 @@ func (q *Queries) GetL402RevenueByServiceAndDateRange(ctx context.Context, arg G
 }
 
 const getL402SettledTransactionByTokenID = `-- name: GetL402SettledTransactionByTokenID :one
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE token_id = $1 AND state = 'settled'
 `
@@ -190,6 +193,7 @@ func (q *Queries) GetL402SettledTransactionByTokenID(ctx context.Context, tokenI
 		&i.ServiceName,
 		&i.PriceSats,
 		&i.State,
+		&i.AuthType,
 		&i.CreatedAt,
 		&i.SettledAt,
 	)
@@ -228,7 +232,7 @@ func (q *Queries) GetL402TotalRevenueByDateRange(ctx context.Context, arg GetL40
 }
 
 const getL402TransactionByIdentifierHash = `-- name: GetL402TransactionByIdentifierHash :one
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE identifier_hash = $1
 `
@@ -244,6 +248,7 @@ func (q *Queries) GetL402TransactionByIdentifierHash(ctx context.Context, identi
 		&i.ServiceName,
 		&i.PriceSats,
 		&i.State,
+		&i.AuthType,
 		&i.CreatedAt,
 		&i.SettledAt,
 	)
@@ -251,7 +256,7 @@ func (q *Queries) GetL402TransactionByIdentifierHash(ctx context.Context, identi
 }
 
 const getL402TransactionsByPaymentHash = `-- name: GetL402TransactionsByPaymentHash :many
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE payment_hash = $1
 `
@@ -273,6 +278,7 @@ func (q *Queries) GetL402TransactionsByPaymentHash(ctx context.Context, paymentH
 			&i.ServiceName,
 			&i.PriceSats,
 			&i.State,
+			&i.AuthType,
 			&i.CreatedAt,
 			&i.SettledAt,
 		); err != nil {
@@ -291,10 +297,10 @@ func (q *Queries) GetL402TransactionsByPaymentHash(ctx context.Context, paymentH
 
 const insertL402Transaction = `-- name: InsertL402Transaction :one
 INSERT INTO l402_transactions (
-    token_id, payment_hash, service_name, price_sats, state, created_at,
-    identifier_hash
+    token_id, payment_hash, service_name, price_sats, state, auth_type,
+    created_at, identifier_hash
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    $1, $2, $3, $4, $5, $6, $7, $8
 ) RETURNING id
 `
 
@@ -304,6 +310,7 @@ type InsertL402TransactionParams struct {
 	ServiceName    string
 	PriceSats      int64
 	State          string
+	AuthType       string
 	CreatedAt      time.Time
 	IdentifierHash []byte
 }
@@ -315,6 +322,7 @@ func (q *Queries) InsertL402Transaction(ctx context.Context, arg InsertL402Trans
 		arg.ServiceName,
 		arg.PriceSats,
 		arg.State,
+		arg.AuthType,
 		arg.CreatedAt,
 		arg.IdentifierHash,
 	)
@@ -324,7 +332,7 @@ func (q *Queries) InsertL402Transaction(ctx context.Context, arg InsertL402Trans
 }
 
 const listL402Transactions = `-- name: ListL402Transactions :many
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -352,6 +360,7 @@ func (q *Queries) ListL402Transactions(ctx context.Context, arg ListL402Transact
 			&i.ServiceName,
 			&i.PriceSats,
 			&i.State,
+			&i.AuthType,
 			&i.CreatedAt,
 			&i.SettledAt,
 		); err != nil {
@@ -369,7 +378,7 @@ func (q *Queries) ListL402Transactions(ctx context.Context, arg ListL402Transact
 }
 
 const listL402TransactionsByDateRange = `-- name: ListL402TransactionsByDateRange :many
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE state = 'settled' AND settled_at >= $1 AND settled_at <= $2
 ORDER BY settled_at DESC
@@ -405,6 +414,7 @@ func (q *Queries) ListL402TransactionsByDateRange(ctx context.Context, arg ListL
 			&i.ServiceName,
 			&i.PriceSats,
 			&i.State,
+			&i.AuthType,
 			&i.CreatedAt,
 			&i.SettledAt,
 		); err != nil {
@@ -422,7 +432,7 @@ func (q *Queries) ListL402TransactionsByDateRange(ctx context.Context, arg ListL
 }
 
 const listL402TransactionsByService = `-- name: ListL402TransactionsByService :many
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE service_name = $1
 ORDER BY created_at DESC
@@ -452,6 +462,7 @@ func (q *Queries) ListL402TransactionsByService(ctx context.Context, arg ListL40
 			&i.ServiceName,
 			&i.PriceSats,
 			&i.State,
+			&i.AuthType,
 			&i.CreatedAt,
 			&i.SettledAt,
 		); err != nil {
@@ -469,7 +480,7 @@ func (q *Queries) ListL402TransactionsByService(ctx context.Context, arg ListL40
 }
 
 const listL402TransactionsByState = `-- name: ListL402TransactionsByState :many
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE state = $1
 ORDER BY created_at DESC
@@ -499,6 +510,7 @@ func (q *Queries) ListL402TransactionsByState(ctx context.Context, arg ListL402T
 			&i.ServiceName,
 			&i.PriceSats,
 			&i.State,
+			&i.AuthType,
 			&i.CreatedAt,
 			&i.SettledAt,
 		); err != nil {
@@ -516,30 +528,33 @@ func (q *Queries) ListL402TransactionsByState(ctx context.Context, arg ListL402T
 }
 
 const listL402TransactionsFiltered = `-- name: ListL402TransactionsFiltered :many
-SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, created_at, settled_at
+SELECT id, token_id, payment_hash, identifier_hash, service_name, price_sats, state, auth_type, created_at, settled_at
 FROM l402_transactions
 WHERE ($1 = '' OR service_name = $1)
   AND ($2 = '' OR state = $2)
-  AND ($3 = 0 OR settled_at >= $4)
-  AND ($3 = 0 OR settled_at <= $5)
+  AND ($3 = '' OR auth_type = $3)
+  AND ($4 = 0 OR settled_at >= $5)
+  AND ($4 = 0 OR settled_at <= $6)
 ORDER BY created_at DESC
-LIMIT $7 OFFSET $6
+LIMIT $8 OFFSET $7
 `
 
 type ListL402TransactionsFilteredParams struct {
-	FilterService interface{}
-	FilterState   interface{}
-	HasDateRange  interface{}
-	DateFrom      sql.NullTime
-	DateTo        sql.NullTime
-	RowOffset     int32
-	RowLimit      int32
+	FilterService  interface{}
+	FilterState    interface{}
+	FilterAuthType interface{}
+	HasDateRange   interface{}
+	DateFrom       sql.NullTime
+	DateTo         sql.NullTime
+	RowOffset      int32
+	RowLimit       int32
 }
 
 func (q *Queries) ListL402TransactionsFiltered(ctx context.Context, arg ListL402TransactionsFilteredParams) ([]L402Transaction, error) {
 	rows, err := q.db.QueryContext(ctx, listL402TransactionsFiltered,
 		arg.FilterService,
 		arg.FilterState,
+		arg.FilterAuthType,
 		arg.HasDateRange,
 		arg.DateFrom,
 		arg.DateTo,
@@ -561,6 +576,7 @@ func (q *Queries) ListL402TransactionsFiltered(ctx context.Context, arg ListL402
 			&i.ServiceName,
 			&i.PriceSats,
 			&i.State,
+			&i.AuthType,
 			&i.CreatedAt,
 			&i.SettledAt,
 		); err != nil {
