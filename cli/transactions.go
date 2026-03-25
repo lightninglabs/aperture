@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -43,7 +42,7 @@ func newTransactionsListCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.ListTransactions(
-				context.Background(),
+				cmd.Context(),
 				&adminrpc.ListTransactionsRequest{
 					Service:   service,
 					State:     state,
@@ -54,7 +53,7 @@ func newTransactionsListCmd() *cobra.Command {
 				},
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {

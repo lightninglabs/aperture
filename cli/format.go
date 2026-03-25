@@ -83,15 +83,12 @@ func printDryRun(rpcName string, req proto.Message) error {
 		return err
 	}
 
-	var reqMap map[string]any
-	if err := json.Unmarshal(reqData, &reqMap); err != nil {
-		return err
-	}
-
+	// Use json.RawMessage to embed the protojson output directly
+	// without a double-serialize round-trip.
 	envelope := map[string]any{
 		"dry_run": true,
 		"rpc":     rpcName,
-		"request": reqMap,
+		"request": json.RawMessage(reqData),
 	}
 
 	return writeJSON(os.Stdout, envelope)

@@ -16,9 +16,14 @@ func main() {
 	if err != nil {
 		code := cli.ExitCode(err)
 
-		// Emit structured JSON error on stderr when stdout is
-		// not a TTY (agent/pipe mode), or when the error itself
-		// is a CLIError (structured errors always get JSON).
+		// Dry-run success is not an error — just exit with
+		// the code. Don't emit error output.
+		if code == cli.ExitDryRunPassed {
+			os.Exit(code)
+		}
+
+		// Emit structured JSON error on stderr when stdout
+		// is not a TTY (agent/pipe mode).
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
 			cli.WriteErrorJSON(os.Stderr, err)
 		} else {

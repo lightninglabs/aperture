@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -30,14 +29,14 @@ func NewStatsCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.GetStats(
-				context.Background(),
+				cmd.Context(),
 				&adminrpc.GetStatsRequest{
 					From: from,
 					To:   to,
 				},
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {

@@ -2,6 +2,9 @@
 package cli
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +36,9 @@ var flags struct {
 
 	// dryRun shows what would be done without executing.
 	dryRun bool
+
+	// timeout is the RPC call timeout.
+	timeout time.Duration
 }
 
 // NewRootCmd creates the root aperturecli command with all subcommands
@@ -50,6 +56,18 @@ Agent-friendly: defaults to JSON output when stdout is not a
 TTY. Use --json or --human to override.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command,
+			args []string) error {
+
+			if flags.jsonOutput && flags.humanOutput {
+				return ErrInvalidArgsf(
+					"--json and --human are " +
+						"mutually exclusive",
+				)
+			}
+
+			return nil
+		},
 	}
 
 	pf := rootCmd.PersistentFlags()
@@ -82,6 +100,10 @@ TTY. Use --json or --human to override.`,
 		"Show what would be done without executing "+
 			"(mutating commands only)",
 	)
+	pf.DurationVar(
+		&flags.timeout, "timeout", 30*time.Second,
+		"RPC call timeout",
+	)
 
 	rootCmd.AddCommand(
 		NewInfoCmd(),
@@ -92,7 +114,22 @@ TTY. Use --json or --human to override.`,
 		NewStatsCmd(),
 		NewSchemaCmd(),
 		NewMCPCmd(),
+		newVersionCmd(),
 	)
 
 	return rootCmd
+}
+
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
+// newVersionCmd creates the version subcommand.
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print aperturecli version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("aperturecli version %s\n", Version)
+		},
+	}
 }

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -42,11 +41,11 @@ func newServicesListCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.ListServices(
-				context.Background(),
+				cmd.Context(),
 				&adminrpc.ListServicesRequest{},
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {
@@ -123,10 +122,10 @@ func newServicesCreateCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.CreateService(
-				context.Background(), req,
+				cmd.Context(), req,
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {
@@ -236,10 +235,10 @@ Examples:
 			defer cleanup()
 
 			resp, err := client.UpdateService(
-				context.Background(), req,
+				cmd.Context(), req,
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {
@@ -309,10 +308,10 @@ func newServicesDeleteCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.DeleteService(
-				context.Background(), req,
+				cmd.Context(), req,
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {

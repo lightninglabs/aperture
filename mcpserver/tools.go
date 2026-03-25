@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/lightninglabs/aperture/adminrpc"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -16,9 +17,9 @@ var protoJSON = protojson.MarshalOptions{
 }
 
 // protoResult wraps a JSON-serialized proto message for the MCP typed
-// response pattern.
+// response pattern. Data is json.RawMessage to avoid double-encoding.
 type protoResult struct {
-	Data string `json:"data"`
+	Data json.RawMessage `json:"data"`
 }
 
 // toResult marshals a proto message into a protoResult.
@@ -28,7 +29,7 @@ func toResult(msg proto.Message) (*protoResult, error) {
 		return nil, err
 	}
 
-	return &protoResult{Data: string(data)}, nil
+	return &protoResult{Data: json.RawMessage(data)}, nil
 }
 
 // registerTools adds all aperture admin tools to the MCP server.

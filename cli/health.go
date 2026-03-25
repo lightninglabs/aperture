@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/lightninglabs/aperture/adminrpc"
@@ -23,11 +22,11 @@ func NewHealthCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.GetHealth(
-				context.Background(),
+				cmd.Context(),
 				&adminrpc.GetHealthRequest{},
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {

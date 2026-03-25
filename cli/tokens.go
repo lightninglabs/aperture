@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -43,14 +42,14 @@ func newTokensListCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.ListTokens(
-				context.Background(),
+				cmd.Context(),
 				&adminrpc.ListTokensRequest{
 					Limit:  limit,
 					Offset: offset,
 				},
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {
@@ -123,10 +122,10 @@ func newTokensRevokeCmd() *cobra.Command {
 			defer cleanup()
 
 			resp, err := client.RevokeToken(
-				context.Background(), req,
+				cmd.Context(), req,
 			)
 			if err != nil {
-				return ErrConnectionWrap(err)
+				return mapGRPCError(err)
 			}
 
 			if isJSONOutput(cmd) {
