@@ -70,6 +70,11 @@ install:
 	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
 	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
 
+install-dashboard: build-dashboard
+	@$(call print, "Installing aperture with embedded dashboard.")
+	$(GOINSTALL) -tags="dashboard ${tags}" $(PKG)/cmd/aperture
+	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
+
 docker-tools:
 	@$(call print, "Building tools docker image.")
 	docker build -q -t aperture-tools $(TOOLS_DIR)
