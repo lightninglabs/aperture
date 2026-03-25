@@ -24,6 +24,16 @@ message GetInfoResponse {
   string network = 1;
   string listen_addr = 2;
   bool insecure = 3;
+
+  // mpp_enabled indicates whether the MPP (Payment HTTP Auth Scheme) is
+  // enabled globally.
+  bool mpp_enabled = 4;
+
+  // sessions_enabled indicates whether MPP session intents are enabled.
+  bool sessions_enabled = 5;
+
+  // mpp_realm is the realm string used in MPP challenge headers.
+  string mpp_realm = 6;
 }
 
 message GetHealthRequest {}
@@ -34,6 +44,21 @@ message ListServicesRequest {}
 
 message ListServicesResponse { repeated Service services = 1; }
 
+// AuthScheme specifies which payment authentication scheme(s) a service uses.
+// L402 is the default for backwards compatibility with existing deployments.
+enum AuthScheme {
+  // AUTH_SCHEME_L402 is the default L402 (macaroon + preimage) scheme.
+  AUTH_SCHEME_L402 = 0;
+
+  // AUTH_SCHEME_MPP is the Payment HTTP Authentication Scheme (charge
+  // intent only, no sessions).
+  AUTH_SCHEME_MPP = 1;
+
+  // AUTH_SCHEME_L402_MPP enables both L402 and MPP simultaneously. The
+  // proxy issues challenges for both schemes and accepts either.
+  AUTH_SCHEME_L402_MPP = 2;
+}
+
 message Service {
   string name = 1;
   string address = 2;
@@ -42,6 +67,10 @@ message Service {
   string path_regexp = 5;
   int64 price = 6;
   string auth = 7;
+
+  // auth_scheme specifies which payment auth scheme(s) are used for this
+  // service. Defaults to AUTH_SCHEME_L402 for backwards compatibility.
+  AuthScheme auth_scheme = 8;
 }
 
 message CreateServiceRequest {
@@ -52,6 +81,10 @@ message CreateServiceRequest {
   string path_regexp = 5;
   int64 price = 6;
   string auth = 7;
+
+  // auth_scheme specifies which payment auth scheme(s) to use. Defaults to
+  // AUTH_SCHEME_L402 if unset.
+  AuthScheme auth_scheme = 8;
 }
 
 message UpdateServiceRequest {
@@ -62,6 +95,9 @@ message UpdateServiceRequest {
   string path_regexp = 5;
   optional int64 price = 6;
   string auth = 7;
+
+  // auth_scheme specifies which payment auth scheme(s) to use.
+  AuthScheme auth_scheme = 8;
 }
 
 message DeleteServiceRequest { string name = 1; }

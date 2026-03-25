@@ -21,6 +21,62 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// AuthScheme specifies which payment authentication scheme(s) a service uses.
+// L402 is the default for backwards compatibility with existing deployments.
+type AuthScheme int32
+
+const (
+	// AUTH_SCHEME_L402 is the default L402 (macaroon + preimage) scheme.
+	AuthScheme_AUTH_SCHEME_L402 AuthScheme = 0
+	// AUTH_SCHEME_MPP is the Payment HTTP Authentication Scheme (charge
+	// intent only, no sessions).
+	AuthScheme_AUTH_SCHEME_MPP AuthScheme = 1
+	// AUTH_SCHEME_L402_MPP enables both L402 and MPP simultaneously. The
+	// proxy issues challenges for both schemes and accepts either.
+	AuthScheme_AUTH_SCHEME_L402_MPP AuthScheme = 2
+)
+
+// Enum value maps for AuthScheme.
+var (
+	AuthScheme_name = map[int32]string{
+		0: "AUTH_SCHEME_L402",
+		1: "AUTH_SCHEME_MPP",
+		2: "AUTH_SCHEME_L402_MPP",
+	}
+	AuthScheme_value = map[string]int32{
+		"AUTH_SCHEME_L402":     0,
+		"AUTH_SCHEME_MPP":      1,
+		"AUTH_SCHEME_L402_MPP": 2,
+	}
+)
+
+func (x AuthScheme) Enum() *AuthScheme {
+	p := new(AuthScheme)
+	*p = x
+	return p
+}
+
+func (x AuthScheme) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AuthScheme) Descriptor() protoreflect.EnumDescriptor {
+	return file_admin_proto_enumTypes[0].Descriptor()
+}
+
+func (AuthScheme) Type() protoreflect.EnumType {
+	return &file_admin_proto_enumTypes[0]
+}
+
+func (x AuthScheme) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AuthScheme.Descriptor instead.
+func (AuthScheme) EnumDescriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{0}
+}
+
 type GetInfoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -58,10 +114,17 @@ func (*GetInfoRequest) Descriptor() ([]byte, []int) {
 }
 
 type GetInfoResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Network       string                 `protobuf:"bytes,1,opt,name=network,proto3" json:"network,omitempty"`
-	ListenAddr    string                 `protobuf:"bytes,2,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`
-	Insecure      bool                   `protobuf:"varint,3,opt,name=insecure,proto3" json:"insecure,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Network    string                 `protobuf:"bytes,1,opt,name=network,proto3" json:"network,omitempty"`
+	ListenAddr string                 `protobuf:"bytes,2,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`
+	Insecure   bool                   `protobuf:"varint,3,opt,name=insecure,proto3" json:"insecure,omitempty"`
+	// mpp_enabled indicates whether the MPP (Payment HTTP Auth Scheme) is
+	// enabled globally.
+	MppEnabled bool `protobuf:"varint,4,opt,name=mpp_enabled,json=mppEnabled,proto3" json:"mpp_enabled,omitempty"`
+	// sessions_enabled indicates whether MPP session intents are enabled.
+	SessionsEnabled bool `protobuf:"varint,5,opt,name=sessions_enabled,json=sessionsEnabled,proto3" json:"sessions_enabled,omitempty"`
+	// mpp_realm is the realm string used in MPP challenge headers.
+	MppRealm      string `protobuf:"bytes,6,opt,name=mpp_realm,json=mppRealm,proto3" json:"mpp_realm,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -115,6 +178,27 @@ func (x *GetInfoResponse) GetInsecure() bool {
 		return x.Insecure
 	}
 	return false
+}
+
+func (x *GetInfoResponse) GetMppEnabled() bool {
+	if x != nil {
+		return x.MppEnabled
+	}
+	return false
+}
+
+func (x *GetInfoResponse) GetSessionsEnabled() bool {
+	if x != nil {
+		return x.SessionsEnabled
+	}
+	return false
+}
+
+func (x *GetInfoResponse) GetMppRealm() string {
+	if x != nil {
+		return x.MppRealm
+	}
+	return ""
 }
 
 type GetHealthRequest struct {
@@ -278,14 +362,17 @@ func (x *ListServicesResponse) GetServices() []*Service {
 }
 
 type Service struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
-	Protocol      string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	HostRegexp    string                 `protobuf:"bytes,4,opt,name=host_regexp,json=hostRegexp,proto3" json:"host_regexp,omitempty"`
-	PathRegexp    string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
-	Price         int64                  `protobuf:"varint,6,opt,name=price,proto3" json:"price,omitempty"`
-	Auth          string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Address    string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Protocol   string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	HostRegexp string                 `protobuf:"bytes,4,opt,name=host_regexp,json=hostRegexp,proto3" json:"host_regexp,omitempty"`
+	PathRegexp string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
+	Price      int64                  `protobuf:"varint,6,opt,name=price,proto3" json:"price,omitempty"`
+	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
+	// auth_scheme specifies which payment auth scheme(s) are used for this
+	// service. Defaults to AUTH_SCHEME_L402 for backwards compatibility.
+	AuthScheme    AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -369,15 +456,25 @@ func (x *Service) GetAuth() string {
 	return ""
 }
 
+func (x *Service) GetAuthScheme() AuthScheme {
+	if x != nil {
+		return x.AuthScheme
+	}
+	return AuthScheme_AUTH_SCHEME_L402
+}
+
 type CreateServiceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
-	Protocol      string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	HostRegexp    string                 `protobuf:"bytes,4,opt,name=host_regexp,json=hostRegexp,proto3" json:"host_regexp,omitempty"`
-	PathRegexp    string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
-	Price         int64                  `protobuf:"varint,6,opt,name=price,proto3" json:"price,omitempty"`
-	Auth          string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Address    string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Protocol   string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	HostRegexp string                 `protobuf:"bytes,4,opt,name=host_regexp,json=hostRegexp,proto3" json:"host_regexp,omitempty"`
+	PathRegexp string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
+	Price      int64                  `protobuf:"varint,6,opt,name=price,proto3" json:"price,omitempty"`
+	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
+	// auth_scheme specifies which payment auth scheme(s) to use. Defaults to
+	// AUTH_SCHEME_L402 if unset.
+	AuthScheme    AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -461,15 +558,24 @@ func (x *CreateServiceRequest) GetAuth() string {
 	return ""
 }
 
+func (x *CreateServiceRequest) GetAuthScheme() AuthScheme {
+	if x != nil {
+		return x.AuthScheme
+	}
+	return AuthScheme_AUTH_SCHEME_L402
+}
+
 type UpdateServiceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
-	Protocol      string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	HostRegexp    string                 `protobuf:"bytes,4,opt,name=host_regexp,json=hostRegexp,proto3" json:"host_regexp,omitempty"`
-	PathRegexp    string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
-	Price         *int64                 `protobuf:"varint,6,opt,name=price,proto3,oneof" json:"price,omitempty"`
-	Auth          string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Address    string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Protocol   string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	HostRegexp string                 `protobuf:"bytes,4,opt,name=host_regexp,json=hostRegexp,proto3" json:"host_regexp,omitempty"`
+	PathRegexp string                 `protobuf:"bytes,5,opt,name=path_regexp,json=pathRegexp,proto3" json:"path_regexp,omitempty"`
+	Price      *int64                 `protobuf:"varint,6,opt,name=price,proto3,oneof" json:"price,omitempty"`
+	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
+	// auth_scheme specifies which payment auth scheme(s) to use.
+	AuthScheme    AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -551,6 +657,13 @@ func (x *UpdateServiceRequest) GetAuth() string {
 		return x.Auth
 	}
 	return ""
+}
+
+func (x *UpdateServiceRequest) GetAuthScheme() AuthScheme {
+	if x != nil {
+		return x.AuthScheme
+	}
+	return AuthScheme_AUTH_SCHEME_L402
 }
 
 type DeleteServiceRequest struct {
@@ -1238,18 +1351,22 @@ var File_admin_proto protoreflect.FileDescriptor
 const file_admin_proto_rawDesc = "" +
 	"\n" +
 	"\vadmin.proto\x12\badminrpc\"\x10\n" +
-	"\x0eGetInfoRequest\"h\n" +
+	"\x0eGetInfoRequest\"\xd1\x01\n" +
 	"\x0fGetInfoResponse\x12\x18\n" +
 	"\anetwork\x18\x01 \x01(\tR\anetwork\x12\x1f\n" +
 	"\vlisten_addr\x18\x02 \x01(\tR\n" +
 	"listenAddr\x12\x1a\n" +
-	"\binsecure\x18\x03 \x01(\bR\binsecure\"\x12\n" +
+	"\binsecure\x18\x03 \x01(\bR\binsecure\x12\x1f\n" +
+	"\vmpp_enabled\x18\x04 \x01(\bR\n" +
+	"mppEnabled\x12)\n" +
+	"\x10sessions_enabled\x18\x05 \x01(\bR\x0fsessionsEnabled\x12\x1b\n" +
+	"\tmpp_realm\x18\x06 \x01(\tR\bmppRealm\"\x12\n" +
 	"\x10GetHealthRequest\"+\n" +
 	"\x11GetHealthResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"\x15\n" +
 	"\x13ListServicesRequest\"E\n" +
 	"\x14ListServicesResponse\x12-\n" +
-	"\bservices\x18\x01 \x03(\v2\x11.adminrpc.ServiceR\bservices\"\xbf\x01\n" +
+	"\bservices\x18\x01 \x03(\v2\x11.adminrpc.ServiceR\bservices\"\xf6\x01\n" +
 	"\aService\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1259,7 +1376,9 @@ const file_admin_proto_rawDesc = "" +
 	"\vpath_regexp\x18\x05 \x01(\tR\n" +
 	"pathRegexp\x12\x14\n" +
 	"\x05price\x18\x06 \x01(\x03R\x05price\x12\x12\n" +
-	"\x04auth\x18\a \x01(\tR\x04auth\"\xcc\x01\n" +
+	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
+	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
+	"authScheme\"\x83\x02\n" +
 	"\x14CreateServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1269,7 +1388,9 @@ const file_admin_proto_rawDesc = "" +
 	"\vpath_regexp\x18\x05 \x01(\tR\n" +
 	"pathRegexp\x12\x14\n" +
 	"\x05price\x18\x06 \x01(\x03R\x05price\x12\x12\n" +
-	"\x04auth\x18\a \x01(\tR\x04auth\"\xdb\x01\n" +
+	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
+	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
+	"authScheme\"\x92\x02\n" +
 	"\x14UpdateServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1279,7 +1400,9 @@ const file_admin_proto_rawDesc = "" +
 	"\vpath_regexp\x18\x05 \x01(\tR\n" +
 	"pathRegexp\x12\x19\n" +
 	"\x05price\x18\x06 \x01(\x03H\x00R\x05price\x88\x01\x01\x12\x12\n" +
-	"\x04auth\x18\a \x01(\tR\x04authB\b\n" +
+	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
+	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
+	"authSchemeB\b\n" +
 	"\x06_price\"*\n" +
 	"\x14DeleteServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"/\n" +
@@ -1329,7 +1452,12 @@ const file_admin_proto_rawDesc = "" +
 	"\x11service_breakdown\x18\x03 \x03(\v2\x18.adminrpc.ServiceRevenueR\x10serviceBreakdown\"a\n" +
 	"\x0eServiceRevenue\x12!\n" +
 	"\fservice_name\x18\x01 \x01(\tR\vserviceName\x12,\n" +
-	"\x12total_revenue_sats\x18\x02 \x01(\x03R\x10totalRevenueSats2\xe9\x05\n" +
+	"\x12total_revenue_sats\x18\x02 \x01(\x03R\x10totalRevenueSats*Q\n" +
+	"\n" +
+	"AuthScheme\x12\x14\n" +
+	"\x10AUTH_SCHEME_L402\x10\x00\x12\x13\n" +
+	"\x0fAUTH_SCHEME_MPP\x10\x01\x12\x18\n" +
+	"\x14AUTH_SCHEME_L402_MPP\x10\x022\xe9\x05\n" +
 	"\x05Admin\x12>\n" +
 	"\aGetInfo\x12\x18.adminrpc.GetInfoRequest\x1a\x19.adminrpc.GetInfoResponse\x12D\n" +
 	"\tGetHealth\x12\x1a.adminrpc.GetHealthRequest\x1a\x1b.adminrpc.GetHealthResponse\x12M\n" +
@@ -1355,60 +1483,65 @@ func file_admin_proto_rawDescGZIP() []byte {
 	return file_admin_proto_rawDescData
 }
 
+var file_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_admin_proto_goTypes = []any{
-	(*GetInfoRequest)(nil),           // 0: adminrpc.GetInfoRequest
-	(*GetInfoResponse)(nil),          // 1: adminrpc.GetInfoResponse
-	(*GetHealthRequest)(nil),         // 2: adminrpc.GetHealthRequest
-	(*GetHealthResponse)(nil),        // 3: adminrpc.GetHealthResponse
-	(*ListServicesRequest)(nil),      // 4: adminrpc.ListServicesRequest
-	(*ListServicesResponse)(nil),     // 5: adminrpc.ListServicesResponse
-	(*Service)(nil),                  // 6: adminrpc.Service
-	(*CreateServiceRequest)(nil),     // 7: adminrpc.CreateServiceRequest
-	(*UpdateServiceRequest)(nil),     // 8: adminrpc.UpdateServiceRequest
-	(*DeleteServiceRequest)(nil),     // 9: adminrpc.DeleteServiceRequest
-	(*DeleteServiceResponse)(nil),    // 10: adminrpc.DeleteServiceResponse
-	(*ListTransactionsRequest)(nil),  // 11: adminrpc.ListTransactionsRequest
-	(*ListTransactionsResponse)(nil), // 12: adminrpc.ListTransactionsResponse
-	(*Transaction)(nil),              // 13: adminrpc.Transaction
-	(*ListTokensRequest)(nil),        // 14: adminrpc.ListTokensRequest
-	(*ListTokensResponse)(nil),       // 15: adminrpc.ListTokensResponse
-	(*RevokeTokenRequest)(nil),       // 16: adminrpc.RevokeTokenRequest
-	(*RevokeTokenResponse)(nil),      // 17: adminrpc.RevokeTokenResponse
-	(*GetStatsRequest)(nil),          // 18: adminrpc.GetStatsRequest
-	(*GetStatsResponse)(nil),         // 19: adminrpc.GetStatsResponse
-	(*ServiceRevenue)(nil),           // 20: adminrpc.ServiceRevenue
+	(AuthScheme)(0),                  // 0: adminrpc.AuthScheme
+	(*GetInfoRequest)(nil),           // 1: adminrpc.GetInfoRequest
+	(*GetInfoResponse)(nil),          // 2: adminrpc.GetInfoResponse
+	(*GetHealthRequest)(nil),         // 3: adminrpc.GetHealthRequest
+	(*GetHealthResponse)(nil),        // 4: adminrpc.GetHealthResponse
+	(*ListServicesRequest)(nil),      // 5: adminrpc.ListServicesRequest
+	(*ListServicesResponse)(nil),     // 6: adminrpc.ListServicesResponse
+	(*Service)(nil),                  // 7: adminrpc.Service
+	(*CreateServiceRequest)(nil),     // 8: adminrpc.CreateServiceRequest
+	(*UpdateServiceRequest)(nil),     // 9: adminrpc.UpdateServiceRequest
+	(*DeleteServiceRequest)(nil),     // 10: adminrpc.DeleteServiceRequest
+	(*DeleteServiceResponse)(nil),    // 11: adminrpc.DeleteServiceResponse
+	(*ListTransactionsRequest)(nil),  // 12: adminrpc.ListTransactionsRequest
+	(*ListTransactionsResponse)(nil), // 13: adminrpc.ListTransactionsResponse
+	(*Transaction)(nil),              // 14: adminrpc.Transaction
+	(*ListTokensRequest)(nil),        // 15: adminrpc.ListTokensRequest
+	(*ListTokensResponse)(nil),       // 16: adminrpc.ListTokensResponse
+	(*RevokeTokenRequest)(nil),       // 17: adminrpc.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),      // 18: adminrpc.RevokeTokenResponse
+	(*GetStatsRequest)(nil),          // 19: adminrpc.GetStatsRequest
+	(*GetStatsResponse)(nil),         // 20: adminrpc.GetStatsResponse
+	(*ServiceRevenue)(nil),           // 21: adminrpc.ServiceRevenue
 }
 var file_admin_proto_depIdxs = []int32{
-	6,  // 0: adminrpc.ListServicesResponse.services:type_name -> adminrpc.Service
-	13, // 1: adminrpc.ListTransactionsResponse.transactions:type_name -> adminrpc.Transaction
-	13, // 2: adminrpc.ListTokensResponse.tokens:type_name -> adminrpc.Transaction
-	20, // 3: adminrpc.GetStatsResponse.service_breakdown:type_name -> adminrpc.ServiceRevenue
-	0,  // 4: adminrpc.Admin.GetInfo:input_type -> adminrpc.GetInfoRequest
-	2,  // 5: adminrpc.Admin.GetHealth:input_type -> adminrpc.GetHealthRequest
-	4,  // 6: adminrpc.Admin.ListServices:input_type -> adminrpc.ListServicesRequest
-	7,  // 7: adminrpc.Admin.CreateService:input_type -> adminrpc.CreateServiceRequest
-	8,  // 8: adminrpc.Admin.UpdateService:input_type -> adminrpc.UpdateServiceRequest
-	9,  // 9: adminrpc.Admin.DeleteService:input_type -> adminrpc.DeleteServiceRequest
-	11, // 10: adminrpc.Admin.ListTransactions:input_type -> adminrpc.ListTransactionsRequest
-	14, // 11: adminrpc.Admin.ListTokens:input_type -> adminrpc.ListTokensRequest
-	16, // 12: adminrpc.Admin.RevokeToken:input_type -> adminrpc.RevokeTokenRequest
-	18, // 13: adminrpc.Admin.GetStats:input_type -> adminrpc.GetStatsRequest
-	1,  // 14: adminrpc.Admin.GetInfo:output_type -> adminrpc.GetInfoResponse
-	3,  // 15: adminrpc.Admin.GetHealth:output_type -> adminrpc.GetHealthResponse
-	5,  // 16: adminrpc.Admin.ListServices:output_type -> adminrpc.ListServicesResponse
-	6,  // 17: adminrpc.Admin.CreateService:output_type -> adminrpc.Service
-	6,  // 18: adminrpc.Admin.UpdateService:output_type -> adminrpc.Service
-	10, // 19: adminrpc.Admin.DeleteService:output_type -> adminrpc.DeleteServiceResponse
-	12, // 20: adminrpc.Admin.ListTransactions:output_type -> adminrpc.ListTransactionsResponse
-	15, // 21: adminrpc.Admin.ListTokens:output_type -> adminrpc.ListTokensResponse
-	17, // 22: adminrpc.Admin.RevokeToken:output_type -> adminrpc.RevokeTokenResponse
-	19, // 23: adminrpc.Admin.GetStats:output_type -> adminrpc.GetStatsResponse
-	14, // [14:24] is the sub-list for method output_type
-	4,  // [4:14] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	7,  // 0: adminrpc.ListServicesResponse.services:type_name -> adminrpc.Service
+	0,  // 1: adminrpc.Service.auth_scheme:type_name -> adminrpc.AuthScheme
+	0,  // 2: adminrpc.CreateServiceRequest.auth_scheme:type_name -> adminrpc.AuthScheme
+	0,  // 3: adminrpc.UpdateServiceRequest.auth_scheme:type_name -> adminrpc.AuthScheme
+	14, // 4: adminrpc.ListTransactionsResponse.transactions:type_name -> adminrpc.Transaction
+	14, // 5: adminrpc.ListTokensResponse.tokens:type_name -> adminrpc.Transaction
+	21, // 6: adminrpc.GetStatsResponse.service_breakdown:type_name -> adminrpc.ServiceRevenue
+	1,  // 7: adminrpc.Admin.GetInfo:input_type -> adminrpc.GetInfoRequest
+	3,  // 8: adminrpc.Admin.GetHealth:input_type -> adminrpc.GetHealthRequest
+	5,  // 9: adminrpc.Admin.ListServices:input_type -> adminrpc.ListServicesRequest
+	8,  // 10: adminrpc.Admin.CreateService:input_type -> adminrpc.CreateServiceRequest
+	9,  // 11: adminrpc.Admin.UpdateService:input_type -> adminrpc.UpdateServiceRequest
+	10, // 12: adminrpc.Admin.DeleteService:input_type -> adminrpc.DeleteServiceRequest
+	12, // 13: adminrpc.Admin.ListTransactions:input_type -> adminrpc.ListTransactionsRequest
+	15, // 14: adminrpc.Admin.ListTokens:input_type -> adminrpc.ListTokensRequest
+	17, // 15: adminrpc.Admin.RevokeToken:input_type -> adminrpc.RevokeTokenRequest
+	19, // 16: adminrpc.Admin.GetStats:input_type -> adminrpc.GetStatsRequest
+	2,  // 17: adminrpc.Admin.GetInfo:output_type -> adminrpc.GetInfoResponse
+	4,  // 18: adminrpc.Admin.GetHealth:output_type -> adminrpc.GetHealthResponse
+	6,  // 19: adminrpc.Admin.ListServices:output_type -> adminrpc.ListServicesResponse
+	7,  // 20: adminrpc.Admin.CreateService:output_type -> adminrpc.Service
+	7,  // 21: adminrpc.Admin.UpdateService:output_type -> adminrpc.Service
+	11, // 22: adminrpc.Admin.DeleteService:output_type -> adminrpc.DeleteServiceResponse
+	13, // 23: adminrpc.Admin.ListTransactions:output_type -> adminrpc.ListTransactionsResponse
+	16, // 24: adminrpc.Admin.ListTokens:output_type -> adminrpc.ListTokensResponse
+	18, // 25: adminrpc.Admin.RevokeToken:output_type -> adminrpc.RevokeTokenResponse
+	20, // 26: adminrpc.Admin.GetStats:output_type -> adminrpc.GetStatsResponse
+	17, // [17:27] is the sub-list for method output_type
+	7,  // [7:17] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_admin_proto_init() }
@@ -1422,13 +1555,14 @@ func file_admin_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_admin_proto_goTypes,
 		DependencyIndexes: file_admin_proto_depIdxs,
+		EnumInfos:         file_admin_proto_enumTypes,
 		MessageInfos:      file_admin_proto_msgTypes,
 	}.Build()
 	File_admin_proto = out.File

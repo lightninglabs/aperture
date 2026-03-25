@@ -189,6 +189,10 @@
                 },
                 "auth": {
                   "type": "string"
+                },
+                "auth_scheme": {
+                  "$ref": "#/definitions/adminrpcAuthScheme",
+                  "description": "auth_scheme specifies which payment auth scheme(s) to use."
                 }
               }
             }
@@ -367,6 +371,16 @@
     }
   },
   "definitions": {
+    "adminrpcAuthScheme": {
+      "type": "string",
+      "enum": [
+        "AUTH_SCHEME_L402",
+        "AUTH_SCHEME_MPP",
+        "AUTH_SCHEME_L402_MPP"
+      ],
+      "default": "AUTH_SCHEME_L402",
+      "description": "AuthScheme specifies which payment authentication scheme(s) a service uses.\nL402 is the default for backwards compatibility with existing deployments.\n\n - AUTH_SCHEME_L402: AUTH_SCHEME_L402 is the default L402 (macaroon + preimage) scheme.\n - AUTH_SCHEME_MPP: AUTH_SCHEME_MPP is the Payment HTTP Authentication Scheme (charge\nintent only, no sessions).\n - AUTH_SCHEME_L402_MPP: AUTH_SCHEME_L402_MPP enables both L402 and MPP simultaneously. The\nproxy issues challenges for both schemes and accepts either."
+    },
     "adminrpcCreateServiceRequest": {
       "type": "object",
       "properties": {
@@ -391,6 +405,10 @@
         },
         "auth": {
           "type": "string"
+        },
+        "auth_scheme": {
+          "$ref": "#/definitions/adminrpcAuthScheme",
+          "description": "auth_scheme specifies which payment auth scheme(s) to use. Defaults to\nAUTH_SCHEME_L402 if unset."
         }
       }
     },
@@ -421,6 +439,18 @@
         },
         "insecure": {
           "type": "boolean"
+        },
+        "mpp_enabled": {
+          "type": "boolean",
+          "description": "mpp_enabled indicates whether the MPP (Payment HTTP Auth Scheme) is\nenabled globally."
+        },
+        "sessions_enabled": {
+          "type": "boolean",
+          "description": "sessions_enabled indicates whether MPP session intents are enabled."
+        },
+        "mpp_realm": {
+          "type": "string",
+          "description": "mpp_realm is the realm string used in MPP challenge headers."
         }
       }
     },
@@ -520,6 +550,10 @@
         },
         "auth": {
           "type": "string"
+        },
+        "auth_scheme": {
+          "$ref": "#/definitions/adminrpcAuthScheme",
+          "description": "auth_scheme specifies which payment auth scheme(s) are used for this\nservice. Defaults to AUTH_SCHEME_L402 for backwards compatibility."
         }
       }
     },

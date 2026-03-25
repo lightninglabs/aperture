@@ -61,6 +61,12 @@ type Service struct {
 	// or "off" for no authentication.
 	Auth auth.Level `long:"auth" description:"required authentication"`
 
+	// AuthScheme specifies which payment authentication scheme(s) to use
+	// for this service. Valid values are "l402" (default), "mpp", or
+	// "l402+mpp". An empty value defaults to "l402" for backwards
+	// compatibility with existing deployments.
+	AuthScheme string `long:"authscheme" description:"Payment auth scheme: l402, mpp, or l402+mpp"`
+
 	// HostRegexp is a regular expression that is tested against the 'Host'
 	// HTTP header field to find out if this service should be used.
 	HostRegexp string `long:"hostregexp" description:"Regular expression to match the host against"`

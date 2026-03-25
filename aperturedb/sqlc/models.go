@@ -68,4 +68,5 @@ type Service struct {
 	Auth       string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	AuthScheme string
 }

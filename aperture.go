@@ -1030,6 +1030,9 @@ func createAdminServer(cfg *Config,
 		UpdateServices:   updateServices,
 		SecretStore:      secretStore,
 		ServiceStore:     svcStore,
+		MPPEnabled:       cfg.Authenticator.EnableMPP,
+		SessionsEnabled:  cfg.Authenticator.EnableSessions,
+		MPPRealm:         cfg.Authenticator.MPPRealm,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)
@@ -1527,6 +1530,7 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 			PathRegexp: row.PathRegexp,
 			Price:      row.Price,
 			Auth:       auth.Level(row.Auth),
+			AuthScheme: row.AuthScheme,
 		}
 	}
 

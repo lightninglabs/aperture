@@ -64,22 +64,34 @@ func NewServicesStore(db BatchedServicesDB) *ServicesStore {
 	}
 }
 
+// ServiceParams contains the fields for creating or updating a service.
+type ServiceParams struct {
+	Name       string
+	Address    string
+	Protocol   string
+	HostRegexp string
+	PathRegexp string
+	Auth       string
+	AuthScheme string
+	Price      int64
+}
+
 // UpsertService inserts or updates a service configuration.
-func (s *ServicesStore) UpsertService(ctx context.Context, name, address,
-	protocol, hostRegexp, pathRegexp, auth string,
-	price int64) error {
+func (s *ServicesStore) UpsertService(ctx context.Context,
+	params ServiceParams) error {
 
 	var writeTxOpts ServicesDBTxOptions
 	now := s.clock.Now().UTC()
 	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx ServicesDB) error {
 		return tx.UpsertService(ctx, UpsertServiceParams{
-			Name:       name,
-			Address:    address,
-			Protocol:   protocol,
-			HostRegexp: hostRegexp,
-			PathRegexp: pathRegexp,
-			Price:      price,
-			Auth:       auth,
+			Name:       params.Name,
+			Address:    params.Address,
+			Protocol:   params.Protocol,
+			HostRegexp: params.HostRegexp,
+			PathRegexp: params.PathRegexp,
+			Price:      params.Price,
+			Auth:       params.Auth,
+			AuthScheme: params.AuthScheme,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		})
@@ -87,7 +99,7 @@ func (s *ServicesStore) UpsertService(ctx context.Context, name, address,
 
 	if err != nil {
 		return fmt.Errorf("unable to upsert service %q: %w",
-			name, err)
+			params.Name, err)
 	}
 
 	return nil
