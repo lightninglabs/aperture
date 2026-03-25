@@ -191,9 +191,10 @@ func TestCreateService(t *testing.T) {
 	// Create a new service.
 	svc, err := s.CreateService(context.Background(),
 		&adminrpc.CreateServiceRequest{
-			Name:    "new-svc",
-			Address: "localhost:9999",
-			Price:   200,
+			Name:       "new-svc",
+			Address:    "localhost:9999",
+			PathRegexp: "^/api/new/.*",
+			Price:      200,
 		},
 	)
 	require.NoError(t, err)
@@ -210,8 +211,9 @@ func TestCreateService(t *testing.T) {
 	// Duplicate should fail.
 	_, err = s.CreateService(context.Background(),
 		&adminrpc.CreateServiceRequest{
-			Name:    "new-svc",
-			Address: "localhost:9999",
+			Name:       "new-svc",
+			Address:    "localhost:9999",
+			PathRegexp: "^/api/new/.*",
 		},
 	)
 	require.Error(t, err)
@@ -275,9 +277,10 @@ func TestCreateServiceRejectsInvalidAuth(t *testing.T) {
 
 	_, err := s.CreateService(context.Background(),
 		&adminrpc.CreateServiceRequest{
-			Name:    "bad-auth-svc",
-			Address: "localhost:1234",
-			Auth:    "freebie -5",
+			Name:       "bad-auth-svc",
+			Address:    "localhost:1234",
+			PathRegexp: "^/api/bad/.*",
+			Auth:       "freebie -5",
 		},
 	)
 	require.Error(t, err)

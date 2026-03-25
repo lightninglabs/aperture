@@ -38,6 +38,37 @@ const (
 	maxRegexpLen = 1024
 )
 
+// reservedPaths are URL prefixes used by the admin API and dashboard.
+// Services whose path_regexp matches any of these are rejected to prevent
+// accidentally hijacking internal traffic.
+var reservedPaths = []string{
+	"/api/admin/",
+	"/api/proxy/",
+	"/_next/",
+}
+
+// pathRegexpConflictsWithReserved checks whether a compiled path_regexp
+// would match any reserved internal path prefix. An empty pattern is also
+// rejected because it matches everything.
+func pathRegexpConflictsWithReserved(pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false
+	}
+
+	for _, p := range reservedPaths {
+		if re.MatchString(p) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ServiceStore is an interface for persisting service configurations across
 // restarts. When provided, service CRUD operations write through to both the
 // in-memory proxy and the persistent store.
@@ -197,6 +228,13 @@ func (s *Server) CreateService(ctx context.Context,
 			)
 		}
 	}
+	if pathRegexpConflictsWithReserved(req.PathRegexp) {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"path_regexp must not match reserved paths "+
+				"(/api/admin/, /api/proxy/, /_next/)",
+		)
+	}
 
 	if req.Price < 0 {
 		return nil, status.Error(
@@ -339,6 +377,14 @@ func (s *Server) UpdateService(ctx context.Context,
 			return nil, status.Errorf(
 				codes.InvalidArgument,
 				"invalid path_regexp: %v", err,
+			)
+		}
+		if pathRegexpConflictsWithReserved(req.PathRegexp) {
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"path_regexp must not match reserved "+
+					"paths (/api/admin/, "+
+					"/api/proxy/, /_next/)",
 			)
 		}
 		updated.PathRegexp = req.PathRegexp
