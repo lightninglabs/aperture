@@ -4,14 +4,19 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // Blank import to set up profiling HTTP handlers.
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +25,8 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	gateway "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	flags "github.com/jessevdk/go-flags"
+	"github.com/lightninglabs/aperture/admin"
+	"github.com/lightninglabs/aperture/adminrpc"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
@@ -32,6 +39,7 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -78,6 +86,18 @@ const (
 	// hashMailRESTPrefix is the prefix a REST request URI has when it is
 	// meant for the hashmailrpc server to be handled.
 	hashMailRESTPrefix = "/v1/lightning-node-connect/hashmail"
+
+	// adminGRPCPrefix is the prefix a gRPC request URI has when it is
+	// meant for the admin server to be handled.
+	adminGRPCPrefix = "/adminrpc.Admin/"
+
+	// adminRESTPrefix is the prefix a REST request URI has when it is
+	// meant for the admin REST API to be handled.
+	adminRESTPrefix = "/api/admin/"
+
+	// defaultAdminMacaroonFilename is the default filename for the admin
+	// macaroon.
+	defaultAdminMacaroonFilename = "admin.macaroon"
 
 	// invoiceMacaroonName is the name of the invoice macaroon belonging
 	// to the target lnd node.
@@ -178,6 +198,7 @@ type Aperture struct {
 	torHTTPServer *http.Server
 	proxy         *proxy.Proxy
 	proxyCleanup  func()
+	adminCleanup  func()
 
 	wg   sync.WaitGroup
 	quit chan struct{}
@@ -192,6 +213,8 @@ func NewAperture(cfg *Config) *Aperture {
 }
 
 // Start sets up the proxy server and starts it.
+//
+//nolint:gocyclo
 func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// Start the prometheus exporter.
 	err := StartPrometheusExporter(a.cfg.Prometheus, shutdown)
@@ -223,6 +246,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		secretStore mint.SecretStore
 		onionStore  tor.OnionStore
 		lncStore    lnc.Store
+		txnStore    *aperturedb.L402TransactionsStore
+		svcStore    *aperturedb.ServicesStore
 	)
 
 	// Connect to the chosen database backend.
@@ -249,27 +274,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				err)
 		}
 		a.db = db.DB
-
-		dbSecretTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.SecretsDB {
-				return db.WithTx(tx)
-			},
-		)
-		secretStore = aperturedb.NewSecretsStore(dbSecretTxer)
-
-		dbOnionTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.OnionDB {
-				return db.WithTx(tx)
-			},
-		)
-		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
-
-		dbLNCTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.LNCSessionsDB {
-				return db.WithTx(tx)
-			},
-		)
-		lncStore = aperturedb.NewLNCSessionsStore(dbLNCTxer)
+		secretStore, onionStore, lncStore, txnStore, svcStore =
+			initSQLStores(db.BaseDB)
 
 	case "sqlite":
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
@@ -278,27 +284,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				err)
 		}
 		a.db = db.DB
-
-		dbSecretTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.SecretsDB {
-				return db.WithTx(tx)
-			},
-		)
-		secretStore = aperturedb.NewSecretsStore(dbSecretTxer)
-
-		dbOnionTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.OnionDB {
-				return db.WithTx(tx)
-			},
-		)
-		onionStore = aperturedb.NewOnionStore(dbOnionTxer)
-
-		dbLNCTxer := aperturedb.NewTransactionExecutor(db,
-			func(tx *sql.Tx) aperturedb.LNCSessionsDB {
-				return db.WithTx(tx)
-			},
-		)
-		lncStore = aperturedb.NewLNCSessionsStore(dbLNCTxer)
+		secretStore, onionStore, lncStore, txnStore, svcStore =
+			initSQLStores(db.BaseDB)
 
 	default:
 		return fmt.Errorf("unknown database backend: %s",
@@ -306,6 +293,14 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 
 	log.Infof("Using %v as database backend", a.cfg.DatabaseBackend)
+
+	// Only enable settlement tracking when the admin API is enabled.
+	// This avoids the startup cost of reconciling historical invoices
+	// for operators that don't use the admin dashboard.
+	var challengerOpts []challenger.LndChallengerOption
+	if a.cfg.Admin != nil && a.cfg.Admin.Enabled {
+		challengerOpts = buildChallengerOpts(txnStore)
+	}
 
 	if !a.cfg.Authenticator.Disable {
 		authCfg := a.cfg.Authenticator
@@ -338,6 +333,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			a.challenger, err = challenger.NewLNCChallenger(
 				session, lncStore, a.cfg.InvoiceBatchSize,
 				genInvoiceReq, errChan, a.cfg.StrictVerify,
+				challengerOpts...,
 			)
 			if err != nil {
 				return fmt.Errorf("unable to start lnc "+
@@ -362,6 +358,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			a.challenger, err = challenger.NewLndChallenger(
 				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
 				context.Background, errChan, a.cfg.StrictVerify,
+				challengerOpts...,
 			)
 			if err != nil {
 				return err
@@ -369,9 +366,37 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}
 	}
 
+	// Load persisted services from the database and merge with config
+	// file services. DB services take precedence (by name) over config
+	// file services so that runtime changes survive restarts.
+	initialServices := mergeServicesFromDB(a.cfg.Services, svcStore)
+
+	// Create a synchronized services holder so the admin server can
+	// safely read and update the service list concurrently with the
+	// proxy.
+	svcHolder := &serviceHolder{services: initialServices}
+	adminPriority, adminFallback, adminCleanup, err :=
+		createAdminServer(
+			a.cfg, txnStore, secretStore, svcStore,
+			svcHolder.get,
+			func(s []*proxy.Service) error {
+				if err := a.UpdateServices(s); err != nil {
+					return err
+				}
+				svcHolder.set(s)
+				return nil
+			},
+		)
+	if err != nil {
+		return err
+	}
+	a.adminCleanup = adminCleanup
+
 	// Create the proxy and connect it to lnd.
+	mintTxnStore := asMintTransactionStore(txnStore)
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, a.challenger, secretStore,
+		a.cfg, a.challenger, secretStore, mintTxnStore,
+		adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
@@ -462,6 +487,30 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	return nil
 }
 
+// serviceHolder provides synchronized access to the service list so the admin
+// server and proxy can safely read/update services concurrently.
+type serviceHolder struct {
+	mu       sync.Mutex
+	services []*proxy.Service
+}
+
+func (h *serviceHolder) get() []*proxy.Service {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Return a copy of the slice so callers can safely mutate it.
+	cpy := make([]*proxy.Service, len(h.services))
+	copy(cpy, h.services)
+	return cpy
+}
+
+func (h *serviceHolder) set(services []*proxy.Service) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.services = services
+}
+
 // UpdateServices instructs the proxy to re-initialize its internal
 // configuration of backend services. This can be used to add or remove backends
 // at run time or enable/disable authentication on the fly.
@@ -475,6 +524,11 @@ func (a *Aperture) Stop() error {
 
 	if a.challenger != nil {
 		a.challenger.Stop()
+	}
+
+	// Stop admin server resources.
+	if a.adminCleanup != nil {
+		a.adminCleanup()
 	}
 
 	// Stop everything that was started alongside the proxy, for example the
@@ -822,15 +876,698 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 	return torController, nil
 }
 
+// buildChallengerOpts builds the LndChallengerOptions. If a transaction
+// store is provided, a settlement callback is added to mark transactions
+// as settled when invoices are paid.
+func buildChallengerOpts(
+	txnStore *aperturedb.L402TransactionsStore,
+) []challenger.LndChallengerOption {
+
+	var opts []challenger.LndChallengerOption
+	if txnStore != nil {
+		opts = append(opts, challenger.WithSettlementCallback(
+			func(hash lntypes.Hash) {
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					aperturedb.DefaultStoreTimeout,
+				)
+				defer cancel()
+
+				err := txnStore.SettleTransaction(
+					ctx, hash[:],
+				)
+				if err != nil {
+					log.Errorf("Error settling "+
+						"transaction (hash=%x): %v",
+						hash[:], err)
+				}
+			},
+		))
+	}
+
+	return opts
+}
+
+// createAdminServer creates the admin gRPC server and REST gateway following
+// the same pattern as createHashMailServer. It returns two slices of local
+// services: priority services (prefix-matched handlers like the gRPC, REST,
+// and dashboard proxy endpoints) and fallback services (catch-all handlers
+// like the dashboard static file server that should only run after proxy
+// backend matching fails).
+//
+//nolint:gocyclo
+func createAdminServer(cfg *Config,
+	txnStore *aperturedb.L402TransactionsStore,
+	secretStore mint.SecretStore,
+	svcStore *aperturedb.ServicesStore,
+	getServices func() []*proxy.Service,
+	updateServices func([]*proxy.Service) error) (
+	[]proxy.LocalService, []proxy.LocalService, func(), error) {
+
+	if cfg.Admin == nil || !cfg.Admin.Enabled {
+		return nil, nil, func() {}, nil
+	}
+
+	if txnStore == nil {
+		log.Warnf("Admin API is enabled but the transaction store " +
+			"is not available (etcd backend does not support " +
+			"it). Admin API will not start.")
+		return nil, nil, func() {}, nil
+	}
+
+	// Determine the admin root key. The root key is stored on disk as a
+	// random 32-byte value alongside the macaroon. This avoids storing
+	// the key in the shared SecretStore where its lookup hash would be
+	// publicly derivable.
+	macPath := cfg.Admin.MacaroonPath
+	if macPath == "" {
+		macPath = filepath.Join(
+			apertureDataDir, defaultAdminMacaroonFilename,
+		)
+	}
+	rootKeyPath := strings.TrimSuffix(macPath, ".macaroon") +
+		".rootkey"
+
+	rootKey, err := admin.ReadOrCreateRootKey(rootKeyPath)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("unable to initialize "+
+			"admin root key: %v", err)
+	}
+
+	// Generate the admin macaroon and write it to disk only if it
+	// doesn't already exist. The root key is persisted, so an existing
+	// macaroon file is still valid.
+	if _, statErr := os.Stat(macPath); os.IsNotExist(statErr) {
+		mac, err := admin.GenerateAdminMacaroon(rootKey)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("unable to generate "+
+				"admin macaroon: %v", err)
+		}
+
+		if err := admin.WriteAdminMacaroon(mac, macPath); err != nil {
+			return nil, nil, nil, fmt.Errorf("unable to write "+
+				"admin macaroon: %v", err)
+		}
+
+		log.Infof("Admin macaroon written to %s", macPath)
+	} else {
+		log.Infof("Admin macaroon already exists at %s", macPath)
+	}
+
+	// Create the gRPC server with macaroon authentication.
+	serverOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			admin.MacaroonInterceptor(rootKey),
+		),
+		grpc.ChainStreamInterceptor(
+			admin.MacaroonStreamInterceptor(rootKey),
+		),
+	}
+
+	adminServer := admin.NewServer(admin.ServerConfig{
+		Network:          cfg.Authenticator.Network,
+		ListenAddr:       cfg.ListenAddr,
+		Insecure:         cfg.Insecure,
+		TransactionStore: txnStore,
+		Services:         getServices,
+		UpdateServices:   updateServices,
+		SecretStore:      secretStore,
+		ServiceStore:     svcStore,
+	})
+
+	adminGRPC := grpc.NewServer(serverOpts...)
+	adminrpc.RegisterAdminServer(adminGRPC, adminServer)
+
+	var (
+		priorityServices []proxy.LocalService
+		fallbackServices []proxy.LocalService
+	)
+	priorityServices = append(priorityServices, proxy.NewLocalService(
+		adminGRPC, func(r *http.Request) bool {
+			return strings.HasPrefix(
+				r.URL.Path, adminGRPCPrefix,
+			)
+		},
+	))
+
+	// Create REST gateway.
+	customMarshalerOption := gateway.WithMarshalerOption(
+		gateway.MIMEWildcard, &gateway.JSONPb{
+			MarshalOptions: protojson.MarshalOptions{
+				UseProtoNames:   true,
+				EmitUnpopulated: true,
+			},
+		},
+	)
+
+	ctxc, cancel := context.WithCancel(context.Background())
+	cleanup := func() {
+		adminGRPC.GracefulStop()
+		cancel()
+	}
+
+	restProxyTLSOpt := grpc.WithTransportCredentials(
+		credentials.NewTLS(
+			&tls.Config{InsecureSkipVerify: true},
+		),
+	)
+	if cfg.Insecure {
+		restProxyTLSOpt = grpc.WithTransportCredentials(
+			insecure.NewCredentials(),
+		)
+	}
+
+	// Normalize the dial target for the REST gateway. If the listen
+	// address uses 0.0.0.0 or an empty host, replace with localhost
+	// so the loopback connection is routable on all platforms.
+	dialAddr := normalizeDialAddr(cfg.ListenAddr)
+
+	// Use RegisterAdminHandlerFromEndpoint (loopback dial) so that
+	// REST requests go through the full gRPC interceptor chain,
+	// including macaroon authentication.
+	mux := gateway.NewServeMux(customMarshalerOption)
+	err = adminrpc.RegisterAdminHandlerFromEndpoint(
+		ctxc, mux, dialAddr, []grpc.DialOption{
+			restProxyTLSOpt,
+		},
+	)
+	if err != nil {
+		cleanup()
+		return nil, nil, nil, err
+	}
+
+	corsHandler := allowCORS(mux, cfg.Admin.CORSOrigins)
+	priorityServices = append(priorityServices, proxy.NewLocalService(
+		corsHandler, func(r *http.Request) bool {
+			return strings.HasPrefix(
+				r.URL.Path, adminRESTPrefix,
+			)
+		},
+	))
+
+	log.Infof("Admin gRPC/REST API enabled")
+
+	// Wire the embedded dashboard if it was compiled in (build tag
+	// !nodashboard). When nil, the dashboard is not served.
+	dashFS, err := DashboardFS()
+	if err != nil {
+		cleanup()
+		return nil, nil, nil, fmt.Errorf("unable to load embedded "+
+			"dashboard: %w", err)
+	}
+
+	if dashFS != nil {
+		// Generate a macaroon from the root key to attach to
+		// server-side proxied requests to the admin REST API.
+		mac, err := admin.GenerateAdminMacaroon(rootKey)
+		if err != nil {
+			cleanup()
+			return nil, nil, nil, fmt.Errorf("unable to generate "+
+				"dashboard macaroon: %w", err)
+		}
+		macBytes, err := mac.MarshalBinary()
+		if err != nil {
+			cleanup()
+			return nil, nil, nil, fmt.Errorf("unable to marshal "+
+				"dashboard macaroon: %w", err)
+		}
+		macHex := hex.EncodeToString(macBytes)
+
+		// dashboardProxyPrefix is the path the dashboard JS uses to
+		// reach the admin REST API. The Go server strips this prefix
+		// and forwards internally to adminRESTPrefix.
+		const dashboardProxyPrefix = "/api/proxy/"
+
+		// requireLoopback rejects requests that do not originate
+		// from a loopback address (127.0.0.1 / ::1). The
+		// dashboard proxy injects admin credentials server-side,
+		// so it must only be accessible locally.
+		requireLoopback := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					host, _, err := net.SplitHostPort(
+						r.RemoteAddr,
+					)
+					if err != nil {
+						http.Error(
+							w, "forbidden",
+							http.StatusForbidden,
+						)
+						return
+					}
+					ip := net.ParseIP(host)
+					if ip == nil || !ip.IsLoopback() {
+						http.Error(
+							w, "forbidden",
+							http.StatusForbidden,
+						)
+						return
+					}
+					next.ServeHTTP(w, r)
+				},
+			)
+		}
+
+		// addSecurityHeaders wraps a handler to set standard
+		// browser security headers on every response.
+		addSecurityHeaders := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set(
+						"X-Frame-Options", "DENY",
+					)
+					w.Header().Set(
+						"X-Content-Type-Options",
+						"nosniff",
+					)
+					w.Header().Set(
+						"Referrer-Policy",
+						"strict-origin-when-cross-origin",
+					)
+					w.Header().Set(
+						"Content-Security-Policy",
+						"default-src 'self'; "+
+							"style-src 'self' "+
+							"'unsafe-inline'; "+
+							"script-src 'self' "+
+							"'unsafe-inline'",
+					)
+					next.ServeHTTP(w, r)
+				},
+			)
+		}
+
+		// csrfProtect rejects mutating requests (non-GET/HEAD)
+		// that fail CSRF validation. Two checks are applied:
+		//
+		// 1. If an Origin or Referer header is present, it must
+		//    match the request Host.
+		// 2. The X-Requested-With header must be set (to any
+		//    value). Simple cross-origin requests (form posts,
+		//    img tags) cannot set custom headers, so this blocks
+		//    CSRF even when Origin/Referer are absent.
+		csrfProtect := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "GET" &&
+						r.Method != "HEAD" {
+
+						origin := r.Header.Get("Origin")
+						if origin == "" {
+							origin = r.Header.Get(
+								"Referer",
+							)
+						}
+						if origin != "" &&
+							!isOriginAllowed(
+								origin,
+								r.Host,
+							) {
+
+							http.Error(
+								w,
+								"forbidden: "+
+									"cross-origin "+
+									"request",
+								http.StatusForbidden,
+							)
+							return
+						}
+
+						// Require X-Requested-With
+						// header on all mutating
+						// requests. This cannot be
+						// set by simple cross-origin
+						// requests.
+						if r.Header.Get(
+							"X-Requested-With",
+						) == "" {
+							http.Error(
+								w,
+								"forbidden: "+
+									"missing "+
+									"X-Requested-With",
+								http.StatusForbidden,
+							)
+							return
+						}
+					}
+					next.ServeHTTP(w, r)
+				},
+			)
+		}
+
+		// safeQueryValue validates a query parameter value.
+		// It enforces maximum length and rejects control
+		// characters.
+		safeQueryValue := func(v string, maxLen int) bool {
+			if len(v) > maxLen {
+				return false
+			}
+			for _, c := range v {
+				if c < 0x20 || c == 0x7f {
+					return false
+				}
+			}
+			return true
+		}
+
+		// validateInt checks that a query value is a valid
+		// non-negative integer within the given max.
+		validateInt := func(v string, max int) bool {
+			n, err := strconv.Atoi(v)
+			return err == nil && n >= 0 && n <= max
+		}
+
+		// allowedQueryParams maps parameter names to their
+		// validation functions. Parameters not in this map are
+		// stripped. Parameters whose values fail validation are
+		// also stripped.
+		type queryValidator func(string) bool
+		allowedQueryParams := map[string]queryValidator{
+			"limit": func(v string) bool {
+				return validateInt(v, 1000)
+			},
+			"offset": func(v string) bool {
+				return validateInt(v, 1000000)
+			},
+			"from": func(v string) bool {
+				return safeQueryValue(v, 30)
+			},
+			"to": func(v string) bool {
+				return safeQueryValue(v, 30)
+			},
+			"service": func(v string) bool {
+				return safeQueryValue(v, 128)
+			},
+			"state": func(v string) bool {
+				return safeQueryValue(v, 128)
+			},
+			"name": func(v string) bool {
+				return safeQueryValue(v, 128)
+			},
+		}
+
+		safeSegment := regexp.MustCompile(`^[\w-]+$`)
+		proxyHandler := http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				raw := strings.TrimPrefix(
+					r.URL.Path, dashboardProxyPrefix,
+				)
+
+				// Filter empty segments so trailing slashes
+				// do not cause a spurious 400.
+				segments := strings.Split(raw, "/")
+				filtered := segments[:0]
+				for _, seg := range segments {
+					if seg != "" {
+						filtered = append(
+							filtered, seg,
+						)
+					}
+				}
+
+				for _, seg := range filtered {
+					if !safeSegment.MatchString(seg) {
+						http.Error(
+							w, "bad request",
+							http.StatusBadRequest,
+						)
+						return
+					}
+				}
+
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = adminRESTPrefix +
+					strings.Join(filtered, "/")
+
+				// Allowlist query parameters by name and
+				// validate their values.
+				orig := r2.URL.Query()
+				clean := make(url.Values)
+				for k, vals := range orig {
+					validate, ok := allowedQueryParams[k]
+					if !ok {
+						continue
+					}
+					for _, v := range vals {
+						if validate(v) {
+							clean.Add(k, v)
+						}
+					}
+				}
+				r2.URL.RawQuery = clean.Encode()
+
+				// Construct a fresh header set with only
+				// the entries the admin API needs. This
+				// avoids forwarding client-controlled
+				// headers like X-Forwarded-For or
+				// Authorization.
+				r2.Header = make(http.Header)
+				if ct := r.Header.Get("Content-Type"); ct != "" {
+					r2.Header.Set("Content-Type", ct)
+				}
+				if accept := r.Header.Get("Accept"); accept != "" {
+					r2.Header.Set("Accept", accept)
+				}
+				r2.Header.Set(
+					"Grpc-Metadata-Macaroon", macHex,
+				)
+				mux.ServeHTTP(w, r2)
+			},
+		)
+
+		// Wrap the proxy handler with security middleware:
+		// loopback → CSRF → security headers → handler.
+		wrappedProxy := requireLoopback(
+			csrfProtect(addSecurityHeaders(proxyHandler)),
+		)
+		priorityServices = append(
+			priorityServices, proxy.NewLocalService(
+				wrappedProxy,
+				func(r *http.Request) bool {
+					return strings.HasPrefix(
+						r.URL.Path,
+						dashboardProxyPrefix,
+					)
+				},
+			),
+		)
+
+		// Catch-all static file server with index.html fallback for
+		// client-side routing (SPA deep-link support). This is added
+		// to fallbackServices so it is only checked after proxy
+		// backend matching — otherwise it would hijack all traffic
+		// intended for configured backend services.
+		dashHandler := http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				path := strings.TrimPrefix(r.URL.Path, "/")
+
+				// Serve the file if it exists and is not a
+				// directory (e.g. _next/ assets).
+				if fi, statErr := fs.Stat(dashFS, path); statErr == nil && !fi.IsDir() {
+					http.ServeFileFS(w, r, dashFS, path)
+					return
+				}
+
+				// For directory paths, serve the index.html
+				// nested inside (Next.js trailingSlash layout).
+				indexPath := strings.TrimSuffix(path, "/") +
+					"/index.html"
+				if _, statErr := fs.Stat(dashFS, indexPath); statErr == nil {
+					http.ServeFileFS(w, r, dashFS, indexPath)
+					return
+				}
+
+				// Fall back to root index.html for unknown
+				// paths (dynamic client-side routes).
+				http.ServeFileFS(w, r, dashFS, "index.html")
+			},
+		)
+
+		// Wrap the dashboard static handler with loopback and
+		// security headers.
+		wrappedDash := requireLoopback(
+			addSecurityHeaders(dashHandler),
+		)
+		fallbackServices = append(
+			fallbackServices, proxy.NewLocalService(
+				wrappedDash,
+				func(r *http.Request) bool {
+					return true
+				},
+			),
+		)
+
+		log.Infof("Admin dashboard embedded and serving")
+	}
+
+	return priorityServices, fallbackServices, cleanup, nil
+}
+
+// initSQLStores creates all SQL-backed stores from a BaseDB instance. This
+// is shared between the postgres and sqlite backends.
+func initSQLStores(db *aperturedb.BaseDB) (
+	*aperturedb.SecretsStore,
+	*aperturedb.OnionStore,
+	*aperturedb.LNCSessionsStore,
+	*aperturedb.L402TransactionsStore,
+	*aperturedb.ServicesStore) {
+
+	dbSecretTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.SecretsDB {
+			return db.WithTx(tx)
+		},
+	)
+	secretStore := aperturedb.NewSecretsStore(dbSecretTxer)
+
+	dbOnionTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.OnionDB {
+			return db.WithTx(tx)
+		},
+	)
+	onionStore := aperturedb.NewOnionStore(dbOnionTxer)
+
+	dbLNCTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.LNCSessionsDB {
+			return db.WithTx(tx)
+		},
+	)
+	lncStore := aperturedb.NewLNCSessionsStore(dbLNCTxer)
+
+	dbTxnTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.L402TransactionsDB {
+			return db.WithTx(tx)
+		},
+	)
+	txnStore := aperturedb.NewL402TransactionsStore(dbTxnTxer)
+
+	dbSvcTxer := aperturedb.NewTransactionExecutor(db,
+		func(tx *sql.Tx) aperturedb.ServicesDB {
+			return db.WithTx(tx)
+		},
+	)
+	svcStore := aperturedb.NewServicesStore(dbSvcTxer)
+
+	return secretStore, onionStore, lncStore, txnStore, svcStore
+}
+
+// mergeServicesFromDB loads persisted services from the database and merges
+// them with config file services. DB services override config services by name
+// so that runtime changes survive restarts. Config services not in the DB are
+// preserved as-is.
+func mergeServicesFromDB(configServices []*proxy.Service,
+	svcStore *aperturedb.ServicesStore) []*proxy.Service {
+
+	if svcStore == nil {
+		return configServices
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), aperturedb.DefaultStoreTimeout,
+	)
+	defer cancel()
+
+	dbRows, err := svcStore.ListServices(ctx)
+	if err != nil {
+		log.Warnf("Unable to load persisted services from DB, "+
+			"using config only: %v", err)
+		return configServices
+	}
+
+	if len(dbRows) == 0 {
+		return configServices
+	}
+
+	// Build a map of DB services keyed by name.
+	dbByName := make(map[string]*proxy.Service, len(dbRows))
+	for _, row := range dbRows {
+		dbByName[row.Name] = &proxy.Service{
+			Name:       row.Name,
+			Address:    row.Address,
+			Protocol:   row.Protocol,
+			HostRegexp: row.HostRegexp,
+			PathRegexp: row.PathRegexp,
+			Price:      row.Price,
+			Auth:       auth.Level(row.Auth),
+		}
+	}
+
+	// Start with DB services, then add config services that are not
+	// already in the DB.
+	merged := make([]*proxy.Service, 0, len(dbByName)+len(configServices))
+	for _, svc := range dbByName {
+		merged = append(merged, svc)
+	}
+	for _, svc := range configServices {
+		if _, exists := dbByName[svc.Name]; !exists {
+			merged = append(merged, svc)
+		}
+	}
+
+	log.Infof("Loaded %d services from DB, %d from config (%d merged "+
+		"total)", len(dbByName), len(configServices), len(merged))
+
+	return merged
+}
+
+// normalizeDialAddr replaces a wildcard or empty host in an address with
+// "localhost" so that gRPC dial targets are routable on all platforms.
+func normalizeDialAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return net.JoinHostPort("localhost", port)
+	}
+	return addr
+}
+
+// isOriginAllowed checks whether the given origin URL's host matches the
+// request host. This is used for CSRF protection on the dashboard proxy.
+func isOriginAllowed(origin, requestHost string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	originHost := parsed.Host
+	if originHost == "" {
+		originHost = parsed.Path
+	}
+
+	return originHost == requestHost
+}
+
+// asMintTransactionStore safely converts a concrete transaction store pointer
+// into the mint.TransactionStore interface. If the concrete pointer is nil, a
+// true nil interface is returned.
+func asMintTransactionStore(
+	txnStore *aperturedb.L402TransactionsStore) mint.TransactionStore {
+
+	if txnStore == nil {
+		return nil
+	}
+
+	return txnStore
+}
+
 // createProxy creates the proxy with all the services it needs.
+// adminPriorityServices are checked before proxy backend matching (e.g. admin
+// gRPC, REST, dashboard proxy). adminFallbackServices are checked after proxy
+// backend matching fails (e.g. dashboard catch-all static file server).
 func createProxy(cfg *Config, challenger challenger.Challenger,
-	store mint.SecretStore) (*proxy.Proxy, func(), error) {
+	store mint.SecretStore, txnStore mint.TransactionStore,
+	adminPriorityServices, adminFallbackServices []proxy.LocalService,
+) (*proxy.Proxy, func(), error) {
 
 	minter := mint.New(&mint.Config{
-		Challenger:     challenger,
-		Secrets:        store,
-		ServiceLimiter: newStaticServiceLimiter(cfg.Services),
-		Now:            time.Now,
+		Challenger:       challenger,
+		Secrets:          store,
+		ServiceLimiter:   newStaticServiceLimiter(cfg.Services),
+		Now:              time.Now,
+		TransactionStore: txnStore,
 	})
 	authenticator := auth.NewL402Authenticator(minter, challenger)
 
@@ -862,6 +1599,11 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 		proxyCleanup = cleanup
 	}
 
+	// Append admin fallback services (e.g. dashboard catch-all) before
+	// the static file server so the embedded dashboard is served when
+	// available.
+	localServices = append(localServices, adminFallbackServices...)
+
 	// The static file server must be last since it will match all calls
 	// that make it to it.
 	localServices = append(localServices, proxy.NewLocalService(
@@ -871,7 +1613,8 @@ func createProxy(cfg *Config, challenger challenger.Challenger,
 	))
 
 	prxy, err := proxy.New(
-		authenticator, cfg.Services, cfg.Blocklist, localServices...,
+		authenticator, cfg.Services, cfg.Blocklist,
+		adminPriorityServices, localServices...,
 	)
 	return prxy, proxyCleanup, err
 }
@@ -1035,7 +1778,7 @@ func allowCORS(handler http.Handler, origins []string) http.Handler {
 			allowHeaders,
 			"Content-Type, Accept, Grpc-Metadata-Macaroon",
 		)
-		w.Header().Set(allowMethods, "GET, POST, DELETE")
+		w.Header().Set(allowMethods, "GET, POST, PUT, DELETE")
 
 		// Either we allow all origins or the incoming request matches
 		// a specific origin in our list of allowed origins.

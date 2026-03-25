@@ -56,6 +56,14 @@ build:
 	@$(call print, "Building aperture.")
 	$(GOBUILD) $(PKG)/cmd/aperture
 
+build-dashboard:
+	@$(call print, "Building dashboard static export.")
+	cd dashboard && npm ci && npm run build
+
+build-withdashboard: build-dashboard
+	@$(call print, "Building aperture with embedded dashboard.")
+	$(GOBUILD) -tags=dashboard $(PKG)/cmd/aperture
+
 install:
 	@$(call print, "Installing aperture.")
 	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
@@ -154,3 +162,4 @@ clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) ./aperture
 	$(RM) coverage.txt
+	$(RM) -r dashboard/out

@@ -154,6 +154,20 @@ type TorConfig struct {
 	V3          bool   `long:"v3" description:"Whether we should listen for client requests through a v3 onion service."`
 }
 
+// AdminConfig holds the configuration for the admin gRPC/REST API.
+type AdminConfig struct {
+	// Enabled determines whether the admin API is active.
+	Enabled bool `long:"enabled" description:"Enable the admin API."`
+
+	// MacaroonPath is the path where the admin macaroon will be written.
+	// Defaults to admin.macaroon in the aperture data directory.
+	MacaroonPath string `long:"macaroonpath" description:"Path to write the admin macaroon."`
+
+	// CORSOrigins controls which origins are allowed to call the admin REST
+	// API. If empty, CORS is disabled and browsers can only use same-origin.
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+}
+
 type Config struct {
 	// ListenAddr is the listening address that we should use to allow Aperture
 	// to listen for requests.
@@ -207,6 +221,9 @@ type Config struct {
 	// Prometheus is the config for setting up an endpoint for a Prometheus
 	// server to scrape metrics from.
 	Prometheus *PrometheusConfig `group:"prometheus" namespace:"prometheus" description:"Configuration setting up an endpoint that a Prometheus server can scrape."`
+
+	// Admin is the configuration for the admin REST API.
+	Admin *AdminConfig `group:"admin" namespace:"admin" description:"Configuration for the admin REST API."`
 
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
@@ -309,6 +326,7 @@ func NewConfig() *Config {
 		Tor:              &TorConfig{},
 		HashMail:         &HashMailConfig{},
 		Prometheus:       &PrometheusConfig{},
+		Admin:            &AdminConfig{},
 		IdleTimeout:      defaultIdleTimeout,
 		ReadTimeout:      defaultReadTimeout,
 		WriteTimeout:     defaultWriteTimeout,

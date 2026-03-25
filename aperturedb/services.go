@@ -1,0 +1,131 @@
+package aperturedb
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/lightninglabs/aperture/aperturedb/sqlc"
+	"github.com/lightningnetwork/lnd/clock"
+)
+
+type (
+	// UpsertServiceParams contains the parameters for upserting a service.
+	UpsertServiceParams = sqlc.UpsertServiceParams
+
+	// ServiceRow is the database model for a service.
+	ServiceRow = sqlc.Service
+)
+
+// ServicesDB is an interface that defines the set of operations that can be
+// executed against the services database table.
+type ServicesDB interface {
+	// UpsertService inserts or updates a service by name.
+	UpsertService(ctx context.Context, arg UpsertServiceParams) error
+
+	// DeleteService deletes a service by name.
+	DeleteService(ctx context.Context, name string) (int64, error)
+
+	// ListServices returns all services ordered by name.
+	ListServices(ctx context.Context) ([]ServiceRow, error)
+}
+
+// ServicesDBTxOptions defines the set of db txn options the ServicesStore
+// understands.
+type ServicesDBTxOptions struct {
+	readOnly bool
+}
+
+// ReadOnly returns true if the transaction should be read only.
+//
+// NOTE: This implements the TxOptions interface.
+func (a *ServicesDBTxOptions) ReadOnly() bool {
+	return a.readOnly
+}
+
+// BatchedServicesDB is a version of ServicesDB that supports batched
+// transactions.
+type BatchedServicesDB interface {
+	ServicesDB
+
+	BatchedTx[ServicesDB]
+}
+
+// ServicesStore represents a storage backend for service configurations.
+type ServicesStore struct {
+	db    BatchedServicesDB
+	clock clock.Clock
+}
+
+// NewServicesStore creates a new ServicesStore instance.
+func NewServicesStore(db BatchedServicesDB) *ServicesStore {
+	return &ServicesStore{
+		db:    db,
+		clock: clock.NewDefaultClock(),
+	}
+}
+
+// UpsertService inserts or updates a service configuration.
+func (s *ServicesStore) UpsertService(ctx context.Context, name, address,
+	protocol, hostRegexp, pathRegexp, auth string,
+	price int64) error {
+
+	var writeTxOpts ServicesDBTxOptions
+	now := s.clock.Now().UTC()
+	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx ServicesDB) error {
+		return tx.UpsertService(ctx, UpsertServiceParams{
+			Name:       name,
+			Address:    address,
+			Protocol:   protocol,
+			HostRegexp: hostRegexp,
+			PathRegexp: pathRegexp,
+			Price:      price,
+			Auth:       auth,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		})
+	})
+
+	if err != nil {
+		return fmt.Errorf("unable to upsert service %q: %w",
+			name, err)
+	}
+
+	return nil
+}
+
+// DeleteService removes a service by name.
+func (s *ServicesStore) DeleteService(ctx context.Context,
+	name string) error {
+
+	var writeTxOpts ServicesDBTxOptions
+	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx ServicesDB) error {
+		_, err := tx.DeleteService(ctx, name)
+		return err
+	})
+
+	if err != nil {
+		return fmt.Errorf("unable to delete service %q: %w",
+			name, err)
+	}
+
+	return nil
+}
+
+// ListServices returns all persisted services.
+func (s *ServicesStore) ListServices(ctx context.Context) ([]ServiceRow,
+	error) {
+
+	var rows []ServiceRow
+	readOpts := ServicesDBTxOptions{readOnly: true}
+	err := s.db.ExecTx(ctx, &readOpts, func(tx ServicesDB) error {
+		var err error
+		rows, err = tx.ListServices(ctx)
+		return err
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("unable to list services: %w", err)
+	}
+
+	return rows, nil
+}

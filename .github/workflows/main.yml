@@ -84,6 +84,39 @@ jobs:
         run: make lint
 
   ########################
+  # dashboard tsc + lint
+  ########################
+  dashboard:
+    name: dashboard tsc, lint, and format
+    runs-on: ubuntu-latest
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: install dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: type check
+        working-directory: dashboard
+        run: npx tsc --noEmit
+
+      - name: lint
+        working-directory: dashboard
+        run: npm run lint
+
+      - name: format check
+        working-directory: dashboard
+        run: npm run format:check
+
+  ########################
   # run unit tests
   ########################
   unit-test:

@@ -10,7 +10,21 @@ import (
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/queue"
 )
+
+// LndChallengerOption is a functional option that can be used to modify the
+// behavior of the LndChallenger.
+type LndChallengerOption func(*LndChallenger)
+
+// WithSettlementCallback sets a callback that will be invoked when an invoice
+// is settled. This can be used to trigger side effects such as recording
+// transaction settlements.
+func WithSettlementCallback(fn func(hash lntypes.Hash)) LndChallengerOption {
+	return func(l *LndChallenger) {
+		l.onSettled = fn
+	}
+}
 
 // LndChallenger is a challenger that uses an lnd backend to create new L402
 // payment challenges.
@@ -29,6 +43,14 @@ type LndChallenger struct {
 	// or rely on the higher level preimage verification.
 	strictVerify bool
 
+	// onSettled is an optional callback that is invoked when an invoice
+	// transitions to the settled state.
+	onSettled func(hash lntypes.Hash)
+
+	// settlementQueue is an unbounded concurrent queue used to serialize
+	// settlement callbacks without blocking the invoice stream reader.
+	settlementQueue *queue.ConcurrentQueue
+
 	errChan chan<- error
 
 	quit chan struct{}
@@ -43,7 +65,8 @@ var _ Challenger = (*LndChallenger)(nil)
 // an lnd backend to create payment challenges.
 func NewLndChallenger(client InvoiceClient, batchSize int,
 	genInvoiceReq InvoiceRequestGenerator, ctxFunc func() context.Context,
-	errChan chan<- error, strictVerification bool) (*LndChallenger, error) {
+	errChan chan<- error, strictVerification bool,
+	opts ...LndChallengerOption) (*LndChallenger, error) {
 
 	// Make sure we have a valid context function. This will be called to
 	// create a new context for each call to the lnd client.
@@ -69,8 +92,24 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		strictVerify:  strictVerification,
 	}
 
+	// Apply functional options.
+	for _, opt := range opts {
+		opt(challenger)
+	}
+
+	// If a settlement callback is set, create an unbounded concurrent
+	// queue for settlement processing.
+	if challenger.onSettled != nil {
+		challenger.settlementQueue = queue.NewConcurrentQueue(100)
+		challenger.settlementQueue.Start()
+	}
+
 	err := challenger.Start()
 	if err != nil {
+		if challenger.settlementQueue != nil {
+			challenger.settlementQueue.Stop()
+		}
+
 		return nil, fmt.Errorf("unable to start challenger: %w", err)
 	}
 
@@ -82,9 +121,9 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 // invoices on startup and a subscription to all subsequent invoice updates
 // is created.
 func (l *LndChallenger) Start() error {
-	// If we aren't doing strict verification, then we can just exit here as
-	// we don't need the invoice state.
-	if !l.strictVerify {
+	// If we aren't doing strict verification and have no settlement
+	// callback, we can skip invoice tracking entirely.
+	if !l.strictVerify && l.onSettled == nil {
 		log.Infof("Skipping invoice state tracking strict_verify=%v",
 			l.strictVerify)
 		return nil
@@ -96,65 +135,81 @@ func (l *LndChallenger) Start() error {
 	// reflect the latest known invoices.
 	addIndex := uint64(0)
 	settleIndex := uint64(0)
+	var startupSettled []lntypes.Hash
 
 	log.Debugf("Starting LND challenger")
-	// Paginate through all existing invoices on startup and add them to our
-	// cache. We need to keep track of all invoices to ensure tokens are
-	// valid.
-	ctx := l.clientCtx()
-	indexOffset := uint64(0)
-	for {
-		log.Debugf("Querying invoices from index %d", indexOffset)
-		invoiceResp, err := l.client.ListInvoices(
-			ctx, &lnrpc.ListInvoiceRequest{
-				IndexOffset:    indexOffset,
-				NumMaxInvoices: uint64(l.batchSize),
-			},
-		)
-		if err != nil {
-			return err
-		}
 
-		// If there are no more invoices, stop pagination.
-		if len(invoiceResp.Invoices) == 0 {
-			break
-		}
-
-		// Lock the mutex to safely update the invoice states.
-		l.invoicesMtx.Lock()
-		for _, invoice := range invoiceResp.Invoices {
-			// Skip invoices that do not have a payment hash
-			// populated.
-			if invoice.RHash == nil {
-				continue
-			}
-
-			if invoice.AddIndex > addIndex {
-				addIndex = invoice.AddIndex
-			}
-			if invoice.SettleIndex > settleIndex {
-				settleIndex = invoice.SettleIndex
-			}
-			hash, err := lntypes.MakeHash(invoice.RHash)
+	// When strict verification or settlement reconciliation is enabled,
+	// paginate through all existing invoices on startup. This lets us
+	// seed the state cache and reconcile any invoices that were settled
+	// while we were offline.
+	if l.strictVerify || l.onSettled != nil {
+		ctx := l.clientCtx()
+		indexOffset := uint64(0)
+		for {
+			log.Debugf("Querying invoices from index %d",
+				indexOffset)
+			invoiceResp, err := l.client.ListInvoices(
+				ctx, &lnrpc.ListInvoiceRequest{
+					IndexOffset:    indexOffset,
+					NumMaxInvoices: uint64(l.batchSize),
+				},
+			)
 			if err != nil {
+				return err
+			}
+
+			// If there are no more invoices, stop pagination.
+			if len(invoiceResp.Invoices) == 0 {
+				break
+			}
+
+			for _, invoice := range invoiceResp.Invoices {
+				// Skip invoices that do not have a payment
+				// hash populated.
+				if invoice.RHash == nil {
+					continue
+				}
+
+				if invoice.AddIndex > addIndex {
+					addIndex = invoice.AddIndex
+				}
+				if invoice.SettleIndex > settleIndex {
+					settleIndex = invoice.SettleIndex
+				}
+				hash, err := lntypes.MakeHash(invoice.RHash)
+				if err != nil {
+					return fmt.Errorf("error parsing "+
+						"invoice hash: %v", err)
+				}
+
+				if invoice.State == lnrpc.Invoice_SETTLED &&
+					l.onSettled != nil {
+
+					startupSettled = append(
+						startupSettled, hash,
+					)
+				}
+
+				if !l.strictVerify {
+					continue
+				}
+
+				// Skip tracking the state of canceled or
+				// expired invoices.
+				if invoiceIrrelevant(invoice) {
+					continue
+				}
+				l.invoicesMtx.Lock()
+				l.invoiceStates[hash] = invoice.State
 				l.invoicesMtx.Unlock()
-				return fmt.Errorf("error parsing invoice "+
-					"hash: %v", err)
 			}
 
-			// Skip tracking the state of canceled or expired
-			// invoices.
-			if invoiceIrrelevant(invoice) {
-				continue
-			}
-			l.invoiceStates[hash] = invoice.State
+			// Update the index offset for the next batch.
+			indexOffset = invoiceResp.LastIndexOffset
 		}
-		l.invoicesMtx.Unlock()
-
-		// Update the index offset for the next batch.
-		indexOffset = invoiceResp.LastIndexOffset
+		log.Debugf("Finished querying invoices")
 	}
-	log.Debugf("Finished querying invoices")
 
 	// We need to be able to cancel any subscription we make.
 	ctxc, cancel := context.WithCancel(l.clientCtx())
@@ -178,6 +233,41 @@ func (l *LndChallenger) Start() error {
 
 		l.readInvoiceStream(subscriptionResp)
 	}()
+
+	// If a settlement callback is registered, start a worker goroutine
+	// that processes settlements sequentially from the unbounded queue,
+	// then enqueue any startup-settled invoices for reconciliation.
+	if l.onSettled != nil {
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			for {
+				select {
+				case item, ok := <-l.settlementQueue.ChanOut():
+					if !ok {
+						return
+					}
+
+					hash, valid := item.(lntypes.Hash)
+					if !valid {
+						continue
+					}
+
+					l.onSettled(hash)
+
+				case <-l.quit:
+					return
+				}
+			}
+		}()
+
+		// Enqueue startup-settled invoices through the queue
+		// so they are processed asynchronously by the worker
+		// goroutine above. This avoids blocking startup.
+		for _, hash := range startupSettled {
+			l.settlementQueue.ChanIn() <- hash
+		}
+	}
 
 	return nil
 }
@@ -261,10 +351,27 @@ func (l *LndChallenger) readInvoiceStream(
 			l.invoiceStates[hash] = invoice.State
 		}
 
-		// Before releasing the lock, notify our conditions that listen
-		// for updates on the invoice state.
+		// Determine if we need to enqueue a settlement callback
+		// before releasing the lock.
+		shouldEnqueue := invoice.State == lnrpc.Invoice_SETTLED &&
+			l.onSettled != nil
+
+		// Notify conditions that listen for invoice state updates,
+		// then release the lock before enqueuing to avoid blocking
+		// the invoice stream reader.
 		l.invoicesCond.Broadcast()
 		l.invoicesMtx.Unlock()
+
+		// Enqueue settlement outside the mutex. The
+		// ConcurrentQueue is unbounded, so this send will never
+		// block.
+		if shouldEnqueue {
+			select {
+			case l.settlementQueue.ChanIn() <- hash:
+			case <-l.quit:
+				return
+			}
+		}
 	}
 }
 
@@ -275,6 +382,12 @@ func (l *LndChallenger) Stop() {
 	}
 	close(l.quit)
 	l.wg.Wait()
+
+	// Stop the settlement queue after all goroutines have exited so
+	// that any pending items are drained.
+	if l.settlementQueue != nil {
+		l.settlementQueue.Stop()
+	}
 }
 
 // NewChallenge creates a new L402 payment challenge, returning a payment
