@@ -1,0 +1,98 @@
+package cli
+
+import (
+	"encoding/json"
+	"io"
+	"os"
+
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+)
+
+// resolveOutputFormat determines the output format by checking (in
+// priority order): the --json flag, the --human flag, and then TTY
+// detection. When stdout is not a TTY, JSON is the default so agents
+// piping output always get machine-readable results.
+func resolveOutputFormat(cmd *cobra.Command) string {
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+	if jsonFlag {
+		return "json"
+	}
+
+	humanFlag, _ := cmd.Flags().GetBool("human")
+	if humanFlag {
+		return "human"
+	}
+
+	// Fall back to TTY detection: non-TTY defaults to JSON.
+	if !isTTY() {
+		return "json"
+	}
+
+	return "human"
+}
+
+// isJSONOutput is a convenience wrapper that returns true when the
+// resolved format is JSON.
+func isJSONOutput(cmd *cobra.Command) bool {
+	return resolveOutputFormat(cmd) == "json"
+}
+
+// isTTY reports whether stdout is connected to an interactive terminal.
+func isTTY() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// writeJSON encodes data as indented JSON to the given writer.
+func writeJSON(w io.Writer, data any) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+
+	return encoder.Encode(data)
+}
+
+// printProto marshals a protobuf message as indented JSON to stdout
+// using protojson for correct field naming.
+func printProto(msg proto.Message) error {
+	marshaler := protojson.MarshalOptions{
+		Indent:          "  ",
+		EmitUnpopulated: true,
+	}
+
+	data, err := marshaler.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = os.Stdout.Write(append(data, '\n'))
+	return err
+}
+
+// printDryRun outputs a dry-run representation of the request that
+// would be sent, without actually executing the RPC.
+func printDryRun(rpcName string, req proto.Message) error {
+	marshaler := protojson.MarshalOptions{
+		Indent:          "  ",
+		EmitUnpopulated: true,
+	}
+
+	reqData, err := marshaler.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	var reqMap map[string]any
+	if err := json.Unmarshal(reqData, &reqMap); err != nil {
+		return err
+	}
+
+	envelope := map[string]any{
+		"dry_run": true,
+		"rpc":     rpcName,
+		"request": reqMap,
+	}
+
+	return writeJSON(os.Stdout, envelope)
+}
