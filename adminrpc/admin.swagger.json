@@ -169,7 +169,28 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/AdminUpdateServiceBody"
+              "type": "object",
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "protocol": {
+                  "type": "string"
+                },
+                "host_regexp": {
+                  "type": "string"
+                },
+                "path_regexp": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "string",
+                  "format": "int64"
+                },
+                "auth": {
+                  "type": "string"
+                }
+              }
             }
           }
         ],
@@ -346,30 +367,6 @@
     }
   },
   "definitions": {
-    "AdminUpdateServiceBody": {
-      "type": "object",
-      "properties": {
-        "address": {
-          "type": "string"
-        },
-        "protocol": {
-          "type": "string"
-        },
-        "host_regexp": {
-          "type": "string"
-        },
-        "path_regexp": {
-          "type": "string"
-        },
-        "price": {
-          "type": "string",
-          "format": "int64"
-        },
-        "auth": {
-          "type": "string"
-        }
-      }
-    },
     "adminrpcCreateServiceRequest": {
       "type": "object",
       "properties": {

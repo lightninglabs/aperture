@@ -914,6 +914,7 @@ func buildChallengerOpts(
 // and dashboard proxy endpoints) and fallback services (catch-all handlers
 // like the dashboard static file server that should only run after proxy
 // backend matching fails).
+//
 //nolint:gocyclo
 func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
