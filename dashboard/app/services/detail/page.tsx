@@ -440,9 +440,7 @@ function ServiceDetailContent() {
         toast(`Auth scheme updated to "${authSchemeLabels[scheme]}"`);
       } catch (e: unknown) {
         toast(
-          e instanceof Error
-            ? e.message
-            : "Failed to update auth scheme",
+          e instanceof Error ? e.message : "Failed to update auth scheme",
           "error"
         );
       }

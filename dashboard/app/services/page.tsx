@@ -597,9 +597,7 @@ export default function ServicesPage() {
                   sortDir={sortDir}
                   onSort={onSort}
                   tooltip={
-                    <Tooltip
-                      text="Payment auth scheme: L402 (default), MPP, or both."
-                    />
+                    <Tooltip text="Payment auth scheme: L402 (default), MPP, or both." />
                   }
                 />
                 <th style={{ padding: "10px 16px", width: 48 }} />
@@ -661,9 +659,7 @@ export default function ServicesPage() {
                         {svc.auth || "on"}
                       </AuthBadge>
                     </Td>
-                    <Td>
-                      {authSchemeLabels[svc.auth_scheme] ?? "L402"}
-                    </Td>
+                    <Td>{authSchemeLabels[svc.auth_scheme] ?? "L402"}</Td>
                     <Td style={{ textAlign: "right" }}>
                       <OverflowMenu
                         items={[

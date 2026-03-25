@@ -9,7 +9,10 @@ export interface ServiceRevenueItem {
   total_revenue_sats: number;
 }
 
-export type AuthScheme = "AUTH_SCHEME_L402" | "AUTH_SCHEME_MPP" | "AUTH_SCHEME_L402_MPP";
+export type AuthScheme =
+  | "AUTH_SCHEME_L402"
+  | "AUTH_SCHEME_MPP"
+  | "AUTH_SCHEME_L402_MPP";
 
 export const authSchemeLabels: Record<AuthScheme, string> = {
   AUTH_SCHEME_L402: "L402",

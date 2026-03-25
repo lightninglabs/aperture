@@ -60,7 +60,9 @@ export function useServices() {
           path_regexp: String(s.path_regexp ?? ""),
           price: Number(s.price ?? 0),
           auth: String(s.auth ?? ""),
-          auth_scheme: (String(s.auth_scheme ?? "AUTH_SCHEME_L402")) as AuthScheme,
+          auth_scheme: String(
+            s.auth_scheme ?? "AUTH_SCHEME_L402"
+          ) as AuthScheme,
         }))
       ),
     { refreshInterval: 30_000 }

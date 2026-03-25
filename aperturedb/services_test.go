@@ -220,7 +220,7 @@ func TestListFilteredTransactions(t *testing.T) {
 	// Future date range -- no results.
 	txns, err = store.ListFiltered(ctxt, TransactionFilter{
 		HasDateRange: true,
-		From: now.Add(24 * time.Hour), To: now.Add(25 * time.Hour),
+		From:         now.Add(24 * time.Hour), To: now.Add(25 * time.Hour),
 		Limit: 50,
 	})
 	require.NoError(t, err)
