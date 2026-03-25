@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,17 +13,23 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Error: %v", err)
+	}
+}
+
+func run() error {
 	// Open an in-memory SQLite database.
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
-		log.Fatalf("Failed to open in-memory db: %v", err)
+		return fmt.Errorf("failed to open in-memory db: %w", err)
 	}
 	defer db.Close()
 
 	migrationDir := "aperturedb/sqlc/migrations"
 	files, err := os.ReadDir(migrationDir)
 	if err != nil {
-		log.Fatalf("Failed to read migration dir: %v", err)
+		return fmt.Errorf("failed to read migration dir: %w", err)
 	}
 
 	var upFiles []string
@@ -39,12 +46,11 @@ func main() {
 		path := filepath.Join(migrationDir, fname)
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Fatalf("Failed to read file %s: %v", fname, err)
+			return fmt.Errorf("failed to read %s: %w", fname, err)
 		}
 		_, err = db.Exec(string(data))
 		if err != nil {
-			log.Fatalf("Error executing migration %s: %v",
-				fname, err)
+			return fmt.Errorf("error executing %s: %w", fname, err)
 		}
 	}
 
@@ -60,7 +66,7 @@ func main() {
 		ORDER BY name`,
 	)
 	if err != nil {
-		log.Fatalf("Failed to query schema: %v", err)
+		return fmt.Errorf("failed to query schema: %w", err)
 	}
 	defer rows.Close()
 
@@ -68,24 +74,26 @@ func main() {
 	for rows.Next() {
 		var typ, name, sqlDef string
 		if err := rows.Scan(&typ, &name, &sqlDef); err != nil {
-			log.Fatalf("Error scanning row: %v", err)
+			return fmt.Errorf("error scanning row: %w", err)
 		}
 
 		generatedSchema += sqlDef + ";\n\n"
 	}
 	if err := rows.Err(); err != nil {
-		log.Fatalf("Error iterating rows: %v", err)
+		return fmt.Errorf("error iterating rows: %w", err)
 	}
 
 	// Write the consolidated schema file.
 	outDir := "aperturedb/sqlc/schemas"
 	if err = os.MkdirAll(outDir, 0755); err != nil {
-		log.Fatalf("Failed to create schema output dir: %v", err)
+		return fmt.Errorf("failed to create schema dir: %w", err)
 	}
 	outFile := filepath.Join(outDir, "generated_schema.sql")
 	err = os.WriteFile(outFile, []byte(generatedSchema), 0644)
 	if err != nil {
-		log.Fatalf("Failed to write schema file: %v", err)
+		return fmt.Errorf("failed to write schema: %w", err)
 	}
 	log.Printf("Consolidated schema written to %s", outFile)
+
+	return nil
 }
