@@ -526,12 +526,14 @@ func (p *Proxy) director(req *http.Request) {
 		// correct/default format so the backend knows what to do
 		// with it. For MPP Payment credentials, the header is
 		// already in the correct format and doesn't need rewriting.
-		mac, preimage, err := l402.FromHeader(&req.Header)
+		mac, preimage, discharges, err := l402.FromHeader(&req.Header)
 		if err == nil {
 			// It could be that there is no auth information because
 			// none is needed for this particular request. So we
 			// only continue if no error is set.
-			err := l402.SetHeader(&req.Header, mac, preimage)
+			err := l402.SetHeader(
+				&req.Header, mac, preimage, discharges,
+			)
 			if err != nil {
 				log.Errorf("could not set header: %v", err)
 			}
