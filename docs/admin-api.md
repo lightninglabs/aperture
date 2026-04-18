@@ -88,6 +88,7 @@ curl -X POST \
 | `price` | No | 0 | Price in satoshis per request |
 | `auth` | No | `""` | Auth level: `on`, `off`, or `freebie N` (N free requests per IP) |
 | `auth_scheme` | No | `AUTH_SCHEME_L402` | Payment auth scheme: `AUTH_SCHEME_L402` (0), `AUTH_SCHEME_MPP` (1), or `AUTH_SCHEME_L402_MPP` (2) |
+| `timeout` | No | 0 | Per-service TTL in seconds. When non-zero, minted macaroons include a `_valid_until` caveat so access tokens expire after this many seconds. `0` means no expiry. |
 
 ### Update a Service
 

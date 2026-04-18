@@ -1,9 +1,9 @@
 -- name: UpsertService :exec
 INSERT INTO services (
     name, address, protocol, host_regexp, path_regexp, price, auth,
-    auth_scheme, created_at, updated_at
+    auth_scheme, timeout, created_at, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
 ON CONFLICT(name) DO UPDATE SET
     address = excluded.address,
@@ -13,6 +13,7 @@ ON CONFLICT(name) DO UPDATE SET
     price = excluded.price,
     auth = excluded.auth,
     auth_scheme = excluded.auth_scheme,
+    timeout = excluded.timeout,
     updated_at = excluded.updated_at;
 
 -- name: DeleteService :execrows

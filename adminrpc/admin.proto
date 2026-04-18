@@ -71,6 +71,11 @@ message Service {
   // auth_scheme specifies which payment auth scheme(s) are used for this
   // service. Defaults to AUTH_SCHEME_L402 for backwards compatibility.
   AuthScheme auth_scheme = 8;
+
+  // timeout is the per-service TTL in seconds. When non-zero, the L402 mint
+  // will include a _valid_until caveat so macaroons expire after this many
+  // seconds. A value of 0 means no expiry (no _valid_until caveat minted).
+  int64 timeout = 9;
 }
 
 message CreateServiceRequest {
@@ -85,6 +90,9 @@ message CreateServiceRequest {
   // auth_scheme specifies which payment auth scheme(s) to use. Defaults to
   // AUTH_SCHEME_L402 if unset.
   AuthScheme auth_scheme = 8;
+
+  // timeout is the per-service TTL in seconds. See Service.timeout.
+  int64 timeout = 9;
 }
 
 message UpdateServiceRequest {
@@ -99,6 +107,10 @@ message UpdateServiceRequest {
   // auth_scheme specifies which payment auth scheme(s) to use. When not
   // set, the existing auth_scheme is preserved (not reset to L402).
   optional AuthScheme auth_scheme = 8;
+
+  // timeout is the per-service TTL in seconds. See Service.timeout. When not
+  // set, the existing timeout is preserved.
+  optional int64 timeout = 9;
 }
 
 message DeleteServiceRequest { string name = 1; }
