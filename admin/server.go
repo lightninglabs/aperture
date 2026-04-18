@@ -174,6 +174,7 @@ func (s *Server) ListServices(_ context.Context,
 			Price:      svc.Price,
 			Auth:       string(svc.Auth),
 			AuthScheme: stringToAuthScheme(svc.AuthScheme),
+			Timeout:    svc.Timeout,
 		})
 	}
 
@@ -278,6 +279,12 @@ func (s *Server) CreateService(ctx context.Context,
 
 	authScheme := authSchemeToString(req.AuthScheme)
 
+	if req.Timeout < 0 {
+		return nil, status.Error(
+			codes.InvalidArgument, "timeout must be >= 0",
+		)
+	}
+
 	newSvc := &proxy.Service{
 		Name:       req.Name,
 		Address:    req.Address,
@@ -286,6 +293,7 @@ func (s *Server) CreateService(ctx context.Context,
 		PathRegexp: req.PathRegexp,
 		Price:      req.Price,
 		AuthScheme: authScheme,
+		Timeout:    req.Timeout,
 	}
 	if normalizedAuth != "" {
 		newSvc.Auth = auth.Level(normalizedAuth)
@@ -312,6 +320,7 @@ func (s *Server) CreateService(ctx context.Context,
 				Auth:       string(newSvc.Auth),
 				AuthScheme: newSvc.AuthScheme,
 				Price:      newSvc.Price,
+				Timeout:    newSvc.Timeout,
 			},
 		); err != nil {
 			log.Errorf("Error persisting service: %v", err)
@@ -327,6 +336,7 @@ func (s *Server) CreateService(ctx context.Context,
 		Price:      newSvc.Price,
 		Auth:       string(newSvc.Auth),
 		AuthScheme: stringToAuthScheme(newSvc.AuthScheme),
+		Timeout:    newSvc.Timeout,
 	}, nil
 }
 
@@ -438,6 +448,18 @@ func (s *Server) UpdateService(ctx context.Context,
 		updated.AuthScheme = authSchemeToString(*req.AuthScheme)
 	}
 
+	// Only apply timeout when explicitly set. Using `optional` lets
+	// callers distinguish "reset to 0 (no expiry)" from "leave as-is".
+	if req.Timeout != nil {
+		if req.GetTimeout() < 0 {
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"timeout must be >= 0",
+			)
+		}
+		updated.Timeout = req.GetTimeout()
+	}
+
 	// Replace the pointer in the slice with the updated copy.
 	for i, svc := range services {
 		if svc.Name == req.Name {
@@ -466,6 +488,7 @@ func (s *Server) UpdateService(ctx context.Context,
 				Auth:       string(updated.Auth),
 				AuthScheme: updated.AuthScheme,
 				Price:      updated.Price,
+				Timeout:    updated.Timeout,
 			},
 		); err != nil {
 			log.Errorf("Error persisting updated service: %v",
@@ -482,6 +505,7 @@ func (s *Server) UpdateService(ctx context.Context,
 		Price:      updated.Price,
 		Auth:       string(updated.Auth),
 		AuthScheme: stringToAuthScheme(updated.AuthScheme),
+		Timeout:    updated.Timeout,
 	}, nil
 }
 
