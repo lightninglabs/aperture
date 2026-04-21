@@ -697,6 +697,16 @@ func getConfig() (*Config, error) {
 	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
 		cfg.Authenticator.MacDir,
 	)
+	if cfg.Sqlite != nil {
+		cfg.Sqlite.DatabaseFileName = lnd.CleanAndExpandPath(
+			cfg.Sqlite.DatabaseFileName,
+		)
+	}
+	if cfg.Admin != nil {
+		cfg.Admin.MacaroonPath = lnd.CleanAndExpandPath(
+			cfg.Admin.MacaroonPath,
+		)
+	}
 
 	// Set default mailbox address if none is set.
 	if cfg.Authenticator.MailboxAddress == "" {
