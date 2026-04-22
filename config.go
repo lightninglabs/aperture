@@ -13,16 +13,16 @@ import (
 )
 
 var (
-	apertureDataDir         = btcutil.AppDataDir("aperture", false)
-	defaultConfigFilename   = "aperture.yaml"
+	apertureDataDir         = btcutil.AppDataDir("prism", false)
+	defaultConfigFilename   = "prism.yaml"
 	defaultTLSKeyFilename   = "tls.key"
 	defaultTLSCertFilename  = "tls.cert"
 	defaultLogLevel         = "info"
-	defaultLogFilename      = "aperture.log"
+	defaultLogFilename      = "prism.log"
 	defaultInvoiceBatchSize = 100000
 	defaultStrictVerify     = false
 
-	defaultSqliteDatabaseFileName = "aperture.db"
+	defaultSqliteDatabaseFileName = "prism.db"
 
 	// defaultSqliteDatabasePath is the default path under which we store
 	// the SQLite database file.

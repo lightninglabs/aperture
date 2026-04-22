@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-// Exit codes for aperturecli. These are semantic exit codes that agents
+// Exit codes for prismcli. These are semantic exit codes that agents
 // can parse for control flow, going beyond the typical 0/1 binary.
 const (
 	// ExitSuccess indicates the command completed successfully.

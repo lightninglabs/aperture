@@ -15,24 +15,24 @@ servestatic: false
 debuglevel: "debug"
 
 # Custom path to a config file.
-configfile: "/path/to/your/aperture.yaml"
+configfile: "/path/to/your/prism.yaml"
 
-# Directory to place all of aperture's files in.
-basedir: "/path/to/.aperture"
+# Directory to place all of prism's files in.
+basedir: "/path/to/.prism"
 
 # Whether the proxy should create a valid certificate through Let's Encrypt for
 # the fully qualifying domain name.
 autocert: false
-servername: aperture.example.com
+servername: prism.example.com
 
 # Whether to listen on an insecure connection, disabling TLS for incoming
 # connections.
 insecure: false
 
-# If TLS is terminated by a load balancer/ingress in front of aperture, make
+# If TLS is terminated by a load balancer/ingress in front of prism, make
 # sure the load balancer's ALPN policy includes "h2". On AWS NLB, the default
 # ALPN policy "None" does not negotiate ALPN and gRPC clients may fail with
-# "missing selected ALPN property". With TCP passthrough, aperture negotiates
+# "missing selected ALPN property". With TCP passthrough, prism negotiates
 # ALPN directly.
 
 # Whether we should verify the invoice status strictly or not. If set to true,
@@ -128,7 +128,7 @@ authenticator:
 # transactions, and tokens at runtime. Disabled by default.
 # admin:
 #   enabled: true
-#   macaroonpath: "/path/to/aperture/data/admin.macaroon"
+#   macaroonpath: "/path/to/prism/data/admin.macaroon"
 #   corsorigin:
 #     - "https://dashboard.example.com"
 
@@ -137,15 +137,15 @@ blocklist:
   - "1.1.1.1"
   - "1.0.0.1"
   
-# The selected database backend. The current default backend is "sqlite". 
-# Aperture also has support for postgres and etcd.
+# The selected database backend. The current default backend is "sqlite".
+# Prism also has support for postgres and etcd.
 dbbackend: "sqlite"
 
 # Settings for the sqlite process which the proxy will use to reliably store and
 # retrieve token information.
 sqlite:
     # The full path to the database.
-    dbfile: "/path/to/.aperture/aperture.db"
+    dbfile: "/path/to/.prism/prism.db"
 
     # Skip applying migrations on startup.
     skipmigrations: false
@@ -230,7 +230,7 @@ services:
     # The set of constraints that are applied to tokens of the service at the
     # base tier.
     constraints:
-        # This is just an example of how aperture could be extended
+        # This is just an example of how prism could be extended
         # but would not have any effect without additional support added.
         "valid_until": 1682483169
       

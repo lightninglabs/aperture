@@ -115,7 +115,7 @@ support the admin transaction store).
 **Build**
 
 ```bash
-make build                 # produces ./aperture and ./aperturecli
+make build                 # produces ./prism (proxy daemon) and ./prismcli (admin CLI)
 make install               # installs to $GOPATH/bin
 make build-withdashboard   # includes embedded Next.js dashboard
 ```
@@ -124,10 +124,10 @@ make build-withdashboard   # includes embedded Next.js dashboard
 
 ```bash
 # Using a custom config file:
-aperture --configfile=/path/to/aperture.yaml
+prism --configfile=/path/to/aperture.yaml
 
 # Or with all config in ~/.aperture/aperture.yaml (default):
-aperture
+prism
 ```
 
 Compare your config against [`sample-conf.yaml`](sample-conf.yaml) — every
@@ -194,35 +194,35 @@ See [docs/dashboard.md](docs/dashboard.md).
 
 ---
 
-## CLI (`aperturecli`)
+## CLI (`prismcli`)
 
 A standalone command-line tool for the admin gRPC API. Designed to work
 well for **both humans and AI agents** — tables when stdout is a TTY, JSON
 when piped; semantic exit codes for scripting.
 
 ```bash
-aperturecli --insecure health
-aperturecli --insecure services list
-aperturecli --insecure services create --name myapi --address 127.0.0.1:8080 --price 100
-aperturecli --insecure services update --name myapi --price 500
-aperturecli --insecure stats
-aperturecli schema --all            # dumps full command tree as JSON
-aperturecli --dry-run services delete --name myapi
+prismcli --insecure health
+prismcli --insecure services list
+prismcli --insecure services create --name myapi --address 127.0.0.1:8080 --price 100
+prismcli --insecure services update --name myapi --price 500
+prismcli --insecure stats
+prismcli schema --all            # dumps full command tree as JSON
+prismcli --dry-run services delete --name myapi
 ```
 
 See [docs/cli.md](docs/cli.md).
 
 ### MCP Server
 
-`aperturecli` embeds an MCP (Model Context Protocol) server that exposes
+`prismcli` embeds an MCP (Model Context Protocol) server that exposes
 every admin RPC as a typed tool over stdio JSON-RPC. Agent frameworks like
 Claude Code can manage Prism directly:
 
 ```json
 {
   "mcpServers": {
-    "aperture": {
-      "command": "aperturecli",
+    "prism": {
+      "command": "prismcli",
       "args": ["--insecure", "mcp", "serve"]
     }
   }

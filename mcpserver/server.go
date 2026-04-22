@@ -1,5 +1,5 @@
 // Package mcpserver provides the Model Context Protocol server for
-// aperturecli. It exposes the admin API operations as typed MCP tools
+// prismcli. It exposes the admin API operations as typed MCP tools
 // over stdio JSON-RPC, enabling direct integration with agent
 // frameworks.
 package mcpserver
@@ -11,7 +11,7 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// NewServer creates a new MCP server with all aperturecli tools
+// NewServer creates a new MCP server with all prismcli tools
 // registered. The version parameter is injected from the CLI's build
 // version to avoid import cycles.
 func NewServer(client adminrpc.AdminClient,
@@ -19,7 +19,7 @@ func NewServer(client adminrpc.AdminClient,
 
 	server := gomcp.NewServer(
 		&gomcp.Implementation{
-			Name:    "aperturecli",
+			Name:    "prismcli",
 			Version: version,
 		},
 		nil,
