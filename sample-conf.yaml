@@ -238,9 +238,18 @@ services:
     # 31557600 = 1 year.
     timeout: 31557600    
 
-    # The L402 value in satoshis for the service. It is ignored if
+    # Price in the connected chain's base unit:
+    #   - bitcoin: satoshis (1 sat = 10^-8 BTC)
+    #   - sui:     MIST     (1 MIST = 10^-9 SUI; 1 SUI = 1_000_000_000 MIST)
+    # The dashboard scales for display (shows SUI or sats depending on
+    # the chain advertised by the connected lnd). Ignored if
     # dynamicprice.enabled is set to true.
-    price: 0
+    #
+    # Examples:
+    #   1_000_000    → 0.001  SUI   (~$0.001 at $1/SUI)  or 10^6 sats
+    #   10_000_000   → 0.01   SUI   (~$0.01 per request)
+    #   100_000_000  → 0.1    SUI
+    price: 10000000
 
     # A list of regular expressions for path that are free of charge.
     authwhitelistpaths:
@@ -299,7 +308,8 @@ services:
     protocol: https
     constraints:
         "valid_until": "2020-01-01"
-    price: 1
+    # 1_000_000 MIST = 0.001 SUI (cheap per-call endpoint).
+    price: 1000000
 
   - name: "service3"
     hostregexp: "service3.com:8083"
@@ -323,7 +333,9 @@ services:
     address: "127.0.0.1:9999"
     protocol: http
     timeout: 31557600            # L402 token valid for 1 year
-    price: 1000                  # default price for paid paths, in satoshis
+    # 10_000_000 MIST = 0.01 SUI (reasonable micropayment on Sui at ~$1).
+    # On bitcoin this would be 10^7 sats; tune per chain.
+    price: 10000000
 
     # Free paths — no L402 challenge, request is proxied straight through.
     # Use for health checks, docs, and any public read-only endpoint.

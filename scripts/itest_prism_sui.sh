@@ -125,7 +125,12 @@ services:
     address: "127.0.0.1:9999"
     protocol: http
     timeout: 3600
-    price: 10
+    # 10_000_000 MIST = 0.01 SUI; sized so the dashboard / admin API
+    # show a human-readable value instead of nano-units. On a bitcoin
+    # backend this would be 10^7 sats (~$9 at $90k/BTC), so tune before
+    # running against mainnet. Itests use regtest / sui devnet so value
+    # doesn't matter economically.
+    price: 10000000
 
 hashmail:
   enabled: false
