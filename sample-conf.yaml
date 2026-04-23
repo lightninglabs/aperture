@@ -314,6 +314,43 @@ services:
       insecure: false
       tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
+  # Mixed-auth example: a single backend where health checks and public
+  # documentation are free, most API calls require payment, and streaming
+  # endpoints require a pre-paid token but never issue a new one themselves.
+  - name: "mixed-api"
+    hostregexp: '^api\.example\.com$'
+    pathregexp: '^/.*$'          # match everything, then filter below
+    address: "127.0.0.1:9999"
+    protocol: http
+    timeout: 31557600            # L402 token valid for 1 year
+    price: 1000                  # default price for paid paths, in satoshis
+
+    # Free paths — no L402 challenge, request is proxied straight through.
+    # Use for health checks, docs, and any public read-only endpoint.
+    authwhitelistpaths:
+      - '^/health$'
+      - '^/metrics$'
+      - '^/docs$'
+      - '^/docs/.*$'
+      - '^/openapi\.json$'
+
+    # "Token required, no new invoice" paths. Prism does NOT return a 402
+    # challenge on these paths — a request without a valid L402 token gets
+    # 401 Unauthorized instead. The client must first acquire a token on a
+    # normal paid path (e.g. POST /auth/bootstrap, which returns 402 →
+    # client pays → gets macaroon+preimage), then replay that token here.
+    #
+    # Why this exists: streaming protocols (SSE, WebSocket, gRPC streams)
+    # can't gracefully consume a 402 response — the client is expecting a
+    # long-lived stream, not a JSON error body. So we force the token to
+    # be obtained on a regular request first.
+    authskipinvoicecreationpaths:
+      - '^/stream/.*$'           # server-sent events / WebSocket upgrade
+      - '^/events/subscribe$'
+      - '^/grpc\.StreamService/.*$'
+
+    # Any path not matched above costs `price` satoshis per token.
+
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.
 tor:
