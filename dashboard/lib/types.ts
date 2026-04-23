@@ -69,4 +69,8 @@ export interface InfoResponse {
   mpp_enabled: boolean;
   sessions_enabled: boolean;
   mpp_realm: string;
+  /** Blockchain the connected lnd is on (e.g. "bitcoin", "sui"). May be
+   *  empty if lnd was unreachable at prism startup. Drives the unit
+   *  label shown in the UI (SUI vs sats). */
+  chain?: string;
 }

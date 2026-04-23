@@ -169,32 +169,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "type": "object",
-              "properties": {
-                "address": {
-                  "type": "string"
-                },
-                "protocol": {
-                  "type": "string"
-                },
-                "host_regexp": {
-                  "type": "string"
-                },
-                "path_regexp": {
-                  "type": "string"
-                },
-                "price": {
-                  "type": "string",
-                  "format": "int64"
-                },
-                "auth": {
-                  "type": "string"
-                },
-                "auth_scheme": {
-                  "$ref": "#/definitions/adminrpcAuthScheme",
-                  "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
-                }
-              }
+              "$ref": "#/definitions/AdminUpdateServiceBody"
             }
           }
         ],
@@ -371,6 +346,34 @@
     }
   },
   "definitions": {
+    "AdminUpdateServiceBody": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "host_regexp": {
+          "type": "string"
+        },
+        "path_regexp": {
+          "type": "string"
+        },
+        "price": {
+          "type": "string",
+          "format": "int64"
+        },
+        "auth": {
+          "type": "string"
+        },
+        "auth_scheme": {
+          "$ref": "#/definitions/adminrpcAuthScheme",
+          "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
+        }
+      }
+    },
     "adminrpcAuthScheme": {
       "type": "string",
       "enum": [
@@ -451,6 +454,10 @@
         "mpp_realm": {
           "type": "string",
           "description": "mpp_realm is the realm string used in MPP challenge headers."
+        },
+        "chain": {
+          "type": "string",
+          "description": "chain is the underlying blockchain the connected lnd is running on,\nas reported by lnd's GetInfo.chains[0].chain (e.g. \"bitcoin\", \"sui\").\nEmpty if lnd could not be queried at startup."
         }
       }
     },

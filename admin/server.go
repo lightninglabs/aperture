@@ -117,6 +117,11 @@ type ServerConfig struct {
 
 	// MPPRealm is the realm string used in MPP challenge headers.
 	MPPRealm string
+
+	// Chain identifies the blockchain the connected lnd is running on.
+	// Populated from lnd GetInfo.chains[0].chain at aperture startup
+	// (e.g. "bitcoin", "sui"). Empty if lnd could not be queried.
+	Chain string
 }
 
 // Server implements the adminrpc.AdminServer gRPC interface. Thread safety
@@ -144,6 +149,7 @@ func (s *Server) GetInfo(_ context.Context,
 		MppEnabled:      s.cfg.MPPEnabled,
 		SessionsEnabled: s.cfg.SessionsEnabled,
 		MppRealm:        s.cfg.MPPRealm,
+		Chain:           s.cfg.Chain,
 	}, nil
 }
 

@@ -15,6 +15,7 @@ import styled from "@emotion/styled";
 import { toast } from "@/components/Toast";
 import type { AuthScheme } from "@/lib/types";
 import { authSchemeLabels } from "@/lib/types";
+import { formatAmount, unitLabel, baseUnitLabel } from "@/lib/currency";
 import Button from "@/components/Button";
 import StatTile from "@/components/StatTile";
 import EmptyState from "@/components/EmptyState";
@@ -301,6 +302,7 @@ function ServiceDetailContent() {
     limit: 50,
   });
   const { data: info, error: infoError, mutate: mutateInfo } = useInfo();
+  const chain = info?.chain;
   const { data: stats } = useStats();
 
   const [editingPrice, setEditingPrice] = useState(false);
@@ -337,7 +339,7 @@ function ServiceDetailContent() {
     setSaving(true);
     try {
       await updateService(decodedName, { price });
-      toast(`Price updated to ${price} sats`);
+      toast(`Price updated to ${formatAmount(price, chain).value} ${unitLabel(chain)}`);
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : "Failed to update price", "error");
     }
@@ -609,14 +611,14 @@ function ServiceDetailContent() {
       <StatGrid>
         <StatTile
           title="Revenue"
-          text={totalRevenue.toLocaleString()}
-          suffix="sats"
+          text={formatAmount(totalRevenue, chain).value}
+          suffix={unitLabel(chain)}
         />
         <StatTile title="Settled Payments" text={String(settledCount)} />
         <StatTile
           title="Price"
-          text={svc.price.toLocaleString()}
-          suffix="sats"
+          text={formatAmount(svc.price, chain).value}
+          suffix={unitLabel(chain)}
         />
       </StatGrid>
 
@@ -686,7 +688,7 @@ function ServiceDetailContent() {
                   />
                 ) : (
                   <EditablePrice onClick={startPriceEdit}>
-                    {svc.price.toLocaleString()} sats
+                    {formatAmount(svc.price, chain).value} {unitLabel(chain)}
                   </EditablePrice>
                 )}
               </ConfigValue>
@@ -814,7 +816,7 @@ function ServiceDetailContent() {
                   <Row key={tx.id}>
                     <IdCell>{tx.id}</IdCell>
                     <AmountCell>
-                      {tx.price_sats.toLocaleString()} sats
+                      {formatAmount(tx.price_sats, chain).value} {unitLabel(chain)}
                     </AmountCell>
                     <Td>
                       <Badge $settled={tx.state === "settled"}>

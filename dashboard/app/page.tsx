@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { useStats, useServices, useTransactions } from "@/lib/api";
+import { useStats, useServices, useTransactions, useInfo } from "@/lib/api";
+import { formatAmount, unitLabel } from "@/lib/currency";
 import styled from "@emotion/styled";
 
 const sfp = {
@@ -178,6 +179,9 @@ export default function DashboardPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  const { data: info } = useInfo();
+  const chain = info?.chain;
+
   const {
     data: stats,
     isLoading: statsLoading,
@@ -296,10 +300,10 @@ export default function DashboardPage() {
                 statsLoading
                   ? "..."
                   : stats
-                    ? stats.total_revenue_sats.toLocaleString()
+                    ? formatAmount(stats.total_revenue_sats, chain).value
                     : "\u2014"
               }
-              suffix="sats"
+              suffix={unitLabel(chain)}
             />
             <StatTile
               title="Transactions"
@@ -332,7 +336,7 @@ export default function DashboardPage() {
               <SectionTitle>Revenue Over Time</SectionTitle>
             </SectionHeader>
             {transactions ? (
-              <ActivityChart transactions={transactions} />
+              <ActivityChart transactions={transactions} chain={chain} />
             ) : (
               <Placeholder>Loading...</Placeholder>
             )}
@@ -359,7 +363,7 @@ export default function DashboardPage() {
               {statsLoading ? (
                 <Placeholder>Loading...</Placeholder>
               ) : (
-                <RevenueChart data={stats?.service_breakdown ?? []} />
+                <RevenueChart data={stats?.service_breakdown ?? []} chain={chain} />
               )}
             </Section>
           </ChartRow>
@@ -414,7 +418,7 @@ export default function DashboardPage() {
                             gap: 16,
                           }}
                         >
-                          <Price>{svc.price} sats</Price>
+                          <Price>{formatAmount(svc.price, chain).value} {unitLabel(chain)}</Price>
                           {rev > 0 && (
                             <Earned>{rev.toLocaleString()} earned</Earned>
                           )}

@@ -13,6 +13,7 @@ import { toast } from "@/components/Toast";
 import type { ServiceCreateRequest, AuthScheme } from "@/lib/types";
 import { authSchemeLabels } from "@/lib/types";
 import { useInfo } from "@/lib/api";
+import { formatAmount, unitLabel, baseUnitLabel } from "@/lib/currency";
 import Button from "@/components/Button";
 import PageHeader from "@/components/PageHeader";
 import EmptyState from "@/components/EmptyState";
@@ -239,6 +240,8 @@ export default function ServicesPage() {
     error: servicesError,
     mutate: refreshServices,
   } = useServices();
+  const { data: info } = useInfo();
+  const chain = info?.chain;
   const { sorted, sortField, sortDir, onSort } = useSort(services, "name");
   const [editingPrice, setEditingPrice] = useState<string | null>(null);
   const [priceValue, setPriceValue] = useState("");
@@ -254,7 +257,7 @@ export default function ServicesPage() {
       setSaving(true);
       try {
         await updateService(name, { price });
-        toast(`Price updated to ${price} sats`);
+        toast(`Price updated to ${formatAmount(price, chain).value} ${unitLabel(chain)}`);
       } catch (e: unknown) {
         toast(
           e instanceof Error ? e.message : "Failed to update price",
@@ -435,8 +438,8 @@ export default function ServicesPage() {
             <Grid2>
               <div>
                 <Label>
-                  Price (sats)
-                  <Tooltip text="Cost per request in satoshis. Clients pay a Lightning invoice for this amount to receive an L402 access token." />
+                  Price ({baseUnitLabel(chain)})
+                  <Tooltip text={`Cost per request in ${baseUnitLabel(chain)} — the base unit of the connected chain. Clients pay a Lightning invoice for this amount to receive an L402 access token.`} />
                 </Label>
                 <Input
                   type="number"
@@ -650,7 +653,7 @@ export default function ServicesPage() {
                           }}
                           title="Click to edit"
                         >
-                          {svc.price.toLocaleString()} sats
+                          {formatAmount(svc.price, chain).value} {unitLabel(chain)}
                         </EditablePrice>
                       )}
                     </PriceCell>

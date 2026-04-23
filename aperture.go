@@ -201,6 +201,11 @@ type Aperture struct {
 	proxyCleanup  func()
 	adminCleanup  func()
 
+	// lndChain is the blockchain name (e.g. "bitcoin", "sui") reported
+	// by the connected lnd at startup. Cached so the admin API can
+	// expose it without issuing a fresh GetInfo on every request.
+	lndChain string
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -371,6 +376,42 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				return err
 			}
 
+			// Query lnd's chain so the admin API can expose it
+			// (dashboard uses this to pick "SUI" vs "sats" as
+			// the unit label). GetInfo requires info:read, which
+			// invoice.macaroon lacks, so we open a separate
+			// read-only client just for this call. Best-effort:
+			// if readonly.macaroon is missing or the call fails,
+			// we proceed with an empty chain and log a warning.
+			readClient, roErr := lndclient.NewBasicClient(
+				authCfg.LndHost, authCfg.TLSPath,
+				authCfg.MacDir, authCfg.Network,
+				lndclient.MacFilename("readonly.macaroon"),
+			)
+			if roErr != nil {
+				log.Warnf("skip chain detection: cannot "+
+					"open readonly lnd client: %v", roErr)
+			} else {
+				infoCtx, cancelInfo := context.WithTimeout(
+					context.Background(), 5*time.Second,
+				)
+				infoResp, infoErr := readClient.GetInfo(
+					infoCtx, &lnrpc.GetInfoRequest{},
+				)
+				cancelInfo()
+				if infoErr != nil {
+					log.Warnf("unable to query lnd "+
+						"GetInfo for chain "+
+						"detection: %v", infoErr)
+				} else if len(infoResp.Chains) > 0 {
+					a.lndChain = infoResp.Chains[0].Chain
+					log.Infof("Connected lnd reports "+
+						"chain=%q network=%q",
+						a.lndChain,
+						infoResp.Chains[0].Network)
+				}
+			}
+
 			a.challenger, err = challenger.NewLndChallenger(
 				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
 				context.Background, errChan, a.cfg.StrictVerify,
@@ -394,6 +435,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
 			a.cfg, txnStore, secretStore, svcStore,
+			a.lndChain,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
 				if err := a.UpdateServices(s); err != nil {
@@ -976,6 +1018,7 @@ func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
 	svcStore *aperturedb.ServicesStore,
+	lndChain string,
 	getServices func() []*proxy.Service,
 	updateServices func([]*proxy.Service) error) (
 	[]proxy.LocalService, []proxy.LocalService, func(), error) {
@@ -1052,6 +1095,7 @@ func createAdminServer(cfg *Config,
 		MPPEnabled:       cfg.Authenticator.EnableMPP,
 		SessionsEnabled:  cfg.Authenticator.EnableSessions,
 		MPPRealm:         cfg.Authenticator.MPPRealm,
+		Chain:            lndChain,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)

@@ -34,6 +34,11 @@ message GetInfoResponse {
 
   // mpp_realm is the realm string used in MPP challenge headers.
   string mpp_realm = 6;
+
+  // chain is the underlying blockchain the connected lnd is running on,
+  // as reported by lnd's GetInfo.chains[0].chain (e.g. "bitcoin", "sui").
+  // Empty if lnd could not be queried at startup.
+  string chain = 7;
 }
 
 message GetHealthRequest {}
