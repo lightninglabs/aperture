@@ -1001,6 +1001,32 @@ func buildChallengerOpts(
 				}
 			},
 		))
+
+		// When lnd observes an invoice reaching a terminal non-
+		// settled state (canceled or past-expiry + unpaid), flip
+		// any matching pending rows in our transaction store to
+		// "expired". Without this the abandoned sibling invoices
+		// that accompany every dual-scheme 402 (L402 + MPP, or
+		// L402 + MPP-charge + MPP-session) would pile up forever
+		// in pending state and skew admin reports.
+		opts = append(opts, challenger.WithExpirationCallback(
+			func(hash lntypes.Hash) {
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					aperturedb.DefaultStoreTimeout,
+				)
+				defer cancel()
+
+				err := txnStore.ExpireTransaction(
+					ctx, hash[:],
+				)
+				if err != nil {
+					log.Errorf("Error expiring "+
+						"transaction (hash=%x): %v",
+						hash[:], err)
+				}
+			},
+		))
 	}
 
 	return opts
