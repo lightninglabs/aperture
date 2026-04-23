@@ -248,13 +248,16 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}()
 	}
 
+	// mppSessionStore is held as the concrete *MPPSessionsStore so the
+	// admin API can surface session lists / stats. It still satisfies
+	// the auth.SessionStore interface used by the MPP authenticator.
 	var (
 		secretStore     mint.SecretStore
 		onionStore      tor.OnionStore
 		lncStore        lnc.Store
 		txnStore        *aperturedb.L402TransactionsStore
 		svcStore        *aperturedb.ServicesStore
-		mppSessionStore auth.SessionStore
+		mppSessionStore *aperturedb.MPPSessionsStore
 	)
 
 	// Connect to the chosen database backend.
@@ -435,6 +438,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
 			a.cfg, txnStore, secretStore, svcStore,
+			mppSessionStore,
 			a.lndChain,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
@@ -1044,6 +1048,7 @@ func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
 	svcStore *aperturedb.ServicesStore,
+	sessionStore *aperturedb.MPPSessionsStore,
 	lndChain string,
 	getServices func() []*proxy.Service,
 	updateServices func([]*proxy.Service) error) (
@@ -1122,6 +1127,7 @@ func createAdminServer(cfg *Config,
 		SessionsEnabled:  cfg.Authenticator.EnableSessions,
 		MPPRealm:         cfg.Authenticator.MPPRealm,
 		Chain:            lndChain,
+		SessionStore:     sessionStore,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)
@@ -1394,6 +1400,10 @@ func createAdminServer(cfg *Config,
 			},
 			"name": func(v string) bool {
 				return safeQueryValue(v, 128)
+			},
+			// MPP session list filter: "open" | "closed" | "".
+			"status": func(v string) bool {
+				return safeQueryValue(v, 16)
 			},
 		}
 

@@ -25,3 +25,7 @@ http:
       delete: "/api/admin/tokens/{token_id}"
     - selector: adminrpc.Admin.GetStats
       get: "/api/admin/stats"
+    - selector: adminrpc.Admin.ListSessions
+      get: "/api/admin/sessions"
+    - selector: adminrpc.Admin.GetSessionStats
+      get: "/api/admin/sessions/stats"

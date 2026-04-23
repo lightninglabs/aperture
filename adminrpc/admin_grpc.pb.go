@@ -29,6 +29,8 @@ const (
 	Admin_ListTokens_FullMethodName       = "/adminrpc.Admin/ListTokens"
 	Admin_RevokeToken_FullMethodName      = "/adminrpc.Admin/RevokeToken"
 	Admin_GetStats_FullMethodName         = "/adminrpc.Admin/GetStats"
+	Admin_ListSessions_FullMethodName     = "/adminrpc.Admin/ListSessions"
+	Admin_GetSessionStats_FullMethodName  = "/adminrpc.Admin/GetSessionStats"
 )
 
 // AdminClient is the client API for Admin service.
@@ -45,6 +47,14 @@ type AdminClient interface {
 	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
 	RevokeToken(ctx context.Context, in *RevokeTokenRequest, opts ...grpc.CallOption) (*RevokeTokenResponse, error)
 	GetStats(ctx context.Context, in *GetStatsRequest, opts ...grpc.CallOption) (*GetStatsResponse, error)
+	// ListSessions returns MPP prepaid sessions (open + closed). Amounts
+	// are in the chain's base unit — clients pair with GetInfo.chain to
+	// decide display units.
+	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
+	// GetSessionStats returns aggregate counters across all MPP sessions
+	// (count by status, total deposits/spent, open balance). Complements
+	// GetStats which only covers L402 charge-intent transactions.
+	GetSessionStats(ctx context.Context, in *GetSessionStatsRequest, opts ...grpc.CallOption) (*GetSessionStatsResponse, error)
 }
 
 type adminClient struct {
@@ -155,6 +165,26 @@ func (c *adminClient) GetStats(ctx context.Context, in *GetStatsRequest, opts ..
 	return out, nil
 }
 
+func (c *adminClient) ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsResponse)
+	err := c.cc.Invoke(ctx, Admin_ListSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminClient) GetSessionStats(ctx context.Context, in *GetSessionStatsRequest, opts ...grpc.CallOption) (*GetSessionStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionStatsResponse)
+	err := c.cc.Invoke(ctx, Admin_GetSessionStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AdminServer is the server API for Admin service.
 // All implementations must embed UnimplementedAdminServer
 // for forward compatibility.
@@ -169,6 +199,14 @@ type AdminServer interface {
 	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
 	RevokeToken(context.Context, *RevokeTokenRequest) (*RevokeTokenResponse, error)
 	GetStats(context.Context, *GetStatsRequest) (*GetStatsResponse, error)
+	// ListSessions returns MPP prepaid sessions (open + closed). Amounts
+	// are in the chain's base unit — clients pair with GetInfo.chain to
+	// decide display units.
+	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
+	// GetSessionStats returns aggregate counters across all MPP sessions
+	// (count by status, total deposits/spent, open balance). Complements
+	// GetStats which only covers L402 charge-intent transactions.
+	GetSessionStats(context.Context, *GetSessionStatsRequest) (*GetSessionStatsResponse, error)
 	mustEmbedUnimplementedAdminServer()
 }
 
@@ -208,6 +246,12 @@ func (UnimplementedAdminServer) RevokeToken(context.Context, *RevokeTokenRequest
 }
 func (UnimplementedAdminServer) GetStats(context.Context, *GetStatsRequest) (*GetStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStats not implemented")
+}
+func (UnimplementedAdminServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
+}
+func (UnimplementedAdminServer) GetSessionStats(context.Context, *GetSessionStatsRequest) (*GetSessionStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionStats not implemented")
 }
 func (UnimplementedAdminServer) mustEmbedUnimplementedAdminServer() {}
 func (UnimplementedAdminServer) testEmbeddedByValue()               {}
@@ -410,6 +454,42 @@ func _Admin_GetStats_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Admin_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServer).ListSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Admin_ListSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Admin_GetSessionStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServer).GetSessionStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Admin_GetSessionStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServer).GetSessionStats(ctx, req.(*GetSessionStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Admin_ServiceDesc is the grpc.ServiceDesc for Admin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -456,6 +536,14 @@ var Admin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStats",
 			Handler:    _Admin_GetStats_Handler,
+		},
+		{
+			MethodName: "ListSessions",
+			Handler:    _Admin_ListSessions_Handler,
+		},
+		{
+			MethodName: "GetSessionStats",
+			Handler:    _Admin_GetSessionStats_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

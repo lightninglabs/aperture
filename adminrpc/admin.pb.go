@@ -1358,6 +1358,362 @@ func (x *ServiceRevenue) GetTotalRevenueSats() int64 {
 	return 0
 }
 
+// MPPSession mirrors the on-server session record for the admin API.
+// Payment hash is hex-encoded. Amounts are in the chain's base unit.
+type MPPSession struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	SessionId   string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	PaymentHash string                 `protobuf:"bytes,2,opt,name=payment_hash,json=paymentHash,proto3" json:"payment_hash,omitempty"`
+	DepositSats int64                  `protobuf:"varint,3,opt,name=deposit_sats,json=depositSats,proto3" json:"deposit_sats,omitempty"`
+	SpentSats   int64                  `protobuf:"varint,4,opt,name=spent_sats,json=spentSats,proto3" json:"spent_sats,omitempty"`
+	// balance_sats is deposit_sats - spent_sats. Meaningful for open
+	// sessions; on closed ones this is what was refunded at close time.
+	BalanceSats   int64  `protobuf:"varint,5,opt,name=balance_sats,json=balanceSats,proto3" json:"balance_sats,omitempty"`
+	ReturnInvoice string `protobuf:"bytes,6,opt,name=return_invoice,json=returnInvoice,proto3" json:"return_invoice,omitempty"`
+	// status is "open" or "closed".
+	Status string `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
+	// created_at / updated_at are RFC 3339 timestamps.
+	CreatedAt     string `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     string `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MPPSession) Reset() {
+	*x = MPPSession{}
+	mi := &file_admin_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MPPSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MPPSession) ProtoMessage() {}
+
+func (x *MPPSession) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MPPSession.ProtoReflect.Descriptor instead.
+func (*MPPSession) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *MPPSession) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *MPPSession) GetPaymentHash() string {
+	if x != nil {
+		return x.PaymentHash
+	}
+	return ""
+}
+
+func (x *MPPSession) GetDepositSats() int64 {
+	if x != nil {
+		return x.DepositSats
+	}
+	return 0
+}
+
+func (x *MPPSession) GetSpentSats() int64 {
+	if x != nil {
+		return x.SpentSats
+	}
+	return 0
+}
+
+func (x *MPPSession) GetBalanceSats() int64 {
+	if x != nil {
+		return x.BalanceSats
+	}
+	return 0
+}
+
+func (x *MPPSession) GetReturnInvoice() string {
+	if x != nil {
+		return x.ReturnInvoice
+	}
+	return ""
+}
+
+func (x *MPPSession) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *MPPSession) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *MPPSession) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+type ListSessionsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// status filters by "open" or "closed". Empty returns all.
+	Status string `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	// limit defaults to 50 when zero. Max is 1000.
+	Limit int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	// offset is 0-based.
+	Offset        int32 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsRequest) Reset() {
+	*x = ListSessionsRequest{}
+	mi := &file_admin_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsRequest) ProtoMessage() {}
+
+func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
+func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ListSessionsRequest) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ListSessionsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListSessionsRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+type ListSessionsResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Sessions []*MPPSession          `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	// total is the count matching status filter, ignoring pagination.
+	Total         int64 `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsResponse) Reset() {
+	*x = ListSessionsResponse{}
+	mi := &file_admin_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsResponse) ProtoMessage() {}
+
+func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
+func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ListSessionsResponse) GetSessions() []*MPPSession {
+	if x != nil {
+		return x.Sessions
+	}
+	return nil
+}
+
+func (x *ListSessionsResponse) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+type GetSessionStatsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionStatsRequest) Reset() {
+	*x = GetSessionStatsRequest{}
+	mi := &file_admin_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionStatsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionStatsRequest) ProtoMessage() {}
+
+func (x *GetSessionStatsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionStatsRequest.ProtoReflect.Descriptor instead.
+func (*GetSessionStatsRequest) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{24}
+}
+
+type GetSessionStatsResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TotalSessions  int64                  `protobuf:"varint,1,opt,name=total_sessions,json=totalSessions,proto3" json:"total_sessions,omitempty"`
+	OpenSessions   int64                  `protobuf:"varint,2,opt,name=open_sessions,json=openSessions,proto3" json:"open_sessions,omitempty"`
+	ClosedSessions int64                  `protobuf:"varint,3,opt,name=closed_sessions,json=closedSessions,proto3" json:"closed_sessions,omitempty"`
+	// total_deposit_sats is the lifetime sum of deposits across all
+	// sessions (open + closed).
+	TotalDepositSats int64 `protobuf:"varint,4,opt,name=total_deposit_sats,json=totalDepositSats,proto3" json:"total_deposit_sats,omitempty"`
+	// total_spent_sats is the actual revenue — satoshis consumed by
+	// bearer requests.
+	TotalSpentSats int64 `protobuf:"varint,5,opt,name=total_spent_sats,json=totalSpentSats,proto3" json:"total_spent_sats,omitempty"`
+	// open_balance_sats is the sum of deposit_sats - spent_sats over
+	// sessions still in the open state (prepaid balance owed to clients).
+	OpenBalanceSats int64 `protobuf:"varint,6,opt,name=open_balance_sats,json=openBalanceSats,proto3" json:"open_balance_sats,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GetSessionStatsResponse) Reset() {
+	*x = GetSessionStatsResponse{}
+	mi := &file_admin_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionStatsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionStatsResponse) ProtoMessage() {}
+
+func (x *GetSessionStatsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionStatsResponse.ProtoReflect.Descriptor instead.
+func (*GetSessionStatsResponse) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *GetSessionStatsResponse) GetTotalSessions() int64 {
+	if x != nil {
+		return x.TotalSessions
+	}
+	return 0
+}
+
+func (x *GetSessionStatsResponse) GetOpenSessions() int64 {
+	if x != nil {
+		return x.OpenSessions
+	}
+	return 0
+}
+
+func (x *GetSessionStatsResponse) GetClosedSessions() int64 {
+	if x != nil {
+		return x.ClosedSessions
+	}
+	return 0
+}
+
+func (x *GetSessionStatsResponse) GetTotalDepositSats() int64 {
+	if x != nil {
+		return x.TotalDepositSats
+	}
+	return 0
+}
+
+func (x *GetSessionStatsResponse) GetTotalSpentSats() int64 {
+	if x != nil {
+		return x.TotalSpentSats
+	}
+	return 0
+}
+
+func (x *GetSessionStatsResponse) GetOpenBalanceSats() int64 {
+	if x != nil {
+		return x.OpenBalanceSats
+	}
+	return 0
+}
+
 var File_admin_proto protoreflect.FileDescriptor
 
 const file_admin_proto_rawDesc = "" +
@@ -1466,12 +1822,42 @@ const file_admin_proto_rawDesc = "" +
 	"\x11service_breakdown\x18\x03 \x03(\v2\x18.adminrpc.ServiceRevenueR\x10serviceBreakdown\"a\n" +
 	"\x0eServiceRevenue\x12!\n" +
 	"\fservice_name\x18\x01 \x01(\tR\vserviceName\x12,\n" +
-	"\x12total_revenue_sats\x18\x02 \x01(\x03R\x10totalRevenueSats*Q\n" +
+	"\x12total_revenue_sats\x18\x02 \x01(\x03R\x10totalRevenueSats\"\xb0\x02\n" +
+	"\n" +
+	"MPPSession\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
+	"\fpayment_hash\x18\x02 \x01(\tR\vpaymentHash\x12!\n" +
+	"\fdeposit_sats\x18\x03 \x01(\x03R\vdepositSats\x12\x1d\n" +
+	"\n" +
+	"spent_sats\x18\x04 \x01(\x03R\tspentSats\x12!\n" +
+	"\fbalance_sats\x18\x05 \x01(\x03R\vbalanceSats\x12%\n" +
+	"\x0ereturn_invoice\x18\x06 \x01(\tR\rreturnInvoice\x12\x16\n" +
+	"\x06status\x18\a \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\b \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\t \x01(\tR\tupdatedAt\"[\n" +
+	"\x13ListSessionsRequest\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x05R\x06offset\"^\n" +
+	"\x14ListSessionsResponse\x120\n" +
+	"\bsessions\x18\x01 \x03(\v2\x14.adminrpc.MPPSessionR\bsessions\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\x18\n" +
+	"\x16GetSessionStatsRequest\"\x92\x02\n" +
+	"\x17GetSessionStatsResponse\x12%\n" +
+	"\x0etotal_sessions\x18\x01 \x01(\x03R\rtotalSessions\x12#\n" +
+	"\ropen_sessions\x18\x02 \x01(\x03R\fopenSessions\x12'\n" +
+	"\x0fclosed_sessions\x18\x03 \x01(\x03R\x0eclosedSessions\x12,\n" +
+	"\x12total_deposit_sats\x18\x04 \x01(\x03R\x10totalDepositSats\x12(\n" +
+	"\x10total_spent_sats\x18\x05 \x01(\x03R\x0etotalSpentSats\x12*\n" +
+	"\x11open_balance_sats\x18\x06 \x01(\x03R\x0fopenBalanceSats*Q\n" +
 	"\n" +
 	"AuthScheme\x12\x14\n" +
 	"\x10AUTH_SCHEME_L402\x10\x00\x12\x13\n" +
 	"\x0fAUTH_SCHEME_MPP\x10\x01\x12\x18\n" +
-	"\x14AUTH_SCHEME_L402_MPP\x10\x022\xe9\x05\n" +
+	"\x14AUTH_SCHEME_L402_MPP\x10\x022\x90\a\n" +
 	"\x05Admin\x12>\n" +
 	"\aGetInfo\x12\x18.adminrpc.GetInfoRequest\x1a\x19.adminrpc.GetInfoResponse\x12D\n" +
 	"\tGetHealth\x12\x1a.adminrpc.GetHealthRequest\x1a\x1b.adminrpc.GetHealthResponse\x12M\n" +
@@ -1483,7 +1869,9 @@ const file_admin_proto_rawDesc = "" +
 	"\n" +
 	"ListTokens\x12\x1b.adminrpc.ListTokensRequest\x1a\x1c.adminrpc.ListTokensResponse\x12J\n" +
 	"\vRevokeToken\x12\x1c.adminrpc.RevokeTokenRequest\x1a\x1d.adminrpc.RevokeTokenResponse\x12A\n" +
-	"\bGetStats\x12\x19.adminrpc.GetStatsRequest\x1a\x1a.adminrpc.GetStatsResponseB,Z*github.com/lightninglabs/aperture/adminrpcb\x06proto3"
+	"\bGetStats\x12\x19.adminrpc.GetStatsRequest\x1a\x1a.adminrpc.GetStatsResponse\x12M\n" +
+	"\fListSessions\x12\x1d.adminrpc.ListSessionsRequest\x1a\x1e.adminrpc.ListSessionsResponse\x12V\n" +
+	"\x0fGetSessionStats\x12 .adminrpc.GetSessionStatsRequest\x1a!.adminrpc.GetSessionStatsResponseB,Z*github.com/lightninglabs/aperture/adminrpcb\x06proto3"
 
 var (
 	file_admin_proto_rawDescOnce sync.Once
@@ -1498,7 +1886,7 @@ func file_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_admin_proto_goTypes = []any{
 	(AuthScheme)(0),                  // 0: adminrpc.AuthScheme
 	(*GetInfoRequest)(nil),           // 1: adminrpc.GetInfoRequest
@@ -1522,6 +1910,11 @@ var file_admin_proto_goTypes = []any{
 	(*GetStatsRequest)(nil),          // 19: adminrpc.GetStatsRequest
 	(*GetStatsResponse)(nil),         // 20: adminrpc.GetStatsResponse
 	(*ServiceRevenue)(nil),           // 21: adminrpc.ServiceRevenue
+	(*MPPSession)(nil),               // 22: adminrpc.MPPSession
+	(*ListSessionsRequest)(nil),      // 23: adminrpc.ListSessionsRequest
+	(*ListSessionsResponse)(nil),     // 24: adminrpc.ListSessionsResponse
+	(*GetSessionStatsRequest)(nil),   // 25: adminrpc.GetSessionStatsRequest
+	(*GetSessionStatsResponse)(nil),  // 26: adminrpc.GetSessionStatsResponse
 }
 var file_admin_proto_depIdxs = []int32{
 	7,  // 0: adminrpc.ListServicesResponse.services:type_name -> adminrpc.Service
@@ -1531,31 +1924,36 @@ var file_admin_proto_depIdxs = []int32{
 	14, // 4: adminrpc.ListTransactionsResponse.transactions:type_name -> adminrpc.Transaction
 	14, // 5: adminrpc.ListTokensResponse.tokens:type_name -> adminrpc.Transaction
 	21, // 6: adminrpc.GetStatsResponse.service_breakdown:type_name -> adminrpc.ServiceRevenue
-	1,  // 7: adminrpc.Admin.GetInfo:input_type -> adminrpc.GetInfoRequest
-	3,  // 8: adminrpc.Admin.GetHealth:input_type -> adminrpc.GetHealthRequest
-	5,  // 9: adminrpc.Admin.ListServices:input_type -> adminrpc.ListServicesRequest
-	8,  // 10: adminrpc.Admin.CreateService:input_type -> adminrpc.CreateServiceRequest
-	9,  // 11: adminrpc.Admin.UpdateService:input_type -> adminrpc.UpdateServiceRequest
-	10, // 12: adminrpc.Admin.DeleteService:input_type -> adminrpc.DeleteServiceRequest
-	12, // 13: adminrpc.Admin.ListTransactions:input_type -> adminrpc.ListTransactionsRequest
-	15, // 14: adminrpc.Admin.ListTokens:input_type -> adminrpc.ListTokensRequest
-	17, // 15: adminrpc.Admin.RevokeToken:input_type -> adminrpc.RevokeTokenRequest
-	19, // 16: adminrpc.Admin.GetStats:input_type -> adminrpc.GetStatsRequest
-	2,  // 17: adminrpc.Admin.GetInfo:output_type -> adminrpc.GetInfoResponse
-	4,  // 18: adminrpc.Admin.GetHealth:output_type -> adminrpc.GetHealthResponse
-	6,  // 19: adminrpc.Admin.ListServices:output_type -> adminrpc.ListServicesResponse
-	7,  // 20: adminrpc.Admin.CreateService:output_type -> adminrpc.Service
-	7,  // 21: adminrpc.Admin.UpdateService:output_type -> adminrpc.Service
-	11, // 22: adminrpc.Admin.DeleteService:output_type -> adminrpc.DeleteServiceResponse
-	13, // 23: adminrpc.Admin.ListTransactions:output_type -> adminrpc.ListTransactionsResponse
-	16, // 24: adminrpc.Admin.ListTokens:output_type -> adminrpc.ListTokensResponse
-	18, // 25: adminrpc.Admin.RevokeToken:output_type -> adminrpc.RevokeTokenResponse
-	20, // 26: adminrpc.Admin.GetStats:output_type -> adminrpc.GetStatsResponse
-	17, // [17:27] is the sub-list for method output_type
-	7,  // [7:17] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	22, // 7: adminrpc.ListSessionsResponse.sessions:type_name -> adminrpc.MPPSession
+	1,  // 8: adminrpc.Admin.GetInfo:input_type -> adminrpc.GetInfoRequest
+	3,  // 9: adminrpc.Admin.GetHealth:input_type -> adminrpc.GetHealthRequest
+	5,  // 10: adminrpc.Admin.ListServices:input_type -> adminrpc.ListServicesRequest
+	8,  // 11: adminrpc.Admin.CreateService:input_type -> adminrpc.CreateServiceRequest
+	9,  // 12: adminrpc.Admin.UpdateService:input_type -> adminrpc.UpdateServiceRequest
+	10, // 13: adminrpc.Admin.DeleteService:input_type -> adminrpc.DeleteServiceRequest
+	12, // 14: adminrpc.Admin.ListTransactions:input_type -> adminrpc.ListTransactionsRequest
+	15, // 15: adminrpc.Admin.ListTokens:input_type -> adminrpc.ListTokensRequest
+	17, // 16: adminrpc.Admin.RevokeToken:input_type -> adminrpc.RevokeTokenRequest
+	19, // 17: adminrpc.Admin.GetStats:input_type -> adminrpc.GetStatsRequest
+	23, // 18: adminrpc.Admin.ListSessions:input_type -> adminrpc.ListSessionsRequest
+	25, // 19: adminrpc.Admin.GetSessionStats:input_type -> adminrpc.GetSessionStatsRequest
+	2,  // 20: adminrpc.Admin.GetInfo:output_type -> adminrpc.GetInfoResponse
+	4,  // 21: adminrpc.Admin.GetHealth:output_type -> adminrpc.GetHealthResponse
+	6,  // 22: adminrpc.Admin.ListServices:output_type -> adminrpc.ListServicesResponse
+	7,  // 23: adminrpc.Admin.CreateService:output_type -> adminrpc.Service
+	7,  // 24: adminrpc.Admin.UpdateService:output_type -> adminrpc.Service
+	11, // 25: adminrpc.Admin.DeleteService:output_type -> adminrpc.DeleteServiceResponse
+	13, // 26: adminrpc.Admin.ListTransactions:output_type -> adminrpc.ListTransactionsResponse
+	16, // 27: adminrpc.Admin.ListTokens:output_type -> adminrpc.ListTokensResponse
+	18, // 28: adminrpc.Admin.RevokeToken:output_type -> adminrpc.RevokeTokenResponse
+	20, // 29: adminrpc.Admin.GetStats:output_type -> adminrpc.GetStatsResponse
+	24, // 30: adminrpc.Admin.ListSessions:output_type -> adminrpc.ListSessionsResponse
+	26, // 31: adminrpc.Admin.GetSessionStats:output_type -> adminrpc.GetSessionStatsResponse
+	20, // [20:32] is the sub-list for method output_type
+	8,  // [8:20] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_admin_proto_init() }
@@ -1570,7 +1968,7 @@ func file_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   21,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
