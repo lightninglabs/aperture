@@ -387,13 +387,21 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// file services so that runtime changes survive restarts.
 	initialServices := mergeServicesFromDB(a.cfg.Services, svcStore)
 
+	// Always initialize the admin macaroon and root key so that the
+	// CLI can authenticate regardless of whether the full admin
+	// dashboard is enabled.
+	rootKey, err := initAdminMacaroon(a.cfg)
+	if err != nil {
+		return err
+	}
+
 	// Create a synchronized services holder so the admin server can
 	// safely read and update the service list concurrently with the
 	// proxy.
 	svcHolder := &serviceHolder{services: initialServices}
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
-			a.cfg, txnStore, secretStore, svcStore,
+			a.cfg, rootKey, txnStore, secretStore, svcStore,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
 				if err := a.UpdateServices(s); err != nil {
@@ -954,6 +962,53 @@ func buildChallengerOpts(
 	return opts
 }
 
+// initAdminMacaroon initializes the admin root key and macaroon on disk if
+// they do not already exist. This is called unconditionally during startup so
+// that the CLI can always locate a valid credential file, regardless of
+// whether the admin dashboard is enabled.
+func initAdminMacaroon(cfg *Config) ([]byte, error) {
+	macPath := ""
+	if cfg.Admin != nil {
+		macPath = cfg.Admin.MacaroonPath
+	}
+	if macPath == "" {
+		macPath = filepath.Join(
+			apertureDataDir, defaultAdminMacaroonFilename,
+		)
+	}
+
+	rootKeyPath := strings.TrimSuffix(macPath, ".macaroon") +
+		".rootkey"
+
+	rootKey, err := admin.ReadOrCreateRootKey(rootKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to initialize admin root "+
+			"key: %v", err)
+	}
+
+	// Generate the admin macaroon and write it to disk only if it does
+	// not already exist. The root key is persisted separately, so an
+	// existing macaroon file remains valid across restarts.
+	if _, statErr := os.Stat(macPath); os.IsNotExist(statErr) {
+		mac, err := admin.GenerateAdminMacaroon(rootKey)
+		if err != nil {
+			return nil, fmt.Errorf("unable to generate admin "+
+				"macaroon: %v", err)
+		}
+
+		if err := admin.WriteAdminMacaroon(mac, macPath); err != nil {
+			return nil, fmt.Errorf("unable to write admin "+
+				"macaroon: %v", err)
+		}
+
+		log.Infof("Admin macaroon written to %s", macPath)
+	} else {
+		log.Infof("Admin macaroon already exists at %s", macPath)
+	}
+
+	return rootKey, nil
+}
+
 // createAdminServer creates the admin gRPC server and REST gateway following
 // the same pattern as createHashMailServer. It returns two slices of local
 // services: priority services (prefix-matched handlers like the gRPC, REST,
@@ -962,7 +1017,7 @@ func buildChallengerOpts(
 // backend matching fails).
 //
 //nolint:gocyclo
-func createAdminServer(cfg *Config,
+func createAdminServer(cfg *Config, rootKey []byte,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
 	svcStore *aperturedb.ServicesStore,
@@ -970,54 +1025,11 @@ func createAdminServer(cfg *Config,
 	updateServices func([]*proxy.Service) error) (
 	[]proxy.LocalService, []proxy.LocalService, func(), error) {
 
-	if cfg.Admin == nil || !cfg.Admin.Enabled {
-		return nil, nil, func() {}, nil
-	}
-
 	if txnStore == nil {
-		log.Warnf("Admin API is enabled but the transaction store " +
-			"is not available (etcd backend does not support " +
-			"it). Admin API will not start.")
+		log.Warnf("Admin API cannot start: the transaction " +
+			"store is not available (etcd backend does not " +
+			"support it).")
 		return nil, nil, func() {}, nil
-	}
-
-	// Determine the admin root key. The root key is stored on disk as a
-	// random 32-byte value alongside the macaroon. This avoids storing
-	// the key in the shared SecretStore where its lookup hash would be
-	// publicly derivable.
-	macPath := cfg.Admin.MacaroonPath
-	if macPath == "" {
-		macPath = filepath.Join(
-			apertureDataDir, defaultAdminMacaroonFilename,
-		)
-	}
-	rootKeyPath := strings.TrimSuffix(macPath, ".macaroon") +
-		".rootkey"
-
-	rootKey, err := admin.ReadOrCreateRootKey(rootKeyPath)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to initialize "+
-			"admin root key: %v", err)
-	}
-
-	// Generate the admin macaroon and write it to disk only if it
-	// doesn't already exist. The root key is persisted, so an existing
-	// macaroon file is still valid.
-	if _, statErr := os.Stat(macPath); os.IsNotExist(statErr) {
-		mac, err := admin.GenerateAdminMacaroon(rootKey)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("unable to generate "+
-				"admin macaroon: %v", err)
-		}
-
-		if err := admin.WriteAdminMacaroon(mac, macPath); err != nil {
-			return nil, nil, nil, fmt.Errorf("unable to write "+
-				"admin macaroon: %v", err)
-		}
-
-		log.Infof("Admin macaroon written to %s", macPath)
-	} else {
-		log.Infof("Admin macaroon already exists at %s", macPath)
 	}
 
 	// Create the gRPC server with macaroon authentication.
@@ -1095,7 +1107,7 @@ func createAdminServer(cfg *Config,
 	// REST requests go through the full gRPC interceptor chain,
 	// including macaroon authentication.
 	mux := gateway.NewServeMux(customMarshalerOption)
-	err = adminrpc.RegisterAdminHandlerFromEndpoint(
+	err := adminrpc.RegisterAdminHandlerFromEndpoint(
 		ctxc, mux, dialAddr, []grpc.DialOption{
 			restProxyTLSOpt,
 		},
@@ -1105,7 +1117,11 @@ func createAdminServer(cfg *Config,
 		return nil, nil, nil, err
 	}
 
-	corsHandler := allowCORS(mux, cfg.Admin.CORSOrigins)
+	var corsOrigins []string
+	if cfg.Admin != nil {
+		corsOrigins = cfg.Admin.CORSOrigins
+	}
+	corsHandler := allowCORS(mux, corsOrigins)
 	priorityServices = append(priorityServices, proxy.NewLocalService(
 		corsHandler, func(r *http.Request) bool {
 			return strings.HasPrefix(
@@ -1116,339 +1132,343 @@ func createAdminServer(cfg *Config,
 
 	log.Infof("Admin gRPC/REST API enabled")
 
-	// Wire the embedded dashboard if it was compiled in (build tag
-	// !nodashboard). When nil, the dashboard is not served.
-	dashFS, err := DashboardFS()
-	if err != nil {
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("unable to load embedded "+
-			"dashboard: %w", err)
-	}
-
-	if dashFS != nil {
-		// Generate a macaroon from the root key to attach to
-		// server-side proxied requests to the admin REST API.
-		mac, err := admin.GenerateAdminMacaroon(rootKey)
-		if err != nil {
+	// Wire the embedded dashboard only when the admin dashboard is
+	// explicitly enabled via config. The gRPC/REST API above is
+	// always active, but the dashboard is an optional UI layer.
+	dashboardEnabled := cfg.Admin != nil && cfg.Admin.Enabled
+	if dashboardEnabled {
+		dashFS, dashErr := DashboardFS()
+		if dashErr != nil {
 			cleanup()
-			return nil, nil, nil, fmt.Errorf("unable to generate "+
-				"dashboard macaroon: %w", err)
-		}
-		macBytes, err := mac.MarshalBinary()
-		if err != nil {
-			cleanup()
-			return nil, nil, nil, fmt.Errorf("unable to marshal "+
-				"dashboard macaroon: %w", err)
-		}
-		macHex := hex.EncodeToString(macBytes)
-
-		// dashboardProxyPrefix is the path the dashboard JS uses to
-		// reach the admin REST API. The Go server strips this prefix
-		// and forwards internally to adminRESTPrefix.
-		const dashboardProxyPrefix = "/api/proxy/"
-
-		// requireLoopback rejects requests that do not originate
-		// from a loopback address (127.0.0.1 / ::1). The
-		// dashboard proxy injects admin credentials server-side,
-		// so it must only be accessible locally.
-		requireLoopback := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(
-				func(w http.ResponseWriter, r *http.Request) {
-					host, _, err := net.SplitHostPort(
-						r.RemoteAddr,
-					)
-					if err != nil {
-						http.Error(
-							w, "forbidden",
-							http.StatusForbidden,
-						)
-						return
-					}
-					ip := net.ParseIP(host)
-					if ip == nil || !ip.IsLoopback() {
-						http.Error(
-							w, "forbidden",
-							http.StatusForbidden,
-						)
-						return
-					}
-					next.ServeHTTP(w, r)
-				},
-			)
+			return nil, nil, nil, fmt.Errorf("unable to load "+
+				"embedded dashboard: %w", dashErr)
 		}
 
-		// addSecurityHeaders wraps a handler to set standard
-		// browser security headers on every response.
-		addSecurityHeaders := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(
-				func(w http.ResponseWriter, r *http.Request) {
-					w.Header().Set(
-						"X-Frame-Options", "DENY",
-					)
-					w.Header().Set(
-						"X-Content-Type-Options",
-						"nosniff",
-					)
-					w.Header().Set(
-						"Referrer-Policy",
-						"strict-origin-when-cross-origin",
-					)
-					w.Header().Set(
-						"Content-Security-Policy",
-						"default-src 'self'; "+
-							"style-src 'self' "+
-							"'unsafe-inline'; "+
-							"script-src 'self' "+
-							"'unsafe-inline'",
-					)
-					next.ServeHTTP(w, r)
-				},
-			)
-		}
-
-		// csrfProtect rejects mutating requests (non-GET/HEAD)
-		// that fail CSRF validation. Two checks are applied:
-		//
-		// 1. If an Origin or Referer header is present, it must
-		//    match the request Host.
-		// 2. The X-Requested-With header must be set (to any
-		//    value). Simple cross-origin requests (form posts,
-		//    img tags) cannot set custom headers, so this blocks
-		//    CSRF even when Origin/Referer are absent.
-		csrfProtect := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(
-				func(w http.ResponseWriter, r *http.Request) {
-					if r.Method != "GET" &&
-						r.Method != "HEAD" {
-
-						origin := r.Header.Get("Origin")
-						if origin == "" {
-							origin = r.Header.Get(
-								"Referer",
-							)
-						}
-						if origin != "" &&
-							!isOriginAllowed(
-								origin,
-								r.Host,
-							) {
-
-							http.Error(
-								w,
-								"forbidden: "+
-									"cross-origin "+
-									"request",
-								http.StatusForbidden,
-							)
-							return
-						}
-
-						// Require X-Requested-With
-						// header on all mutating
-						// requests. This cannot be
-						// set by simple cross-origin
-						// requests.
-						if r.Header.Get(
-							"X-Requested-With",
-						) == "" {
-							http.Error(
-								w,
-								"forbidden: "+
-									"missing "+
-									"X-Requested-With",
-								http.StatusForbidden,
-							)
-							return
-						}
-					}
-					next.ServeHTTP(w, r)
-				},
-			)
-		}
-
-		// safeQueryValue validates a query parameter value.
-		// It enforces maximum length and rejects control
-		// characters.
-		safeQueryValue := func(v string, maxLen int) bool {
-			if len(v) > maxLen {
-				return false
+		if dashFS != nil {
+			// Generate a macaroon from the root key to attach to
+			// server-side proxied requests to the admin REST API.
+			mac, err := admin.GenerateAdminMacaroon(rootKey)
+			if err != nil {
+				cleanup()
+				return nil, nil, nil, fmt.Errorf("unable to generate "+
+					"dashboard macaroon: %w", err)
 			}
-			for _, c := range v {
-				if c < 0x20 || c == 0x7f {
+			macBytes, err := mac.MarshalBinary()
+			if err != nil {
+				cleanup()
+				return nil, nil, nil, fmt.Errorf("unable to marshal "+
+					"dashboard macaroon: %w", err)
+			}
+			macHex := hex.EncodeToString(macBytes)
+
+			// dashboardProxyPrefix is the path the dashboard JS uses to
+			// reach the admin REST API. The Go server strips this prefix
+			// and forwards internally to adminRESTPrefix.
+			const dashboardProxyPrefix = "/api/proxy/"
+
+			// requireLoopback rejects requests that do not originate
+			// from a loopback address (127.0.0.1 / ::1). The
+			// dashboard proxy injects admin credentials server-side,
+			// so it must only be accessible locally.
+			requireLoopback := func(next http.Handler) http.Handler {
+				return http.HandlerFunc(
+					func(w http.ResponseWriter, r *http.Request) {
+						host, _, err := net.SplitHostPort(
+							r.RemoteAddr,
+						)
+						if err != nil {
+							http.Error(
+								w, "forbidden",
+								http.StatusForbidden,
+							)
+							return
+						}
+						ip := net.ParseIP(host)
+						if ip == nil || !ip.IsLoopback() {
+							http.Error(
+								w, "forbidden",
+								http.StatusForbidden,
+							)
+							return
+						}
+						next.ServeHTTP(w, r)
+					},
+				)
+			}
+
+			// addSecurityHeaders wraps a handler to set standard
+			// browser security headers on every response.
+			addSecurityHeaders := func(next http.Handler) http.Handler {
+				return http.HandlerFunc(
+					func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set(
+							"X-Frame-Options", "DENY",
+						)
+						w.Header().Set(
+							"X-Content-Type-Options",
+							"nosniff",
+						)
+						w.Header().Set(
+							"Referrer-Policy",
+							"strict-origin-when-cross-origin",
+						)
+						w.Header().Set(
+							"Content-Security-Policy",
+							"default-src 'self'; "+
+								"style-src 'self' "+
+								"'unsafe-inline'; "+
+								"script-src 'self' "+
+								"'unsafe-inline'",
+						)
+						next.ServeHTTP(w, r)
+					},
+				)
+			}
+
+			// csrfProtect rejects mutating requests (non-GET/HEAD)
+			// that fail CSRF validation. Two checks are applied:
+			//
+			// 1. If an Origin or Referer header is present, it must
+			//    match the request Host.
+			// 2. The X-Requested-With header must be set (to any
+			//    value). Simple cross-origin requests (form posts,
+			//    img tags) cannot set custom headers, so this blocks
+			//    CSRF even when Origin/Referer are absent.
+			csrfProtect := func(next http.Handler) http.Handler {
+				return http.HandlerFunc(
+					func(w http.ResponseWriter, r *http.Request) {
+						if r.Method != "GET" &&
+							r.Method != "HEAD" {
+
+							origin := r.Header.Get("Origin")
+							if origin == "" {
+								origin = r.Header.Get(
+									"Referer",
+								)
+							}
+							if origin != "" &&
+								!isOriginAllowed(
+									origin,
+									r.Host,
+								) {
+
+								http.Error(
+									w,
+									"forbidden: "+
+										"cross-origin "+
+										"request",
+									http.StatusForbidden,
+								)
+								return
+							}
+
+							// Require X-Requested-With
+							// header on all mutating
+							// requests. This cannot be
+							// set by simple cross-origin
+							// requests.
+							if r.Header.Get(
+								"X-Requested-With",
+							) == "" {
+								http.Error(
+									w,
+									"forbidden: "+
+										"missing "+
+										"X-Requested-With",
+									http.StatusForbidden,
+								)
+								return
+							}
+						}
+						next.ServeHTTP(w, r)
+					},
+				)
+			}
+
+			// safeQueryValue validates a query parameter value.
+			// It enforces maximum length and rejects control
+			// characters.
+			safeQueryValue := func(v string, maxLen int) bool {
+				if len(v) > maxLen {
 					return false
 				}
+				for _, c := range v {
+					if c < 0x20 || c == 0x7f {
+						return false
+					}
+				}
+				return true
 			}
-			return true
-		}
 
-		// validateInt checks that a query value is a valid
-		// non-negative integer within the given max.
-		validateInt := func(v string, max int) bool {
-			n, err := strconv.Atoi(v)
-			return err == nil && n >= 0 && n <= max
-		}
+			// validateInt checks that a query value is a valid
+			// non-negative integer within the given max.
+			validateInt := func(v string, max int) bool {
+				n, err := strconv.Atoi(v)
+				return err == nil && n >= 0 && n <= max
+			}
 
-		// allowedQueryParams maps parameter names to their
-		// validation functions. Parameters not in this map are
-		// stripped. Parameters whose values fail validation are
-		// also stripped.
-		type queryValidator func(string) bool
-		allowedQueryParams := map[string]queryValidator{
-			"limit": func(v string) bool {
-				return validateInt(v, 1000)
-			},
-			"offset": func(v string) bool {
-				return validateInt(v, 1000000)
-			},
-			"from": func(v string) bool {
-				return safeQueryValue(v, 30)
-			},
-			"to": func(v string) bool {
-				return safeQueryValue(v, 30)
-			},
-			"service": func(v string) bool {
-				return safeQueryValue(v, 128)
-			},
-			"state": func(v string) bool {
-				return safeQueryValue(v, 128)
-			},
-			"name": func(v string) bool {
-				return safeQueryValue(v, 128)
-			},
-		}
+			// allowedQueryParams maps parameter names to their
+			// validation functions. Parameters not in this map are
+			// stripped. Parameters whose values fail validation are
+			// also stripped.
+			type queryValidator func(string) bool
+			allowedQueryParams := map[string]queryValidator{
+				"limit": func(v string) bool {
+					return validateInt(v, 1000)
+				},
+				"offset": func(v string) bool {
+					return validateInt(v, 1000000)
+				},
+				"from": func(v string) bool {
+					return safeQueryValue(v, 30)
+				},
+				"to": func(v string) bool {
+					return safeQueryValue(v, 30)
+				},
+				"service": func(v string) bool {
+					return safeQueryValue(v, 128)
+				},
+				"state": func(v string) bool {
+					return safeQueryValue(v, 128)
+				},
+				"name": func(v string) bool {
+					return safeQueryValue(v, 128)
+				},
+			}
 
-		safeSegment := regexp.MustCompile(`^[\w-]+$`)
-		proxyHandler := http.HandlerFunc(
-			func(w http.ResponseWriter, r *http.Request) {
-				raw := strings.TrimPrefix(
-					r.URL.Path, dashboardProxyPrefix,
-				)
+			safeSegment := regexp.MustCompile(`^[\w-]+$`)
+			proxyHandler := http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					raw := strings.TrimPrefix(
+						r.URL.Path, dashboardProxyPrefix,
+					)
 
-				// Filter empty segments so trailing slashes
-				// do not cause a spurious 400.
-				segments := strings.Split(raw, "/")
-				filtered := segments[:0]
-				for _, seg := range segments {
-					if seg != "" {
-						filtered = append(
-							filtered, seg,
-						)
-					}
-				}
-
-				for _, seg := range filtered {
-					if !safeSegment.MatchString(seg) {
-						http.Error(
-							w, "bad request",
-							http.StatusBadRequest,
-						)
-						return
-					}
-				}
-
-				r2 := r.Clone(r.Context())
-				r2.URL.Path = adminRESTPrefix +
-					strings.Join(filtered, "/")
-
-				// Allowlist query parameters by name and
-				// validate their values.
-				orig := r2.URL.Query()
-				clean := make(url.Values)
-				for k, vals := range orig {
-					validate, ok := allowedQueryParams[k]
-					if !ok {
-						continue
-					}
-					for _, v := range vals {
-						if validate(v) {
-							clean.Add(k, v)
+					// Filter empty segments so trailing slashes
+					// do not cause a spurious 400.
+					segments := strings.Split(raw, "/")
+					filtered := segments[:0]
+					for _, seg := range segments {
+						if seg != "" {
+							filtered = append(
+								filtered, seg,
+							)
 						}
 					}
-				}
-				r2.URL.RawQuery = clean.Encode()
 
-				// Construct a fresh header set with only
-				// the entries the admin API needs. This
-				// avoids forwarding client-controlled
-				// headers like X-Forwarded-For or
-				// Authorization.
-				r2.Header = make(http.Header)
-				if ct := r.Header.Get("Content-Type"); ct != "" {
-					r2.Header.Set("Content-Type", ct)
-				}
-				if accept := r.Header.Get("Accept"); accept != "" {
-					r2.Header.Set("Accept", accept)
-				}
-				r2.Header.Set(
-					"Grpc-Metadata-Macaroon", macHex,
-				)
-				mux.ServeHTTP(w, r2)
-			},
-		)
+					for _, seg := range filtered {
+						if !safeSegment.MatchString(seg) {
+							http.Error(
+								w, "bad request",
+								http.StatusBadRequest,
+							)
+							return
+						}
+					}
 
-		// Wrap the proxy handler with security middleware:
-		// loopback → CSRF → security headers → handler.
-		wrappedProxy := requireLoopback(
-			csrfProtect(addSecurityHeaders(proxyHandler)),
-		)
-		priorityServices = append(
-			priorityServices, proxy.NewLocalService(
-				wrappedProxy,
-				func(r *http.Request) bool {
-					return strings.HasPrefix(
-						r.URL.Path,
-						dashboardProxyPrefix,
+					r2 := r.Clone(r.Context())
+					r2.URL.Path = adminRESTPrefix +
+						strings.Join(filtered, "/")
+
+					// Allowlist query parameters by name and
+					// validate their values.
+					orig := r2.URL.Query()
+					clean := make(url.Values)
+					for k, vals := range orig {
+						validate, ok := allowedQueryParams[k]
+						if !ok {
+							continue
+						}
+						for _, v := range vals {
+							if validate(v) {
+								clean.Add(k, v)
+							}
+						}
+					}
+					r2.URL.RawQuery = clean.Encode()
+
+					// Construct a fresh header set with only
+					// the entries the admin API needs. This
+					// avoids forwarding client-controlled
+					// headers like X-Forwarded-For or
+					// Authorization.
+					r2.Header = make(http.Header)
+					if ct := r.Header.Get("Content-Type"); ct != "" {
+						r2.Header.Set("Content-Type", ct)
+					}
+					if accept := r.Header.Get("Accept"); accept != "" {
+						r2.Header.Set("Accept", accept)
+					}
+					r2.Header.Set(
+						"Grpc-Metadata-Macaroon", macHex,
 					)
+					mux.ServeHTTP(w, r2)
 				},
-			),
-		)
+			)
 
-		// Catch-all static file server with index.html fallback for
-		// client-side routing (SPA deep-link support). This is added
-		// to fallbackServices so it is only checked after proxy
-		// backend matching — otherwise it would hijack all traffic
-		// intended for configured backend services.
-		dashHandler := http.HandlerFunc(
-			func(w http.ResponseWriter, r *http.Request) {
-				path := strings.TrimPrefix(r.URL.Path, "/")
+			// Wrap the proxy handler with security middleware:
+			// loopback → CSRF → security headers → handler.
+			wrappedProxy := requireLoopback(
+				csrfProtect(addSecurityHeaders(proxyHandler)),
+			)
+			priorityServices = append(
+				priorityServices, proxy.NewLocalService(
+					wrappedProxy,
+					func(r *http.Request) bool {
+						return strings.HasPrefix(
+							r.URL.Path,
+							dashboardProxyPrefix,
+						)
+					},
+				),
+			)
 
-				// Serve the file if it exists and is not a
-				// directory (e.g. _next/ assets).
-				if fi, statErr := fs.Stat(dashFS, path); statErr == nil && !fi.IsDir() {
-					http.ServeFileFS(w, r, dashFS, path)
-					return
-				}
+			// Catch-all static file server with index.html fallback for
+			// client-side routing (SPA deep-link support). This is added
+			// to fallbackServices so it is only checked after proxy
+			// backend matching — otherwise it would hijack all traffic
+			// intended for configured backend services.
+			dashHandler := http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					path := strings.TrimPrefix(r.URL.Path, "/")
 
-				// For directory paths, serve the index.html
-				// nested inside (Next.js trailingSlash layout).
-				indexPath := strings.TrimSuffix(path, "/") +
-					"/index.html"
-				if _, statErr := fs.Stat(dashFS, indexPath); statErr == nil {
-					http.ServeFileFS(w, r, dashFS, indexPath)
-					return
-				}
+					// Serve the file if it exists and is not a
+					// directory (e.g. _next/ assets).
+					if fi, statErr := fs.Stat(dashFS, path); statErr == nil && !fi.IsDir() {
+						http.ServeFileFS(w, r, dashFS, path)
+						return
+					}
 
-				// Fall back to root index.html for unknown
-				// paths (dynamic client-side routes).
-				http.ServeFileFS(w, r, dashFS, "index.html")
-			},
-		)
+					// For directory paths, serve the index.html
+					// nested inside (Next.js trailingSlash layout).
+					indexPath := strings.TrimSuffix(path, "/") +
+						"/index.html"
+					if _, statErr := fs.Stat(dashFS, indexPath); statErr == nil {
+						http.ServeFileFS(w, r, dashFS, indexPath)
+						return
+					}
 
-		// Wrap the dashboard static handler with loopback and
-		// security headers.
-		wrappedDash := requireLoopback(
-			addSecurityHeaders(dashHandler),
-		)
-		fallbackServices = append(
-			fallbackServices, proxy.NewLocalService(
-				wrappedDash,
-				func(r *http.Request) bool {
-					return true
+					// Fall back to root index.html for unknown
+					// paths (dynamic client-side routes).
+					http.ServeFileFS(w, r, dashFS, "index.html")
 				},
-			),
-		)
+			)
 
-		log.Infof("Admin dashboard embedded and serving")
+			// Wrap the dashboard static handler with loopback and
+			// security headers.
+			wrappedDash := requireLoopback(
+				addSecurityHeaders(dashHandler),
+			)
+			fallbackServices = append(
+				fallbackServices, proxy.NewLocalService(
+					wrappedDash,
+					func(r *http.Request) bool {
+						return true
+					},
+				),
+			)
+
+			log.Infof("Admin dashboard embedded and serving")
+		}
 	}
 
 	return priorityServices, fallbackServices, cleanup, nil

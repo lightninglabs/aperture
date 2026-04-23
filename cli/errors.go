@@ -52,9 +52,12 @@ type CLIError struct {
 	Inner error
 }
 
-// Error implements the error interface.
+// Error implements the error interface. When Inner is set and its
+// message differs from Message, both are included. When they are
+// identical (e.g. via WrapCLIError) only one copy is returned to
+// avoid duplicated output.
 func (e *CLIError) Error() string {
-	if e.Inner != nil {
+	if e.Inner != nil && e.Inner.Error() != e.Message {
 		return fmt.Sprintf("%s: %v", e.Message, e.Inner)
 	}
 
