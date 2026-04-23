@@ -150,16 +150,19 @@ pass "$wwa_count WWW-Authenticate challenge(s) present"
 
 step "[3/8] Parse Payment challenge"
 
-# The header is multi-line (curl folds long headers), so we need to match
-# the whole line starting with "www-authenticate: Payment " and all its
-# continuations. Easiest: re-dump curl with -sS and match on the raw.
+# The header is multi-line (curl folds long headers). Collect *all* lines
+# starting with "www-authenticate: Payment " plus their continuations,
+# then keep only the one with intent="charge" — when MPP sessions are
+# enabled, prism returns both a charge-intent AND a session-intent
+# challenge; picking the first one naively lands on the wrong scheme.
 pay_line=$(awk '
-    /^[Ww]{3}-[Aa]uthenticate: Payment /{buf=$0; next}
+    /^[Ww]{3}-[Aa]uthenticate: Payment /{if (buf) print buf; buf=$0; next}
     buf && /^[ \t]/{buf=buf $0; next}
     buf{print buf; buf=""}
     END{if (buf) print buf}
-' "$HDR")
-[ -n "$pay_line" ] || fail "no Payment WWW-Authenticate header found"
+' "$HDR" | grep 'intent="charge"' | head -1)
+
+[ -n "$pay_line" ] || fail "no Payment WWW-Authenticate challenge with intent=charge found — did the target service opt out of MPP, or is only session intent active?"
 
 extract_auth_param() {
     # extract_auth_param <line> <key> → value (without surrounding quotes)

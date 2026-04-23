@@ -800,14 +800,22 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 
 // networkToChainParams converts a network name string to the corresponding
 // btcd chain parameters for BOLT11 invoice decoding.
+//
+// Sui-adapted lnd exposes non-Bitcoin network identifiers ("devnet",
+// "localnet") but still emits BOLT11 invoices with the Bitcoin regtest
+// HRP ("lnbcrt...") because the underlying invoice encoder is reused
+// unchanged. Map those identifiers to RegressionNetParams so zpay32
+// can decode the return invoice clients send back on session open.
 func networkToChainParams(network string) *chaincfg.Params {
 	switch network {
 	case "mainnet":
 		return &chaincfg.MainNetParams
 	case "testnet":
 		return &chaincfg.TestNet3Params
-	case "regtest":
+	case "regtest", "devnet", "localnet":
 		return &chaincfg.RegressionNetParams
+	case "simnet":
+		return &chaincfg.SimNetParams
 	case "signet":
 		return &chaincfg.SigNetParams
 	default:
