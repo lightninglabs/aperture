@@ -18,6 +18,20 @@ const (
 	DefaultInvoiceLookupTimeout = 3 * time.Second
 )
 
+// newChallengeFor issues a new Lightning invoice via the given challenger.
+// When the challenger implements ServiceAwareChallenger (multi-merchant
+// deployment), the invoice is routed through the named service's lnd so
+// payment lands in the merchant's own wallet. Otherwise falls back to the
+// plain single-lnd path.
+func newChallengeFor(c mint.Challenger, serviceName string, price int64) (
+	string, lntypes.Hash, error) {
+
+	if sac, ok := c.(mint.ServiceAwareChallenger); ok {
+		return sac.NewChallengeForService(serviceName, price)
+	}
+	return c.NewChallenge(price)
+}
+
 // Authenticator is the generic interface for validating client headers and
 // returning new challenge headers.
 type Authenticator interface {

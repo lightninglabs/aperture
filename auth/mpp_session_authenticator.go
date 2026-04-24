@@ -669,9 +669,10 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 	}
 	depositSats := servicePrice * mult
 
-	// Create a deposit invoice.
-	paymentRequest, paymentHash, err := a.challenger.NewChallenge(
-		depositSats,
+	// Create a deposit invoice, routing through the service's own lnd
+	// if the challenger supports multi-merchant dispatch.
+	paymentRequest, paymentHash, err := newChallengeFor(
+		a.challenger, serviceName, depositSats,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("MPP Session: failed to create "+
