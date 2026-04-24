@@ -20,6 +20,19 @@ export const authSchemeLabels: Record<AuthScheme, string> = {
   AUTH_SCHEME_L402_MPP: "L402 + MPP",
 };
 
+/**
+ * Optional per-service lnd override for multi-merchant deployments.
+ * When set, invoices for the owning service are issued against this lnd
+ * so payments land in the merchant's wallet. Unset (or null) means the
+ * service uses the gateway's global authenticator.lndhost — the legacy
+ * single-lnd mode.
+ */
+export interface PaymentBackend {
+  lnd_host: string;
+  tls_path: string;
+  mac_path: string;
+}
+
 export interface Service {
   name: string;
   address: string;
@@ -29,6 +42,8 @@ export interface Service {
   price: number;
   auth: string;
   auth_scheme: AuthScheme;
+  /** Null / absent = service uses the global default lnd. */
+  payment?: PaymentBackend | null;
 }
 
 export interface Transaction {
@@ -60,6 +75,8 @@ export interface ServiceCreateRequest {
   price?: number;
   auth?: string;
   auth_scheme?: AuthScheme;
+  /** Per-service lnd override. All three sub-fields must be set together. */
+  payment?: PaymentBackend;
 }
 
 export interface InfoResponse {

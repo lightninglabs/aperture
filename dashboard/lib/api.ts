@@ -107,6 +107,10 @@ export async function updateService(
     price?: number;
     auth?: string;
     auth_scheme?: AuthScheme;
+    payment?: { lnd_host: string; tls_path: string; mac_path: string };
+    /** Remove any existing per-service lnd override. Mutually
+     *  exclusive with setting `payment`. */
+    clear_payment?: boolean;
   }
 ) {
   const res = await fetch(`/api/proxy/services/${encodeURIComponent(name)}`, {

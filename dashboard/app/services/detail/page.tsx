@@ -468,6 +468,28 @@ function ServiceDetailContent() {
     }
   }, [decodedName]);
 
+  const handleClearPayment = useCallback(async () => {
+    if (
+      !confirm(
+        "Remove the per-service lnd override? This service will fall " +
+          "back to the gateway's global lnd on the next prism restart."
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateService(decodedName, { clear_payment: true });
+      toast("Payment override cleared. Restart prism to apply.");
+    } catch (e: unknown) {
+      toast(
+        e instanceof Error ? e.message : "Failed to clear payment",
+        "error"
+      );
+    }
+    setSaving(false);
+  }, [decodedName]);
+
   const startPriceEdit = useCallback(() => {
     if (!svc) return;
     setEditingPrice(true);
@@ -787,6 +809,57 @@ function ServiceDetailContent() {
           </HelpText>
         </Card>
       </ConfigGrid>
+
+      <Card style={{ marginBottom: 24 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 16,
+          }}
+        >
+          <SectionTitle style={{ margin: 0 }}>Payment Backend</SectionTitle>
+          {svc.payment?.lnd_host && (
+            <Button
+              variant="ghost"
+              compact
+              disabled={saving}
+              onClick={handleClearPayment}
+            >
+              Clear override
+            </Button>
+          )}
+        </div>
+        {svc.payment?.lnd_host ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <ConfigRow>
+              <ConfigLabel>Merchant lnd</ConfigLabel>
+              <ConfigValue $mono>{svc.payment.lnd_host}</ConfigValue>
+            </ConfigRow>
+            <ConfigRow>
+              <ConfigLabel>tls.cert</ConfigLabel>
+              <ConfigValue $mono>{svc.payment.tls_path}</ConfigValue>
+            </ConfigRow>
+            <ConfigRow>
+              <ConfigLabel>macaroon</ConfigLabel>
+              <ConfigValue $mono>{svc.payment.mac_path}</ConfigValue>
+            </ConfigRow>
+            <HelpText>
+              Invoices for this service are issued against the merchant&apos;s
+              own lnd, so payments land in their wallet — the gateway never
+              takes custody. Changes take effect on the next prism restart.
+            </HelpText>
+          </div>
+        ) : (
+          <HelpText style={{ marginTop: 0 }}>
+            This service uses the gateway&apos;s global lnd. To route
+            payments to a merchant&apos;s own lnd, set the{" "}
+            <Code>payment</Code> block via the admin API or{" "}
+            <Code>prismcli services update --payment-*</Code>.
+          </HelpText>
+        )}
+      </Card>
 
       <CardNopad>
         <TableHeader>
