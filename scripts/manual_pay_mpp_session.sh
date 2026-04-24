@@ -160,10 +160,40 @@ deposit_amount=$(echo "$req_json" | jq -r '.depositAmount')
 per_unit_amount=$(echo "$req_json" | jq -r '.amount')
 idle_timeout=$(echo "$req_json" | jq -r '.idleTimeout')
 
-info "per-request amount: $per_unit_amount (= $(python3 -c "print($per_unit_amount/1e9)") SUI)"
-info "deposit amount:     $deposit_amount (= $(python3 -c "print($deposit_amount/1e9)") SUI)"
 info "idle timeout:       ${idle_timeout}s"
 info "deposit paymentHash: $deposit_phash"
+
+# --- 2b. Amount plan ---------------------------------------------------
+# Every number shown here is decided by the SERVER (from the service's
+# price × sessiondepositmultiplier), not set in this script. The script
+# just pays whatever prism asks for and records what it asked for so the
+# operator can see what's about to move.
+
+planned_spend=$((per_unit_amount * BEARER_CALLS))
+planned_refund=$((deposit_amount - planned_spend))
+
+chain=$(curl -sk -H "Grpc-Metadata-Macaroon: $ADMIN_MAC_HEX" \
+    "https://$PRISM_HOST/api/admin/info" | jq -r '.chain // ""')
+unit="sats"
+scale_div=1
+if [ "$chain" = "sui" ]; then
+    unit="SUI"
+    scale_div=1000000000
+fi
+fmt_amount() { python3 -c "print($1/$scale_div)"; }
+
+step "[2b/7] Amount plan (all derived from prism config)"
+printf "  %-22s %12s base units  = %12s %s\n" \
+    "deposit (bob→prism):" "$deposit_amount"  "$(fmt_amount "$deposit_amount")"  "$unit"
+printf "  %-22s %12s base units  = %12s %s\n" \
+    "per bearer request:" "$per_unit_amount" "$(fmt_amount "$per_unit_amount")" "$unit"
+printf "  %-22s %12s base units  = %12s %s  (%d × per-request)\n" \
+    "planned total spend:" "$planned_spend"  "$(fmt_amount "$planned_spend")"  "$unit" "$BEARER_CALLS"
+printf "  %-22s %12s base units  = %12s %s  (deposit − spend, prism→bob on close)\n" \
+    "expected refund:"    "$planned_refund" "$(fmt_amount "$planned_refund")" "$unit"
+echo "  ${Y}~${N} To change these: edit services[0].price +"
+echo "    authenticator.sessiondepositmultiplier in your config, or set"
+echo "    BEARER_CALLS=<n> when invoking this script (currently $BEARER_CALLS)."
 
 # --- 3. Bob pays the deposit invoice, builds ReturnInvoice, OPEN -----
 

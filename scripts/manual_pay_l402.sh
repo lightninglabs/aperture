@@ -1,5 +1,5 @@
 #!/bin/bash
-# manual_pay_through_prism.sh
+# manual_pay_l402.sh
 #
 # Manual verification of the full L402 payment flow through Prism.
 # Uses your running prism on :8080 (per sample-conf-tmp.yaml) and drives
@@ -17,9 +17,9 @@
 #   4. Prism running: `prism --configfile=./sample-conf-tmp.yaml`
 #
 # Usage:
-#   ./scripts/manual_pay_through_prism.sh               # default: service1
-#   SERVICE_HOST=foo.com PATH_SUFFIX=/bar ./scripts/manual_pay_through_prism.sh
-#   PRISM_BASEDIR=/abs/path ./scripts/manual_pay_through_prism.sh
+#   ./scripts/manual_pay_l402.sh               # default: service1
+#   SERVICE_HOST=foo.com PATH_SUFFIX=/bar ./scripts/manual_pay_l402.sh
+#   PRISM_BASEDIR=/abs/path ./scripts/manual_pay_l402.sh
 
 set -euo pipefail
 
@@ -160,6 +160,17 @@ echo "$decoded" | jq '{
 
 amt=$(echo "$decoded" | jq -r '.num_satoshis')
 phash=$(echo "$decoded" | jq -r '.payment_hash')
+
+# Render the cost in the chain's natural unit so the operator sees what
+# they're about to spend. prism's admin GetInfo tells us which chain lnd
+# is running on.
+chain=$(curl -sk -H "Grpc-Metadata-Macaroon: $ADMIN_MAC_HEX" \
+    "https://$PRISM_HOST/api/admin/info" | jq -r '.chain // ""')
+if [ "$chain" = "sui" ]; then
+    echo "    → bob will pay $amt MIST ($(python3 -c "print($amt/1e9)") SUI)"
+else
+    echo "    → bob will pay $amt sats"
+fi
 
 # --- 5. Pay with bob ----------------------------------------------------
 

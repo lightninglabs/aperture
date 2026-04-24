@@ -3,7 +3,7 @@
 #
 # Starts a tiny Python HTTP server on :9998 with a few fixture files, used
 # as a dummy backend for the L402 payment flow demo (see
-# manual_pay_through_prism.sh). Point a Prism service at 127.0.0.1:9998
+# manual_pay_l402.sh). Point a Prism service at 127.0.0.1:9998
 # with protocol=http and exercise the full 402 → pay → 200 round-trip.
 #
 # Example service1 stanza in sample-conf-tmp.yaml:
@@ -24,7 +24,7 @@
 # Default fixture content served:
 #   GET /            → index.html (HTML page)
 #   GET /data.json   → JSON payload
-#   GET /probe       → probe.txt (matches manual_pay_through_prism.sh default)
+#   GET /probe       → probe.txt (matches manual_pay_l402.sh default)
 #   GET /<anything>  → 404 (standard http.server behavior)
 
 set -euo pipefail
@@ -83,7 +83,7 @@ if [ ! -f "$SERVE_DIR/data.json" ]; then
 JSON
 fi
 
-# /probe is the default path used by scripts/manual_pay_through_prism.sh,
+# /probe is the default path used by scripts/manual_pay_l402.sh,
 # so we ship a fixture file with no extension so GET /probe returns 200.
 if [ ! -f "$SERVE_DIR/probe" ]; then
     cat > "$SERVE_DIR/probe" <<'TEXT'
@@ -104,7 +104,7 @@ echo "  GET /probe       → probe"
 echo
 echo "Ctrl-C to stop. Pair with:"
 echo "  ./prism --configfile=./sample-conf-tmp.yaml    # Prism on :8080"
-echo "  ./scripts/manual_pay_through_prism.sh          # drives a paid request"
+echo "  ./scripts/manual_pay_l402.sh          # drives a paid request"
 
 cd "$SERVE_DIR"
 exec python3 -m http.server "$PORT" --bind "$BIND"

@@ -2,7 +2,7 @@
 # manual_pay_mpp.sh
 #
 # Exercises the Payment HTTP Authentication (MPP) flow end-to-end through
-# a running Prism on :8080. Sibling to manual_pay_through_prism.sh which
+# a running Prism on :8080. Sibling to manual_pay_l402.sh which
 # does the L402 flow. Assumes both L402 and MPP are enabled (config has
 # `authenticator.enablempp: true`) and the target service uses
 # `authscheme: "l402+mpp"` (or `"mpp"`).
@@ -18,7 +18,7 @@
 #      `Authorization: Payment <token>`.
 #   5. Verify prism accepts the credential and forwards to the backend.
 #
-# Prereqs identical to manual_pay_through_prism.sh:
+# Prereqs identical to manual_pay_l402.sh:
 #   * Prism on :8080 with MPP enabled
 #   * Alice LND on :10009, Bob LND on :10010, open alice↔bob channel
 #   * Demo backend on :9998 (./scripts/serve_demo_backend.sh)
@@ -299,4 +299,4 @@ curl -sk -H "Grpc-Metadata-Macaroon: $ADMIN_MAC_HEX" \
 echo
 echo "${G}━━━ MPP flow complete ━━━${N}"
 echo "Try the L402 flow on the same service:"
-echo "  ./scripts/manual_pay_through_prism.sh"
+echo "  ./scripts/manual_pay_l402.sh"
