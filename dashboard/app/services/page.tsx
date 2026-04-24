@@ -33,8 +33,8 @@ const initialForm: ServiceCreateRequest = {
   name: "",
   address: "",
   protocol: "http",
-  hostregexp: ".*",
-  pathregexp: "",
+  host_regexp: ".*",
+  path_regexp: "",
   price: 0,
   auth: "on",
   auth_scheme: "AUTH_SCHEME_L402",
@@ -558,9 +558,9 @@ export default function ServicesPage() {
                       <Tooltip text="Regex matched against the HTTP Host header. Determines which incoming requests route to this service. Default .* matches all hosts." />
                     </Label>
                     <Input
-                      value={form.hostregexp}
+                      value={form.host_regexp}
                       onChange={(e) =>
-                        setForm({ ...form, hostregexp: e.target.value })
+                        setForm({ ...form, host_regexp: e.target.value })
                       }
                       placeholder=".*"
                     />
@@ -571,9 +571,9 @@ export default function ServicesPage() {
                       <Tooltip text="Regex matched against the request URL path. Only requests with matching paths are routed to this service. Leave empty to match all paths." />
                     </Label>
                     <Input
-                      value={form.pathregexp}
+                      value={form.path_regexp}
                       onChange={(e) =>
-                        setForm({ ...form, pathregexp: e.target.value })
+                        setForm({ ...form, path_regexp: e.target.value })
                       }
                       placeholder="^/api/.*$"
                     />

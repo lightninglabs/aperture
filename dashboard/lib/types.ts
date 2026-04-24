@@ -70,8 +70,8 @@ export interface ServiceCreateRequest {
   name: string;
   address: string;
   protocol?: string;
-  hostregexp?: string;
-  pathregexp?: string;
+  host_regexp?: string;
+  path_regexp?: string;
   price?: number;
   auth?: string;
   auth_scheme?: AuthScheme;

@@ -385,7 +385,7 @@ function ServiceDetailContent() {
     const trimmed = hostregexpValue.trim();
     setSaving(true);
     try {
-      await updateService(decodedName, { hostregexp: trimmed });
+      await updateService(decodedName, { host_regexp: trimmed });
       toast(
         trimmed ? `Host regexp updated to "${trimmed}"` : "Host regexp cleared"
       );
@@ -403,7 +403,7 @@ function ServiceDetailContent() {
     const trimmed = pathregexpValue.trim();
     setSaving(true);
     try {
-      await updateService(decodedName, { pathregexp: trimmed });
+      await updateService(decodedName, { path_regexp: trimmed });
       toast(
         trimmed ? `Path regexp updated to "${trimmed}"` : "Path regexp cleared"
       );
