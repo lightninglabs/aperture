@@ -2,7 +2,13 @@
 
 import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { useStats, useServices, useTransactions, useInfo } from "@/lib/api";
+import {
+  useStats,
+  useServices,
+  useTransactions,
+  useInfo,
+  useSessionStats,
+} from "@/lib/api";
 import { formatAmount, unitLabel } from "@/lib/currency";
 import styled from "@emotion/styled";
 
@@ -188,6 +194,10 @@ export default function DashboardPage() {
     error: statsError,
     mutate: mutateStats,
   } = useStats(dateFrom || undefined, dateTo || undefined);
+  // useSessionStats returns null (not undefined) when the server has MPP
+  // sessions disabled, so check data !== null before including its revenue.
+  // No date filter on the server side today; the number is lifetime.
+  const { data: sessionStats } = useSessionStats();
   const {
     data: services,
     isLoading: servicesLoading,
@@ -294,17 +304,35 @@ export default function DashboardPage() {
       ) : (
         <>
           <StatGrid className="animate-in">
-            <StatTile
-              title="Total Revenue"
-              text={
-                statsLoading
-                  ? "..."
-                  : stats
-                    ? formatAmount(stats.total_revenue_sats, chain).value
-                    : "\u2014"
-              }
-              suffix={unitLabel(chain)}
-            />
+            {(() => {
+              // Combined revenue = settled L402/MPP-charge transactions +
+              // session bearer debits. The two figures come from separate
+              // backend tables (l402_transactions vs mpp_sessions) with
+              // separate endpoints; we merge client-side so the top-line
+              // number reflects real money taken, not just one of them.
+              const l402 = stats?.total_revenue_sats ?? 0;
+              const sess = sessionStats?.total_spent_sats ?? 0;
+              const combined = l402 + sess;
+              const hasSessions = sessionStats != null && sess > 0;
+              return (
+                <StatTile
+                  title="Total Revenue"
+                  text={
+                    statsLoading
+                      ? "..."
+                      : stats
+                        ? formatAmount(combined, chain).value
+                        : "\u2014"
+                  }
+                  suffix={unitLabel(chain)}
+                  subText={
+                    hasSessions && stats
+                      ? `${formatAmount(l402, chain).value} L402 + ${formatAmount(sess, chain).value} session`
+                      : undefined
+                  }
+                />
+              );
+            })()}
             <StatTile
               title="Transactions"
               text={
