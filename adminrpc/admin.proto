@@ -86,6 +86,34 @@ message Service {
   // auth_scheme specifies which payment auth scheme(s) are used for this
   // service. Defaults to AUTH_SCHEME_L402 for backwards compatibility.
   AuthScheme auth_scheme = 8;
+
+  // payment optionally overrides the global authenticator lnd for this
+  // service (multi-merchant mode). When set, invoices for this service
+  // are issued against the merchant's own lnd so payments land in their
+  // wallet — the gateway never takes custody. Unset = legacy single-lnd
+  // mode using authenticator.lndhost.
+  PaymentBackend payment = 9;
+}
+
+// PaymentBackend is an optional per-service lnd connection used in multi-
+// merchant deployments. The merchant runs their own lnd and hands the
+// gateway a minimum-privilege macaroon (invoices:read invoices:write
+// info:read) so the gateway can create/verify invoices but cannot move
+// funds or see wallet state.
+//
+// All three fields are required when the block is present. Paths are
+// absolute paths on the gateway host's filesystem.
+message PaymentBackend {
+  // lnd_host is the merchant lnd's gRPC address (host:port).
+  string lnd_host = 1;
+
+  // tls_path is the path to the merchant lnd's tls.cert (public).
+  string tls_path = 2;
+
+  // mac_path is the absolute path to the minimum-privilege macaroon
+  // file supplied by the merchant. Only invoices:{read,write} and
+  // info:read are expected to be granted.
+  string mac_path = 3;
 }
 
 message CreateServiceRequest {
@@ -100,6 +128,12 @@ message CreateServiceRequest {
   // auth_scheme specifies which payment auth scheme(s) to use. Defaults to
   // AUTH_SCHEME_L402 if unset.
   AuthScheme auth_scheme = 8;
+
+  // payment optionally configures a per-service lnd override. See the
+  // Service message for field semantics. Omit for legacy single-lnd
+  // mode. Setting this takes effect after the next prism restart —
+  // the in-memory challenger router is built at startup.
+  PaymentBackend payment = 9;
 }
 
 message UpdateServiceRequest {
@@ -114,6 +148,17 @@ message UpdateServiceRequest {
   // auth_scheme specifies which payment auth scheme(s) to use. When not
   // set, the existing auth_scheme is preserved (not reset to L402).
   optional AuthScheme auth_scheme = 8;
+
+  // payment updates the per-service lnd override. When omitted (nil),
+  // the existing payment config is preserved (not reset). To explicitly
+  // remove a payment override from a service, set clear_payment=true
+  // instead. As with CreateService, changes take effect on restart.
+  PaymentBackend payment = 9;
+
+  // clear_payment, when true, removes any existing per-service lnd
+  // override from the service, returning it to the global single-lnd
+  // mode. Mutually exclusive with setting payment.
+  bool clear_payment = 10;
 }
 
 message DeleteServiceRequest { string name = 1; }

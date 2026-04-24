@@ -383,7 +383,13 @@ type Service struct {
 	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
 	// auth_scheme specifies which payment auth scheme(s) are used for this
 	// service. Defaults to AUTH_SCHEME_L402 for backwards compatibility.
-	AuthScheme    AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
+	AuthScheme AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
+	// payment optionally overrides the global authenticator lnd for this
+	// service (multi-merchant mode). When set, invoices for this service
+	// are issued against the merchant's own lnd so payments land in their
+	// wallet — the gateway never takes custody. Unset = legacy single-lnd
+	// mode using authenticator.lndhost.
+	Payment       *PaymentBackend `protobuf:"bytes,9,opt,name=payment,proto3" json:"payment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -474,6 +480,86 @@ func (x *Service) GetAuthScheme() AuthScheme {
 	return AuthScheme_AUTH_SCHEME_L402
 }
 
+func (x *Service) GetPayment() *PaymentBackend {
+	if x != nil {
+		return x.Payment
+	}
+	return nil
+}
+
+// PaymentBackend is an optional per-service lnd connection used in multi-
+// merchant deployments. The merchant runs their own lnd and hands the
+// gateway a minimum-privilege macaroon (invoices:read invoices:write
+// info:read) so the gateway can create/verify invoices but cannot move
+// funds or see wallet state.
+//
+// All three fields are required when the block is present. Paths are
+// absolute paths on the gateway host's filesystem.
+type PaymentBackend struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// lnd_host is the merchant lnd's gRPC address (host:port).
+	LndHost string `protobuf:"bytes,1,opt,name=lnd_host,json=lndHost,proto3" json:"lnd_host,omitempty"`
+	// tls_path is the path to the merchant lnd's tls.cert (public).
+	TlsPath string `protobuf:"bytes,2,opt,name=tls_path,json=tlsPath,proto3" json:"tls_path,omitempty"`
+	// mac_path is the absolute path to the minimum-privilege macaroon
+	// file supplied by the merchant. Only invoices:{read,write} and
+	// info:read are expected to be granted.
+	MacPath       string `protobuf:"bytes,3,opt,name=mac_path,json=macPath,proto3" json:"mac_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PaymentBackend) Reset() {
+	*x = PaymentBackend{}
+	mi := &file_admin_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PaymentBackend) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PaymentBackend) ProtoMessage() {}
+
+func (x *PaymentBackend) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PaymentBackend.ProtoReflect.Descriptor instead.
+func (*PaymentBackend) Descriptor() ([]byte, []int) {
+	return file_admin_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PaymentBackend) GetLndHost() string {
+	if x != nil {
+		return x.LndHost
+	}
+	return ""
+}
+
+func (x *PaymentBackend) GetTlsPath() string {
+	if x != nil {
+		return x.TlsPath
+	}
+	return ""
+}
+
+func (x *PaymentBackend) GetMacPath() string {
+	if x != nil {
+		return x.MacPath
+	}
+	return ""
+}
+
 type CreateServiceRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -485,14 +571,19 @@ type CreateServiceRequest struct {
 	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
 	// auth_scheme specifies which payment auth scheme(s) to use. Defaults to
 	// AUTH_SCHEME_L402 if unset.
-	AuthScheme    AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
+	AuthScheme AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme" json:"auth_scheme,omitempty"`
+	// payment optionally configures a per-service lnd override. See the
+	// Service message for field semantics. Omit for legacy single-lnd
+	// mode. Setting this takes effect after the next prism restart —
+	// the in-memory challenger router is built at startup.
+	Payment       *PaymentBackend `protobuf:"bytes,9,opt,name=payment,proto3" json:"payment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateServiceRequest) Reset() {
 	*x = CreateServiceRequest{}
-	mi := &file_admin_proto_msgTypes[7]
+	mi := &file_admin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -504,7 +595,7 @@ func (x *CreateServiceRequest) String() string {
 func (*CreateServiceRequest) ProtoMessage() {}
 
 func (x *CreateServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[7]
+	mi := &file_admin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -517,7 +608,7 @@ func (x *CreateServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateServiceRequest.ProtoReflect.Descriptor instead.
 func (*CreateServiceRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{7}
+	return file_admin_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CreateServiceRequest) GetName() string {
@@ -576,6 +667,13 @@ func (x *CreateServiceRequest) GetAuthScheme() AuthScheme {
 	return AuthScheme_AUTH_SCHEME_L402
 }
 
+func (x *CreateServiceRequest) GetPayment() *PaymentBackend {
+	if x != nil {
+		return x.Payment
+	}
+	return nil
+}
+
 type UpdateServiceRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -587,14 +685,23 @@ type UpdateServiceRequest struct {
 	Auth       string                 `protobuf:"bytes,7,opt,name=auth,proto3" json:"auth,omitempty"`
 	// auth_scheme specifies which payment auth scheme(s) to use. When not
 	// set, the existing auth_scheme is preserved (not reset to L402).
-	AuthScheme    *AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme,oneof" json:"auth_scheme,omitempty"`
+	AuthScheme *AuthScheme `protobuf:"varint,8,opt,name=auth_scheme,json=authScheme,proto3,enum=adminrpc.AuthScheme,oneof" json:"auth_scheme,omitempty"`
+	// payment updates the per-service lnd override. When omitted (nil),
+	// the existing payment config is preserved (not reset). To explicitly
+	// remove a payment override from a service, set clear_payment=true
+	// instead. As with CreateService, changes take effect on restart.
+	Payment *PaymentBackend `protobuf:"bytes,9,opt,name=payment,proto3" json:"payment,omitempty"`
+	// clear_payment, when true, removes any existing per-service lnd
+	// override from the service, returning it to the global single-lnd
+	// mode. Mutually exclusive with setting payment.
+	ClearPayment  bool `protobuf:"varint,10,opt,name=clear_payment,json=clearPayment,proto3" json:"clear_payment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateServiceRequest) Reset() {
 	*x = UpdateServiceRequest{}
-	mi := &file_admin_proto_msgTypes[8]
+	mi := &file_admin_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +713,7 @@ func (x *UpdateServiceRequest) String() string {
 func (*UpdateServiceRequest) ProtoMessage() {}
 
 func (x *UpdateServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[8]
+	mi := &file_admin_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -619,7 +726,7 @@ func (x *UpdateServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateServiceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateServiceRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{8}
+	return file_admin_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UpdateServiceRequest) GetName() string {
@@ -678,6 +785,20 @@ func (x *UpdateServiceRequest) GetAuthScheme() AuthScheme {
 	return AuthScheme_AUTH_SCHEME_L402
 }
 
+func (x *UpdateServiceRequest) GetPayment() *PaymentBackend {
+	if x != nil {
+		return x.Payment
+	}
+	return nil
+}
+
+func (x *UpdateServiceRequest) GetClearPayment() bool {
+	if x != nil {
+		return x.ClearPayment
+	}
+	return false
+}
+
 type DeleteServiceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -687,7 +808,7 @@ type DeleteServiceRequest struct {
 
 func (x *DeleteServiceRequest) Reset() {
 	*x = DeleteServiceRequest{}
-	mi := &file_admin_proto_msgTypes[9]
+	mi := &file_admin_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -699,7 +820,7 @@ func (x *DeleteServiceRequest) String() string {
 func (*DeleteServiceRequest) ProtoMessage() {}
 
 func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[9]
+	mi := &file_admin_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -712,7 +833,7 @@ func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteServiceRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{9}
+	return file_admin_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DeleteServiceRequest) GetName() string {
@@ -731,7 +852,7 @@ type DeleteServiceResponse struct {
 
 func (x *DeleteServiceResponse) Reset() {
 	*x = DeleteServiceResponse{}
-	mi := &file_admin_proto_msgTypes[10]
+	mi := &file_admin_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -743,7 +864,7 @@ func (x *DeleteServiceResponse) String() string {
 func (*DeleteServiceResponse) ProtoMessage() {}
 
 func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[10]
+	mi := &file_admin_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -756,7 +877,7 @@ func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteServiceResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{10}
+	return file_admin_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DeleteServiceResponse) GetStatus() string {
@@ -780,7 +901,7 @@ type ListTransactionsRequest struct {
 
 func (x *ListTransactionsRequest) Reset() {
 	*x = ListTransactionsRequest{}
-	mi := &file_admin_proto_msgTypes[11]
+	mi := &file_admin_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -792,7 +913,7 @@ func (x *ListTransactionsRequest) String() string {
 func (*ListTransactionsRequest) ProtoMessage() {}
 
 func (x *ListTransactionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[11]
+	mi := &file_admin_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -805,7 +926,7 @@ func (x *ListTransactionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTransactionsRequest.ProtoReflect.Descriptor instead.
 func (*ListTransactionsRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{11}
+	return file_admin_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListTransactionsRequest) GetService() string {
@@ -860,7 +981,7 @@ type ListTransactionsResponse struct {
 
 func (x *ListTransactionsResponse) Reset() {
 	*x = ListTransactionsResponse{}
-	mi := &file_admin_proto_msgTypes[12]
+	mi := &file_admin_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -872,7 +993,7 @@ func (x *ListTransactionsResponse) String() string {
 func (*ListTransactionsResponse) ProtoMessage() {}
 
 func (x *ListTransactionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[12]
+	mi := &file_admin_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -885,7 +1006,7 @@ func (x *ListTransactionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTransactionsResponse.ProtoReflect.Descriptor instead.
 func (*ListTransactionsResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{12}
+	return file_admin_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListTransactionsResponse) GetTransactions() []*Transaction {
@@ -918,7 +1039,7 @@ type Transaction struct {
 
 func (x *Transaction) Reset() {
 	*x = Transaction{}
-	mi := &file_admin_proto_msgTypes[13]
+	mi := &file_admin_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -930,7 +1051,7 @@ func (x *Transaction) String() string {
 func (*Transaction) ProtoMessage() {}
 
 func (x *Transaction) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[13]
+	mi := &file_admin_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -943,7 +1064,7 @@ func (x *Transaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Transaction.ProtoReflect.Descriptor instead.
 func (*Transaction) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{13}
+	return file_admin_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Transaction) GetId() int32 {
@@ -1012,7 +1133,7 @@ type ListTokensRequest struct {
 
 func (x *ListTokensRequest) Reset() {
 	*x = ListTokensRequest{}
-	mi := &file_admin_proto_msgTypes[14]
+	mi := &file_admin_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1024,7 +1145,7 @@ func (x *ListTokensRequest) String() string {
 func (*ListTokensRequest) ProtoMessage() {}
 
 func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[14]
+	mi := &file_admin_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1037,7 +1158,7 @@ func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListTokensRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{14}
+	return file_admin_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListTokensRequest) GetLimit() int32 {
@@ -1064,7 +1185,7 @@ type ListTokensResponse struct {
 
 func (x *ListTokensResponse) Reset() {
 	*x = ListTokensResponse{}
-	mi := &file_admin_proto_msgTypes[15]
+	mi := &file_admin_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1076,7 +1197,7 @@ func (x *ListTokensResponse) String() string {
 func (*ListTokensResponse) ProtoMessage() {}
 
 func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[15]
+	mi := &file_admin_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1089,7 +1210,7 @@ func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensResponse.ProtoReflect.Descriptor instead.
 func (*ListTokensResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{15}
+	return file_admin_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListTokensResponse) GetTokens() []*Transaction {
@@ -1115,7 +1236,7 @@ type RevokeTokenRequest struct {
 
 func (x *RevokeTokenRequest) Reset() {
 	*x = RevokeTokenRequest{}
-	mi := &file_admin_proto_msgTypes[16]
+	mi := &file_admin_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1127,7 +1248,7 @@ func (x *RevokeTokenRequest) String() string {
 func (*RevokeTokenRequest) ProtoMessage() {}
 
 func (x *RevokeTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[16]
+	mi := &file_admin_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1140,7 +1261,7 @@ func (x *RevokeTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeTokenRequest.ProtoReflect.Descriptor instead.
 func (*RevokeTokenRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{16}
+	return file_admin_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RevokeTokenRequest) GetTokenId() string {
@@ -1159,7 +1280,7 @@ type RevokeTokenResponse struct {
 
 func (x *RevokeTokenResponse) Reset() {
 	*x = RevokeTokenResponse{}
-	mi := &file_admin_proto_msgTypes[17]
+	mi := &file_admin_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1171,7 +1292,7 @@ func (x *RevokeTokenResponse) String() string {
 func (*RevokeTokenResponse) ProtoMessage() {}
 
 func (x *RevokeTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[17]
+	mi := &file_admin_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1184,7 +1305,7 @@ func (x *RevokeTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeTokenResponse.ProtoReflect.Descriptor instead.
 func (*RevokeTokenResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{17}
+	return file_admin_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RevokeTokenResponse) GetStatus() string {
@@ -1204,7 +1325,7 @@ type GetStatsRequest struct {
 
 func (x *GetStatsRequest) Reset() {
 	*x = GetStatsRequest{}
-	mi := &file_admin_proto_msgTypes[18]
+	mi := &file_admin_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1216,7 +1337,7 @@ func (x *GetStatsRequest) String() string {
 func (*GetStatsRequest) ProtoMessage() {}
 
 func (x *GetStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[18]
+	mi := &file_admin_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1229,7 +1350,7 @@ func (x *GetStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetStatsRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{18}
+	return file_admin_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetStatsRequest) GetFrom() string {
@@ -1257,7 +1378,7 @@ type GetStatsResponse struct {
 
 func (x *GetStatsResponse) Reset() {
 	*x = GetStatsResponse{}
-	mi := &file_admin_proto_msgTypes[19]
+	mi := &file_admin_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1269,7 +1390,7 @@ func (x *GetStatsResponse) String() string {
 func (*GetStatsResponse) ProtoMessage() {}
 
 func (x *GetStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[19]
+	mi := &file_admin_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1282,7 +1403,7 @@ func (x *GetStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetStatsResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{19}
+	return file_admin_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetStatsResponse) GetTotalRevenueSats() int64 {
@@ -1316,7 +1437,7 @@ type ServiceRevenue struct {
 
 func (x *ServiceRevenue) Reset() {
 	*x = ServiceRevenue{}
-	mi := &file_admin_proto_msgTypes[20]
+	mi := &file_admin_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1449,7 @@ func (x *ServiceRevenue) String() string {
 func (*ServiceRevenue) ProtoMessage() {}
 
 func (x *ServiceRevenue) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[20]
+	mi := &file_admin_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1462,7 @@ func (x *ServiceRevenue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceRevenue.ProtoReflect.Descriptor instead.
 func (*ServiceRevenue) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{20}
+	return file_admin_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ServiceRevenue) GetServiceName() string {
@@ -1381,7 +1502,7 @@ type MPPSession struct {
 
 func (x *MPPSession) Reset() {
 	*x = MPPSession{}
-	mi := &file_admin_proto_msgTypes[21]
+	mi := &file_admin_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1393,7 +1514,7 @@ func (x *MPPSession) String() string {
 func (*MPPSession) ProtoMessage() {}
 
 func (x *MPPSession) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[21]
+	mi := &file_admin_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1406,7 +1527,7 @@ func (x *MPPSession) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MPPSession.ProtoReflect.Descriptor instead.
 func (*MPPSession) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{21}
+	return file_admin_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *MPPSession) GetSessionId() string {
@@ -1486,7 +1607,7 @@ type ListSessionsRequest struct {
 
 func (x *ListSessionsRequest) Reset() {
 	*x = ListSessionsRequest{}
-	mi := &file_admin_proto_msgTypes[22]
+	mi := &file_admin_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1498,7 +1619,7 @@ func (x *ListSessionsRequest) String() string {
 func (*ListSessionsRequest) ProtoMessage() {}
 
 func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[22]
+	mi := &file_admin_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1511,7 +1632,7 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{22}
+	return file_admin_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListSessionsRequest) GetStatus() string {
@@ -1546,7 +1667,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_admin_proto_msgTypes[23]
+	mi := &file_admin_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1558,7 +1679,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[23]
+	mi := &file_admin_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1571,7 +1692,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{23}
+	return file_admin_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListSessionsResponse) GetSessions() []*MPPSession {
@@ -1596,7 +1717,7 @@ type GetSessionStatsRequest struct {
 
 func (x *GetSessionStatsRequest) Reset() {
 	*x = GetSessionStatsRequest{}
-	mi := &file_admin_proto_msgTypes[24]
+	mi := &file_admin_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1608,7 +1729,7 @@ func (x *GetSessionStatsRequest) String() string {
 func (*GetSessionStatsRequest) ProtoMessage() {}
 
 func (x *GetSessionStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[24]
+	mi := &file_admin_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1621,7 +1742,7 @@ func (x *GetSessionStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionStatsRequest) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{24}
+	return file_admin_proto_rawDescGZIP(), []int{25}
 }
 
 type GetSessionStatsResponse struct {
@@ -1644,7 +1765,7 @@ type GetSessionStatsResponse struct {
 
 func (x *GetSessionStatsResponse) Reset() {
 	*x = GetSessionStatsResponse{}
-	mi := &file_admin_proto_msgTypes[25]
+	mi := &file_admin_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1656,7 +1777,7 @@ func (x *GetSessionStatsResponse) String() string {
 func (*GetSessionStatsResponse) ProtoMessage() {}
 
 func (x *GetSessionStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_admin_proto_msgTypes[25]
+	mi := &file_admin_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1669,7 +1790,7 @@ func (x *GetSessionStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionStatsResponse) Descriptor() ([]byte, []int) {
-	return file_admin_proto_rawDescGZIP(), []int{25}
+	return file_admin_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetSessionStatsResponse) GetTotalSessions() int64 {
@@ -1735,7 +1856,7 @@ const file_admin_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"\x15\n" +
 	"\x13ListServicesRequest\"E\n" +
 	"\x14ListServicesResponse\x12-\n" +
-	"\bservices\x18\x01 \x03(\v2\x11.adminrpc.ServiceR\bservices\"\xf6\x01\n" +
+	"\bservices\x18\x01 \x03(\v2\x11.adminrpc.ServiceR\bservices\"\xaa\x02\n" +
 	"\aService\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1747,7 +1868,12 @@ const file_admin_proto_rawDesc = "" +
 	"\x05price\x18\x06 \x01(\x03R\x05price\x12\x12\n" +
 	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
 	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
-	"authScheme\"\x83\x02\n" +
+	"authScheme\x122\n" +
+	"\apayment\x18\t \x01(\v2\x18.adminrpc.PaymentBackendR\apayment\"a\n" +
+	"\x0ePaymentBackend\x12\x19\n" +
+	"\blnd_host\x18\x01 \x01(\tR\alndHost\x12\x19\n" +
+	"\btls_path\x18\x02 \x01(\tR\atlsPath\x12\x19\n" +
+	"\bmac_path\x18\x03 \x01(\tR\amacPath\"\xb7\x02\n" +
 	"\x14CreateServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1759,7 +1885,8 @@ const file_admin_proto_rawDesc = "" +
 	"\x05price\x18\x06 \x01(\x03R\x05price\x12\x12\n" +
 	"\x04auth\x18\a \x01(\tR\x04auth\x125\n" +
 	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeR\n" +
-	"authScheme\"\xa7\x02\n" +
+	"authScheme\x122\n" +
+	"\apayment\x18\t \x01(\v2\x18.adminrpc.PaymentBackendR\apayment\"\x80\x03\n" +
 	"\x14UpdateServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
@@ -1771,7 +1898,10 @@ const file_admin_proto_rawDesc = "" +
 	"\x05price\x18\x06 \x01(\x03H\x00R\x05price\x88\x01\x01\x12\x12\n" +
 	"\x04auth\x18\a \x01(\tR\x04auth\x12:\n" +
 	"\vauth_scheme\x18\b \x01(\x0e2\x14.adminrpc.AuthSchemeH\x01R\n" +
-	"authScheme\x88\x01\x01B\b\n" +
+	"authScheme\x88\x01\x01\x122\n" +
+	"\apayment\x18\t \x01(\v2\x18.adminrpc.PaymentBackendR\apayment\x12#\n" +
+	"\rclear_payment\x18\n" +
+	" \x01(\bR\fclearPaymentB\b\n" +
 	"\x06_priceB\x0e\n" +
 	"\f_auth_scheme\"*\n" +
 	"\x14DeleteServiceRequest\x12\x12\n" +
@@ -1886,7 +2016,7 @@ func file_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_admin_proto_goTypes = []any{
 	(AuthScheme)(0),                  // 0: adminrpc.AuthScheme
 	(*GetInfoRequest)(nil),           // 1: adminrpc.GetInfoRequest
@@ -1896,64 +2026,68 @@ var file_admin_proto_goTypes = []any{
 	(*ListServicesRequest)(nil),      // 5: adminrpc.ListServicesRequest
 	(*ListServicesResponse)(nil),     // 6: adminrpc.ListServicesResponse
 	(*Service)(nil),                  // 7: adminrpc.Service
-	(*CreateServiceRequest)(nil),     // 8: adminrpc.CreateServiceRequest
-	(*UpdateServiceRequest)(nil),     // 9: adminrpc.UpdateServiceRequest
-	(*DeleteServiceRequest)(nil),     // 10: adminrpc.DeleteServiceRequest
-	(*DeleteServiceResponse)(nil),    // 11: adminrpc.DeleteServiceResponse
-	(*ListTransactionsRequest)(nil),  // 12: adminrpc.ListTransactionsRequest
-	(*ListTransactionsResponse)(nil), // 13: adminrpc.ListTransactionsResponse
-	(*Transaction)(nil),              // 14: adminrpc.Transaction
-	(*ListTokensRequest)(nil),        // 15: adminrpc.ListTokensRequest
-	(*ListTokensResponse)(nil),       // 16: adminrpc.ListTokensResponse
-	(*RevokeTokenRequest)(nil),       // 17: adminrpc.RevokeTokenRequest
-	(*RevokeTokenResponse)(nil),      // 18: adminrpc.RevokeTokenResponse
-	(*GetStatsRequest)(nil),          // 19: adminrpc.GetStatsRequest
-	(*GetStatsResponse)(nil),         // 20: adminrpc.GetStatsResponse
-	(*ServiceRevenue)(nil),           // 21: adminrpc.ServiceRevenue
-	(*MPPSession)(nil),               // 22: adminrpc.MPPSession
-	(*ListSessionsRequest)(nil),      // 23: adminrpc.ListSessionsRequest
-	(*ListSessionsResponse)(nil),     // 24: adminrpc.ListSessionsResponse
-	(*GetSessionStatsRequest)(nil),   // 25: adminrpc.GetSessionStatsRequest
-	(*GetSessionStatsResponse)(nil),  // 26: adminrpc.GetSessionStatsResponse
+	(*PaymentBackend)(nil),           // 8: adminrpc.PaymentBackend
+	(*CreateServiceRequest)(nil),     // 9: adminrpc.CreateServiceRequest
+	(*UpdateServiceRequest)(nil),     // 10: adminrpc.UpdateServiceRequest
+	(*DeleteServiceRequest)(nil),     // 11: adminrpc.DeleteServiceRequest
+	(*DeleteServiceResponse)(nil),    // 12: adminrpc.DeleteServiceResponse
+	(*ListTransactionsRequest)(nil),  // 13: adminrpc.ListTransactionsRequest
+	(*ListTransactionsResponse)(nil), // 14: adminrpc.ListTransactionsResponse
+	(*Transaction)(nil),              // 15: adminrpc.Transaction
+	(*ListTokensRequest)(nil),        // 16: adminrpc.ListTokensRequest
+	(*ListTokensResponse)(nil),       // 17: adminrpc.ListTokensResponse
+	(*RevokeTokenRequest)(nil),       // 18: adminrpc.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),      // 19: adminrpc.RevokeTokenResponse
+	(*GetStatsRequest)(nil),          // 20: adminrpc.GetStatsRequest
+	(*GetStatsResponse)(nil),         // 21: adminrpc.GetStatsResponse
+	(*ServiceRevenue)(nil),           // 22: adminrpc.ServiceRevenue
+	(*MPPSession)(nil),               // 23: adminrpc.MPPSession
+	(*ListSessionsRequest)(nil),      // 24: adminrpc.ListSessionsRequest
+	(*ListSessionsResponse)(nil),     // 25: adminrpc.ListSessionsResponse
+	(*GetSessionStatsRequest)(nil),   // 26: adminrpc.GetSessionStatsRequest
+	(*GetSessionStatsResponse)(nil),  // 27: adminrpc.GetSessionStatsResponse
 }
 var file_admin_proto_depIdxs = []int32{
 	7,  // 0: adminrpc.ListServicesResponse.services:type_name -> adminrpc.Service
 	0,  // 1: adminrpc.Service.auth_scheme:type_name -> adminrpc.AuthScheme
-	0,  // 2: adminrpc.CreateServiceRequest.auth_scheme:type_name -> adminrpc.AuthScheme
-	0,  // 3: adminrpc.UpdateServiceRequest.auth_scheme:type_name -> adminrpc.AuthScheme
-	14, // 4: adminrpc.ListTransactionsResponse.transactions:type_name -> adminrpc.Transaction
-	14, // 5: adminrpc.ListTokensResponse.tokens:type_name -> adminrpc.Transaction
-	21, // 6: adminrpc.GetStatsResponse.service_breakdown:type_name -> adminrpc.ServiceRevenue
-	22, // 7: adminrpc.ListSessionsResponse.sessions:type_name -> adminrpc.MPPSession
-	1,  // 8: adminrpc.Admin.GetInfo:input_type -> adminrpc.GetInfoRequest
-	3,  // 9: adminrpc.Admin.GetHealth:input_type -> adminrpc.GetHealthRequest
-	5,  // 10: adminrpc.Admin.ListServices:input_type -> adminrpc.ListServicesRequest
-	8,  // 11: adminrpc.Admin.CreateService:input_type -> adminrpc.CreateServiceRequest
-	9,  // 12: adminrpc.Admin.UpdateService:input_type -> adminrpc.UpdateServiceRequest
-	10, // 13: adminrpc.Admin.DeleteService:input_type -> adminrpc.DeleteServiceRequest
-	12, // 14: adminrpc.Admin.ListTransactions:input_type -> adminrpc.ListTransactionsRequest
-	15, // 15: adminrpc.Admin.ListTokens:input_type -> adminrpc.ListTokensRequest
-	17, // 16: adminrpc.Admin.RevokeToken:input_type -> adminrpc.RevokeTokenRequest
-	19, // 17: adminrpc.Admin.GetStats:input_type -> adminrpc.GetStatsRequest
-	23, // 18: adminrpc.Admin.ListSessions:input_type -> adminrpc.ListSessionsRequest
-	25, // 19: adminrpc.Admin.GetSessionStats:input_type -> adminrpc.GetSessionStatsRequest
-	2,  // 20: adminrpc.Admin.GetInfo:output_type -> adminrpc.GetInfoResponse
-	4,  // 21: adminrpc.Admin.GetHealth:output_type -> adminrpc.GetHealthResponse
-	6,  // 22: adminrpc.Admin.ListServices:output_type -> adminrpc.ListServicesResponse
-	7,  // 23: adminrpc.Admin.CreateService:output_type -> adminrpc.Service
-	7,  // 24: adminrpc.Admin.UpdateService:output_type -> adminrpc.Service
-	11, // 25: adminrpc.Admin.DeleteService:output_type -> adminrpc.DeleteServiceResponse
-	13, // 26: adminrpc.Admin.ListTransactions:output_type -> adminrpc.ListTransactionsResponse
-	16, // 27: adminrpc.Admin.ListTokens:output_type -> adminrpc.ListTokensResponse
-	18, // 28: adminrpc.Admin.RevokeToken:output_type -> adminrpc.RevokeTokenResponse
-	20, // 29: adminrpc.Admin.GetStats:output_type -> adminrpc.GetStatsResponse
-	24, // 30: adminrpc.Admin.ListSessions:output_type -> adminrpc.ListSessionsResponse
-	26, // 31: adminrpc.Admin.GetSessionStats:output_type -> adminrpc.GetSessionStatsResponse
-	20, // [20:32] is the sub-list for method output_type
-	8,  // [8:20] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	8,  // 2: adminrpc.Service.payment:type_name -> adminrpc.PaymentBackend
+	0,  // 3: adminrpc.CreateServiceRequest.auth_scheme:type_name -> adminrpc.AuthScheme
+	8,  // 4: adminrpc.CreateServiceRequest.payment:type_name -> adminrpc.PaymentBackend
+	0,  // 5: adminrpc.UpdateServiceRequest.auth_scheme:type_name -> adminrpc.AuthScheme
+	8,  // 6: adminrpc.UpdateServiceRequest.payment:type_name -> adminrpc.PaymentBackend
+	15, // 7: adminrpc.ListTransactionsResponse.transactions:type_name -> adminrpc.Transaction
+	15, // 8: adminrpc.ListTokensResponse.tokens:type_name -> adminrpc.Transaction
+	22, // 9: adminrpc.GetStatsResponse.service_breakdown:type_name -> adminrpc.ServiceRevenue
+	23, // 10: adminrpc.ListSessionsResponse.sessions:type_name -> adminrpc.MPPSession
+	1,  // 11: adminrpc.Admin.GetInfo:input_type -> adminrpc.GetInfoRequest
+	3,  // 12: adminrpc.Admin.GetHealth:input_type -> adminrpc.GetHealthRequest
+	5,  // 13: adminrpc.Admin.ListServices:input_type -> adminrpc.ListServicesRequest
+	9,  // 14: adminrpc.Admin.CreateService:input_type -> adminrpc.CreateServiceRequest
+	10, // 15: adminrpc.Admin.UpdateService:input_type -> adminrpc.UpdateServiceRequest
+	11, // 16: adminrpc.Admin.DeleteService:input_type -> adminrpc.DeleteServiceRequest
+	13, // 17: adminrpc.Admin.ListTransactions:input_type -> adminrpc.ListTransactionsRequest
+	16, // 18: adminrpc.Admin.ListTokens:input_type -> adminrpc.ListTokensRequest
+	18, // 19: adminrpc.Admin.RevokeToken:input_type -> adminrpc.RevokeTokenRequest
+	20, // 20: adminrpc.Admin.GetStats:input_type -> adminrpc.GetStatsRequest
+	24, // 21: adminrpc.Admin.ListSessions:input_type -> adminrpc.ListSessionsRequest
+	26, // 22: adminrpc.Admin.GetSessionStats:input_type -> adminrpc.GetSessionStatsRequest
+	2,  // 23: adminrpc.Admin.GetInfo:output_type -> adminrpc.GetInfoResponse
+	4,  // 24: adminrpc.Admin.GetHealth:output_type -> adminrpc.GetHealthResponse
+	6,  // 25: adminrpc.Admin.ListServices:output_type -> adminrpc.ListServicesResponse
+	7,  // 26: adminrpc.Admin.CreateService:output_type -> adminrpc.Service
+	7,  // 27: adminrpc.Admin.UpdateService:output_type -> adminrpc.Service
+	12, // 28: adminrpc.Admin.DeleteService:output_type -> adminrpc.DeleteServiceResponse
+	14, // 29: adminrpc.Admin.ListTransactions:output_type -> adminrpc.ListTransactionsResponse
+	17, // 30: adminrpc.Admin.ListTokens:output_type -> adminrpc.ListTokensResponse
+	19, // 31: adminrpc.Admin.RevokeToken:output_type -> adminrpc.RevokeTokenResponse
+	21, // 32: adminrpc.Admin.GetStats:output_type -> adminrpc.GetStatsResponse
+	25, // 33: adminrpc.Admin.ListSessions:output_type -> adminrpc.ListSessionsResponse
+	27, // 34: adminrpc.Admin.GetSessionStats:output_type -> adminrpc.GetSessionStatsResponse
+	23, // [23:35] is the sub-list for method output_type
+	11, // [11:23] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_admin_proto_init() }
@@ -1961,14 +2095,14 @@ func file_admin_proto_init() {
 	if File_admin_proto != nil {
 		return
 	}
-	file_admin_proto_msgTypes[8].OneofWrappers = []any{}
+	file_admin_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_proto_rawDesc), len(file_admin_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   26,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

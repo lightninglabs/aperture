@@ -59,15 +59,18 @@ type Secret struct {
 }
 
 type Service struct {
-	ID         int32
-	Name       string
-	Address    string
-	Protocol   string
-	HostRegexp string
-	PathRegexp string
-	Price      int64
-	Auth       string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	AuthScheme string
+	ID             int32
+	Name           string
+	Address        string
+	Protocol       string
+	HostRegexp     string
+	PathRegexp     string
+	Price          int64
+	Auth           string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	AuthScheme     string
+	PaymentLndhost string
+	PaymentTlspath string
+	PaymentMacpath string
 }

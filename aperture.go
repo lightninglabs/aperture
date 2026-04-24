@@ -431,8 +431,17 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			// the merchant's own wallet, the gateway never takes
 			// custody. Services without a payment block fall
 			// through to defaultChal (legacy single-lnd mode).
+			//
+			// We merge DB-persisted services into the YAML list
+			// first, so services created at runtime via the
+			// admin API (and their payment overrides) are
+			// considered on restart — otherwise the router would
+			// only know about YAML-defined services.
+			mergedForChallengers := mergeServicesFromDB(
+				a.cfg.Services, svcStore,
+			)
 			perServiceChallengers, err := buildPerServiceChallengers(
-				a.cfg.Services, authCfg.Network,
+				mergedForChallengers, authCfg.Network,
 				a.cfg.InvoiceBatchSize, genInvoiceReq,
 				errChan, a.cfg.StrictVerify,
 				challengerOpts,
@@ -1728,7 +1737,7 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 	// Build a map of DB services keyed by name.
 	dbByName := make(map[string]*proxy.Service, len(dbRows))
 	for _, row := range dbRows {
-		dbByName[row.Name] = &proxy.Service{
+		svc := &proxy.Service{
 			Name:       row.Name,
 			Address:    row.Address,
 			Protocol:   row.Protocol,
@@ -1738,6 +1747,21 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 			Auth:       auth.Level(row.Auth),
 			AuthScheme: row.AuthScheme,
 		}
+		// Rehydrate per-service lnd override if set. We only attach
+		// the payment block when all three columns have non-empty
+		// values — partial state is nonsensical (and the admin API
+		// rejects it on write), but guard here too in case the DB
+		// was hand-edited.
+		if row.PaymentLndhost != "" && row.PaymentTlspath != "" &&
+			row.PaymentMacpath != "" {
+
+			svc.Payment = &proxy.PaymentBackend{
+				LndHost: row.PaymentLndhost,
+				TLSPath: row.PaymentTlspath,
+				MacPath: row.PaymentMacpath,
+			}
+		}
+		dbByName[row.Name] = svc
 	}
 
 	// Start with DB services, then add config services that are not

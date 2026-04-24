@@ -104,5 +104,5 @@ CREATE TABLE services (
     auth         TEXT NOT NULL DEFAULT '',
     created_at   TIMESTAMP NOT NULL,
     updated_at   TIMESTAMP NOT NULL
-, auth_scheme TEXT NOT NULL DEFAULT 'l402');
+, auth_scheme TEXT NOT NULL DEFAULT 'l402', payment_lndhost TEXT NOT NULL DEFAULT '', payment_tlspath TEXT NOT NULL DEFAULT '', payment_macpath TEXT NOT NULL DEFAULT '');
 

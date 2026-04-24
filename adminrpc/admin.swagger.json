@@ -442,6 +442,14 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
+        },
+        "payment": {
+          "$ref": "#/definitions/adminrpcPaymentBackend",
+          "description": "payment updates the per-service lnd override. When omitted (nil),\nthe existing payment config is preserved (not reset). To explicitly\nremove a payment override from a service, set clear_payment=true\ninstead. As with CreateService, changes take effect on restart."
+        },
+        "clear_payment": {
+          "type": "boolean",
+          "description": "clear_payment, when true, removes any existing per-service lnd\noverride from the service, returning it to the global single-lnd\nmode. Mutually exclusive with setting payment."
         }
       }
     },
@@ -483,6 +491,10 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) to use. Defaults to\nAUTH_SCHEME_L402 if unset."
+        },
+        "payment": {
+          "$ref": "#/definitions/adminrpcPaymentBackend",
+          "description": "payment optionally configures a per-service lnd override. See the\nService message for field semantics. Omit for legacy single-lnd\nmode. Setting this takes effect after the next prism restart —\nthe in-memory challenger router is built at startup."
         }
       }
     },
@@ -684,6 +696,24 @@
       },
       "description": "MPPSession mirrors the on-server session record for the admin API.\nPayment hash is hex-encoded. Amounts are in the chain's base unit."
     },
+    "adminrpcPaymentBackend": {
+      "type": "object",
+      "properties": {
+        "lnd_host": {
+          "type": "string",
+          "description": "lnd_host is the merchant lnd's gRPC address (host:port)."
+        },
+        "tls_path": {
+          "type": "string",
+          "description": "tls_path is the path to the merchant lnd's tls.cert (public)."
+        },
+        "mac_path": {
+          "type": "string",
+          "description": "mac_path is the absolute path to the minimum-privilege macaroon\nfile supplied by the merchant. Only invoices:{read,write} and\ninfo:read are expected to be granted."
+        }
+      },
+      "description": "PaymentBackend is an optional per-service lnd connection used in multi-\nmerchant deployments. The merchant runs their own lnd and hands the\ngateway a minimum-privilege macaroon (invoices:read invoices:write\ninfo:read) so the gateway can create/verify invoices but cannot move\nfunds or see wallet state.\n\nAll three fields are required when the block is present. Paths are\nabsolute paths on the gateway host's filesystem."
+    },
     "adminrpcRevokeTokenResponse": {
       "type": "object",
       "properties": {
@@ -720,6 +750,10 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) are used for this\nservice. Defaults to AUTH_SCHEME_L402 for backwards compatibility."
+        },
+        "payment": {
+          "$ref": "#/definitions/adminrpcPaymentBackend",
+          "description": "payment optionally overrides the global authenticator lnd for this\nservice (multi-merchant mode). When set, invoices for this service\nare issued against the merchant's own lnd so payments land in their\nwallet — the gateway never takes custody. Unset = legacy single-lnd\nmode using authenticator.lndhost."
         }
       }
     },
