@@ -364,6 +364,164 @@ When `auth_scheme` is `AUTH_SCHEME_L402_MPP`, the 402 response includes both
 `WWW-Authenticate: L402` and `WWW-Authenticate: Payment` headers, and the
 response body uses RFC 9457 Problem Details JSON.
 
+## Multi-merchant (per-service LND routing)
+
+By default prism routes every service's invoices through a single LND node
+(the one configured under `authenticator.lndhost`). In that mode the
+gateway operator's wallet receives all payments and is responsible for
+splitting revenue to merchants out-of-band. That works for a single-
+operator-multi-services deployment but makes the operator a custodian of
+merchants' funds, with all the regulatory weight that implies.
+
+Prism supports an alternative **per-service** routing mode: each service
+can opt into its own dedicated LND backend via a `payment:` block. When
+set, invoices for that service are issued against the merchant's own LND
+so payments land directly in the merchant's wallet. The gateway never
+takes custody.
+
+The two modes coexist in the same deployment — services without a
+`payment:` block continue to use the global LND, services with one use
+theirs. The router composes them transparently.
+
+### Config
+
+```yaml
+services:
+  # Legacy single-lnd mode: no `payment:` block, uses global lnd.
+  - name: "loka-internal-api"
+    hostregexp: '^api\.loka\.local$'
+    address: "127.0.0.1:8080"
+    price: 10000000
+
+  # Multi-merchant mode: this service's invoices land in the merchant's
+  # own lnd, not the gateway's.
+  - name: "merchant-a"
+    hostregexp: '^a\.example\.com$'
+    address: "https://merchant-a.api.internal:8443"
+    price: 10000000
+    payment:
+      lndhost: "merchant-a.lnd.internal:10009"
+      tlspath: "/gateway-secrets/merchant-a/tls.cert"
+      macpath: "/gateway-secrets/merchant-a/prism-gateway.macaroon"
+```
+
+Runtime behavior:
+
+- Startup log: `Service "merchant-a" bound to merchant lnd at ...`
+- Startup log: `Multi-merchant mode: N service(s) bound to dedicated lnd backends`
+- A 402 challenge for `merchant-a` returns a BOLT11 invoice whose
+  destination is the merchant's node pubkey.
+- Admin `transactions` / `stats` still aggregate across all services;
+  each row's `payment_hash` is unique per lnd.
+- Prism validates that no two `payment:` blocks share the same
+  `(lndhost, macpath)` — shared endpoints would silently pool funds.
+
+### Merchant onboarding: bake a minimum-privilege macaroon
+
+Prism only needs three RPC permissions on the merchant's lnd:
+`invoices:read`, `invoices:write`, `info:read`. Give it anything more and
+you increase blast radius without benefit. LND's `bakemacaroon` creates
+tokens scoped to exactly those permissions; the merchant runs the
+command on their own node, then hands the file to the gateway operator
+(you).
+
+**1. Verify you have LND (v0.14+) with `bakemacaroon` support:**
+
+```bash
+lncli --version
+lncli bakemacaroon --help
+```
+
+**2. Bake the macaroon:**
+
+```bash
+# Minimum permissions. No payment-send, no wallet, no channels.
+lncli bakemacaroon --save_to=prism-gateway.macaroon \
+    invoices:read invoices:write info:read
+```
+
+**3. (Recommended) Add IP-lock + expiry:**
+
+```bash
+lncli bakemacaroon --save_to=prism-gateway.macaroon \
+    --ip_address=<gateway-public-ip> \
+    --expiry=7776000 \
+    invoices:read invoices:write info:read
+```
+
+- `--ip_address` pins the macaroon to the gateway's IP — even if the
+  file is stolen, it can't be used from anywhere else.
+- `--expiry=7776000` = 90 days. Plan to re-bake before it lapses.
+
+**4. Hand over to the gateway operator:**
+
+```
+Send over an encrypted channel (Signal, PGP email, Vault):
+  - tls.cert                           (your lnd's TLS cert, from $LND_DIR/tls.cert)
+  - prism-gateway.macaroon             (the file you just baked)
+  - host:port                          (your lnd's gRPC listen address, publicly reachable)
+```
+
+**5. What this macaroon can and can't do:**
+
+| RPC | Allowed? | Why |
+|---|---|---|
+| `AddInvoice`, `LookupInvoice`, `ListInvoices`, `SubscribeInvoices` | Yes | Prism's invoice-creation and reconciliation flow |
+| `GetInfo` | Yes | Prism reads `chains[0].chain` once at startup for unit labelling |
+| `SendPayment`, `SendPaymentSync`, `RouterSendPaymentV2` | **No** | `offchain:write` not granted — gateway cannot move merchant's money |
+| `OpenChannel`, `CloseChannel`, `AbandonChannel` | **No** | `onchain:write` + `lightning:write` not granted |
+| `ListChannels`, `ChannelBalance`, `WalletBalance` | **No** | `lightning:read` / `onchain:read` not granted; gateway can't even see the merchant's balance |
+| `SignMessage`, `DeriveKey`, `DeriveNextKey` | **No** | `signer:generate` not granted |
+| `StopDaemon`, `DebugLevel` | **No** | `meta:write` not granted |
+
+Worst case (macaroon leaked, `--ip_address` bypassed somehow): attacker
+can create arbitrary fake invoices on the merchant's lnd, which clutters
+the database but moves zero value — no one has to pay those invoices,
+and even if someone did, the money goes to the merchant.
+
+**6. Revocation:**
+
+If you suspect the macaroon was compromised, the merchant runs:
+
+```bash
+lncli listmacaroonids                     # find the id of the gateway's macaroon
+lncli deletemacaroonid <id>               # revokes immediately
+```
+
+Then they bake a new one and send it over. Prism reloads the macaroon on
+restart; plan a brief maintenance window or a hot-reload path if zero
+downtime matters.
+
+### Hardening checklist (merchant side)
+
+In addition to the macaroon scope, merchants can defend in depth:
+
+- **Network ACL**: restrict inbound gRPC (`:10009`) to the gateway's IP
+  range via firewall. The gateway doesn't need public access to the lnd.
+- **TLS pinning**: the gateway stores the merchant's `tls.cert`; on
+  every connection LND verifies the cert. Rotate cert → notify gateway
+  to re-deploy.
+- **Watch logs**: if the macaroon's monthly RPC pattern changes
+  abruptly (many `AddInvoice` with amount 0, or calls from new IPs),
+  rotate.
+- **Rebake every 90 days**: document the rotation date alongside the
+  gateway operator, put it in the calendar.
+
+### Migration from single-lnd mode
+
+To convert an existing single-lnd deployment to multi-merchant:
+
+1. Each target merchant bakes their own gateway macaroon (step 2 above).
+2. Edit prism config: add `payment:` blocks to the relevant services.
+3. Restart prism. Services with `payment:` start issuing invoices on
+   the merchant's lnd; services without continue on the global lnd.
+4. Migrate one merchant at a time; the two modes coexist.
+
+Existing settled transactions in the admin DB continue to be visible
+(they're keyed by payment hash, not lnd node). Newly created invoices
+after the cutover won't be visible on the global lnd — verify with
+`prismcli transactions list --service=<merchant>` on the gateway.
+
 ## Security
 
 - **Macaroon auth**: All endpoints except `GetHealth` require a valid admin

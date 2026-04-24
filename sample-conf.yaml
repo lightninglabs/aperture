@@ -363,6 +363,33 @@ services:
 
     # Any path not matched above costs `price` satoshis per token.
 
+  # Multi-merchant example — a service that routes its own invoices to
+  # the merchant's own lnd node instead of the global authenticator lnd.
+  # Use this when onboarding third-party developers so payments land
+  # directly in their wallet and the gateway never takes custody.
+  #
+  # The merchant should bake a minimum-privilege macaroon on their lnd:
+  #   lncli bakemacaroon --save_to=prism-gateway.macaroon \
+  #       --ip_address=<gateway-public-ip> --expiry=7776000 \
+  #       invoices:read invoices:write info:read
+  #
+  # Then hand tls.cert + prism-gateway.macaroon + lnd host:port to the
+  # gateway operator. See docs/admin-api.md "Merchant onboarding" for
+  # the full procedure, permission rationale, and rotation advice.
+  #
+  # Services WITHOUT this block keep using the global authenticator.lnd
+  # — both modes coexist in one prism deployment.
+  # - name: "merchant-a"
+  #   hostregexp: '^a\.example\.com$'
+  #   pathregexp: '^/.*$'
+  #   address: "https://merchant-a.api.internal:8443"
+  #   protocol: https
+  #   price: 10000000
+  #   payment:
+  #     lndhost: "merchant-a.lnd.internal:10009"
+  #     tlspath: "/gateway-secrets/merchant-a/tls.cert"
+  #     macpath: "/gateway-secrets/merchant-a/prism-gateway.macaroon"
+
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.
 tor:
