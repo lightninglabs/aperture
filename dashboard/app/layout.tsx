@@ -187,7 +187,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     <Body>
       <Nav>
         <Brand href="/">
-          APERTURE
+          LOKA-PRISM
           {network && <NetworkBadge $network={network}>{network}</NetworkBadge>}
         </Brand>
         <NavLinks>{links}</NavLinks>
