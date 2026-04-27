@@ -300,6 +300,62 @@ func TestMintL402IgnoresTransactionStoreErrors(t *testing.T) {
 	require.True(t, txStore.called)
 }
 
+// TestThirdPartyCaveatL402 ensures that a macaroon with a third-party caveat
+// can be verified when the appropriate discharge macaroon is provided, and
+// fails when it is not.
+func TestThirdPartyCaveatL402(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mint := New(&Config{
+		Secrets:        newMockSecretStore(),
+		Challenger:     newMockChallenger(),
+		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
+	})
+
+	// Mint an L402 for a test service.
+	mac, _, err := mint.MintL402(ctx, testService)
+	require.NoError(t, err)
+
+	// Add a third-party caveat. The shared root key would normally be
+	// negotiated with the third party out of band.
+	thirdPartyKey := []byte("third-party-shared-secret-key!!!")
+	caveatID := []byte("third-party-caveat-id")
+	err = mac.AddThirdPartyCaveat(thirdPartyKey, caveatID, "https://thirdparty")
+	require.NoError(t, err)
+
+	// Verification without a discharge should fail because the library
+	// cannot find a discharge for the third-party caveat.
+	params := VerificationParams{
+		Macaroon:      mac,
+		Preimage:      testPreimage,
+		TargetService: testService.Name,
+	}
+	err = mint.VerifyL402(ctx, &params)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot find discharge")
+
+	// Create a discharge macaroon issued by the third party.
+	discharge, err := macaroon.New(
+		thirdPartyKey, caveatID, "https://thirdparty",
+		macaroon.LatestVersion,
+	)
+	require.NoError(t, err)
+
+	// Bind the discharge to the root macaroon before use.
+	discharge.Bind(mac.Signature())
+
+	// Verification with the correct discharge should succeed.
+	paramsWithDischarge := VerificationParams{
+		Macaroon:      mac,
+		Preimage:      testPreimage,
+		TargetService: testService.Name,
+		Discharges:    []*macaroon.Macaroon{discharge},
+	}
+	require.NoError(t, mint.VerifyL402(ctx, &paramsWithDischarge))
+}
+
 type mockTime struct {
 	time time.Time
 }
