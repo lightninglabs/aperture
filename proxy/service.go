@@ -23,14 +23,33 @@ var (
 )
 
 const (
-	// defaultServicePrice is price in satoshis to be used as the default
-	// service price.
-	defaultServicePrice = 1
+	// defaultServicePriceSats is the default service price in satoshis,
+	// used when the connected lnd reports a bitcoin chain (or no chain).
+	// Kept at 1 sat for backward compatibility with single-sat L402
+	// deployments.
+	defaultServicePriceSats = 1
+
+	// defaultServicePriceMIST is the default service price in MIST for
+	// sui chains. 10_000_000 MIST = 0.01 SUI (~1¢ at $1/SUI), which is
+	// closer to a sensible micropayment unit on sui than 1 MIST would
+	// be. Picked to match the sample-conf example so an unconfigured
+	// service price doesn't render as 0.000000001 SUI in the dashboard.
+	defaultServicePriceMIST = 10_000_000
 
 	// maxServicePrice is the maximum price in satoshis that can be used
 	// to create an invoice through lnd.
 	maxServicePrice = btcutil.SatoshiPerBitcoin * 100000
 )
+
+// defaultPriceForChain returns the default service price (in the chain's
+// base unit) to use when a service is configured without an explicit
+// `price`. Uses sui's MIST scale on sui, satoshis everywhere else.
+func defaultPriceForChain(chain string) int64 {
+	if chain == "sui" {
+		return defaultServicePriceMIST
+	}
+	return defaultServicePriceSats
+}
 
 // RewriteConfig defines what should be rewritten in a proxied client request.
 type RewriteConfig struct {
@@ -253,9 +272,11 @@ func (s *Service) SkipInvoiceCreation(r *http.Request) bool {
 	return false
 }
 
-// prepareServices prepares the backend service configurations to be used by the
-// proxy.
-func prepareServices(services []*Service) error {
+// prepareServices prepares the backend service configurations to be used by
+// the proxy. `chain` is the underlying chain reported by lnd (e.g. "bitcoin",
+// "sui") and is used to pick a sensible default for services that omit
+// `price`. Empty chain falls back to the bitcoin default.
+func prepareServices(services []*Service, chain string) error {
 	for _, service := range services {
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
@@ -422,14 +443,16 @@ func prepareServices(services []*Service) error {
 		}
 
 		// Check that the price for the service is not negative and not
-		// more than the maximum amount allowed by lnd. If no price, or
-		// a price of zero satoshis, is set the then default price of 1
-		// satoshi is to be used.
+		// more than the maximum amount allowed by lnd. If no price (or
+		// a price of zero) is set then a chain-appropriate default is
+		// used: 1 sat on bitcoin, 10_000_000 MIST (0.01 SUI) on sui.
 		switch {
 		case service.Price == 0:
-			log.Debugf("Using default L402 price of %v satoshis for "+
-				"service %s.", defaultServicePrice, service.Name)
-			service.Price = defaultServicePrice
+			defaultPrice := defaultPriceForChain(chain)
+			log.Debugf("Using default L402 price of %d (chain=%q) "+
+				"for service %s.", defaultPrice, chain,
+				service.Name)
+			service.Price = defaultPrice
 		case service.Price < 0:
 			return fmt.Errorf("negative price set for "+
 				"service %s", service.Name)
