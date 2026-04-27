@@ -311,18 +311,33 @@ services:
     # 1_000_000 MIST = 0.001 SUI (cheap per-call endpoint).
     price: 1000000
 
+  # Production subdomain example. The gateway is reached at the apex
+  # prism.loka.cash, and each service is mounted on its own subdomain.
+  # In DNS, point service3.prism.loka.cash (and any other sub-name you
+  # add) at the gateway's public IP — typically a wildcard A record
+  # like:
+  #
+  #   *.prism.loka.cash.   IN  A   <gateway-public-ip>
+  #
+  # Clients then call https://service3.prism.loka.cash/<api-path>
+  # directly; their HTTP client sets the Host header automatically and
+  # prism's hostregexp picks the matching service. No manual -H "Host:"
+  # gymnastics needed once DNS is in place.
   - name: "service3"
-    hostregexp: "service3.com:8083"
+    hostregexp: '^service3\.prism\.loka\.cash$'
     pathregexp: '^/.*$'
-    address: "123.456.789:8082"
+
+    # Where prism reverse-proxies the request after auth. Point this at
+    # your real backend (a private VPC IP, a service mesh address, an
+    # internal hostname, etc.).
+    address: "10.0.0.42:8082"
     protocol: https
-    constraints:
-        "valid_until": "2020-01-01"
+
     dynamicprice:
-      enbled: true
-      grpcaddress: 123.456.789:8083
+      enabled: true
+      grpcaddress: "pricer.internal:10010"
       insecure: false
-      tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
+      tlscertpath: "/etc/prism/pricer/tls.cert"
 
   # Mixed-auth example: a single backend where health checks and public
   # documentation are free, most API calls require payment, and streaming

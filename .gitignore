@@ -16,7 +16,7 @@ cmd/aperture/aperture
 
 /prism
 cmd/prism/prism
-
+/prismcli
 # misc
 .vscode
 .idea
