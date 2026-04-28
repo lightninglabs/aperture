@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -495,6 +496,22 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 	a.adminCleanup = adminCleanup
 
+	// In a multi-replica HA deployment the admin handler only updates
+	// the in-memory state of whichever replica handled the write, so
+	// other replicas see stale config until they restart. Run a
+	// background poller that re-reads the merged config from the DB
+	// and reloads the proxy if anything changed. Single-replica
+	// deployments can disable this with ServicePollInterval=0; the
+	// admin handler still does its own in-process update so latency
+	// is unaffected for the local case.
+	if a.cfg.ServicePollInterval > 0 && svcStore != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.pollServiceConfig(svcStore, svcHolder)
+		}()
+	}
+
 	// Create a payment sender for MPP session refunds if sessions are
 	// enabled and we have a direct LND connection.
 	var paymentSender auth.PaymentSender
@@ -642,6 +659,82 @@ func (h *serviceHolder) set(services []*proxy.Service) {
 	defer h.mu.Unlock()
 
 	h.services = services
+}
+
+// pollServiceConfig periodically re-reads the merged service list from
+// the DB (config-file services + persisted DB rows). When the result
+// differs from the last seen state — which happens when a sibling
+// replica handled an admin-API write — it reloads the proxy in-place.
+//
+// Polling is the simplest backend-agnostic path to multi-replica
+// consistency. A future optimisation is to add Postgres LISTEN/NOTIFY
+// for the postgres backend so changes propagate at low latency without
+// the polling tax; sqlite/etcd would still rely on this poller.
+func (a *Aperture) pollServiceConfig(svcStore *aperturedb.ServicesStore,
+	holder *serviceHolder) {
+
+	interval := a.cfg.ServicePollInterval
+	log.Infof("Service config poller running (interval=%v); reloads "+
+		"the proxy when DB-persisted service config changes",
+		interval)
+
+	lastHash := serviceStateHash(holder.get())
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+		case <-a.quit:
+			log.Debugf("Service config poller stopping")
+			return
+		}
+
+		merged := mergeServicesFromDB(a.cfg.Services, svcStore)
+		newHash := serviceStateHash(merged)
+		if newHash == lastHash {
+			continue
+		}
+		log.Infof("Service config changed externally — reloading "+
+			"proxy with %d service(s)", len(merged))
+		if err := a.UpdateServices(merged); err != nil {
+			log.Errorf("Service config reload failed: %v", err)
+			continue
+		}
+		holder.set(merged)
+		lastHash = newHash
+	}
+}
+
+// serviceStateHash returns a stable digest of the routing-relevant
+// fields on a service list. Used by the cross-replica config poller
+// to detect changes without re-running an expensive proxy reload on
+// every tick. Fields included are anything that affects how a request
+// matches a service or how its invoice is issued — name, host/path
+// regex, address/protocol, price, auth, and the per-service payment
+// override. Anything else (rate limits, freebie counts, dynamic
+// pricers etc.) would also change here if config changed, since they
+// live on the same DB row alongside the basics.
+func serviceStateHash(services []*proxy.Service) string {
+	sorted := make([]*proxy.Service, len(services))
+	copy(sorted, services)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Name < sorted[j].Name
+	})
+
+	h := sha256.New()
+	for _, s := range sorted {
+		fmt.Fprintf(h, "%s|%s|%s|%s|%s|%d|%s|%s",
+			s.Name, s.Address, s.Protocol, s.HostRegexp,
+			s.PathRegexp, s.Price, s.Auth, s.AuthScheme)
+		if s.Payment != nil {
+			fmt.Fprintf(h, "|%s|%s|%s",
+				s.Payment.LndHost, s.Payment.TLSPath,
+				s.Payment.MacPath)
+		}
+		h.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // UpdateServices instructs the proxy to re-initialize its internal

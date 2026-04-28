@@ -46,6 +46,15 @@ const (
 	// response after sending a WebSocket ping before considering the
 	// connection dead.
 	defaultWsPongWait = 15 * time.Second
+
+	// defaultServicePollInterval is how often each replica re-reads
+	// the persisted service list from the DB to pick up changes made
+	// via the admin API on another replica. Single-replica deployments
+	// don't need it (the admin handler updates in-memory state in the
+	// same process), but multi-replica HA setups would otherwise see
+	// stale service configs on whichever replica didn't handle the
+	// write. Set to 0 to disable polling entirely.
+	defaultServicePollInterval = 30 * time.Second
 )
 
 type EtcdConfig struct {
@@ -302,6 +311,16 @@ type Config struct {
 
 	// Blocklist is a list of IPs to deny access to.
 	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
+
+	// ServicePollInterval controls how often each replica re-reads the
+	// persisted service list from the DB to pick up admin-API changes
+	// made on a different replica. Required for multi-replica HA
+	// deployments — without it, services created via admin API only
+	// land in the receiving replica's in-memory state, and requests
+	// routed by the load balancer to other replicas return 403. Set
+	// to 0 to disable polling (single-replica deployments don't need
+	// it). Defaults to 30s.
+	ServicePollInterval time.Duration `long:"servicepollinterval" description:"How often replicas re-read service config from the DB to pick up admin-API changes made on other replicas. 0 disables polling."`
 }
 
 func (c *Config) validate() error {
@@ -345,23 +364,24 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
-		DatabaseBackend:  "etcd",
-		Etcd:             &EtcdConfig{},
-		Sqlite:           DefaultSqliteConfig(),
-		Postgres:         &aperturedb.PostgresConfig{},
-		Authenticator:    &AuthConfig{},
-		Tor:              &TorConfig{},
-		HashMail:         &HashMailConfig{},
-		Prometheus:       &PrometheusConfig{},
-		Admin:            &AdminConfig{},
-		IdleTimeout:      defaultIdleTimeout,
-		ReadTimeout:      defaultReadTimeout,
-		WriteTimeout:     defaultWriteTimeout,
-		WsPingInterval:   defaultWsPingInterval,
-		WsPongWait:       defaultWsPongWait,
-		InvoiceBatchSize: defaultInvoiceBatchSize,
-		Logging:          build.DefaultLogConfig(),
-		Blocklist:        []string{},
-		StrictVerify:     defaultStrictVerify,
+		DatabaseBackend:     "etcd",
+		Etcd:                &EtcdConfig{},
+		Sqlite:              DefaultSqliteConfig(),
+		Postgres:            &aperturedb.PostgresConfig{},
+		Authenticator:       &AuthConfig{},
+		Tor:                 &TorConfig{},
+		HashMail:            &HashMailConfig{},
+		Prometheus:          &PrometheusConfig{},
+		Admin:               &AdminConfig{},
+		IdleTimeout:         defaultIdleTimeout,
+		ReadTimeout:         defaultReadTimeout,
+		WriteTimeout:        defaultWriteTimeout,
+		WsPingInterval:      defaultWsPingInterval,
+		WsPongWait:          defaultWsPongWait,
+		InvoiceBatchSize:    defaultInvoiceBatchSize,
+		ServicePollInterval: defaultServicePollInterval,
+		Logging:             build.DefaultLogConfig(),
+		Blocklist:           []string{},
+		StrictVerify:        defaultStrictVerify,
 	}
 }
