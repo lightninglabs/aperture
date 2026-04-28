@@ -29,3 +29,5 @@ dashboard/out/
 # Internal architecture / compliance notes — kept locally, not pushed
 docs/payment-architecture-and-fiat-compliance.md
 docs/payment-architecture-and-fiat-compliance.docx
+
+tls.*

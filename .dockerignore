@@ -1,0 +1,21 @@
+# Used by the docker-compose build context (repo root). Slimming down
+# the upload to docker keeps `compose up --build` fast.
+.git
+.idea
+.vscode
+.aperture
+.prism
+prism
+prismcli
+*.test
+*.exe
+node_modules
+dashboard/.next
+dashboard/out
+dashboard/node_modules
+deploy/ha-prototype/tls.crt
+deploy/ha-prototype/tls.key
+deploy/ha-prototype/prism-state
+docs/payment-architecture-and-fiat-compliance.md
+docs/payment-architecture-and-fiat-compliance.docx
+sample-conf-tmp.yaml

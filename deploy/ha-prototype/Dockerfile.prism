@@ -1,0 +1,36 @@
+# Multi-stage build for prism with embedded dashboard. Used by the
+# HA prototype docker-compose stack to spin up multiple prism replicas
+# from local source.
+#
+# Build context is the repo root (see docker-compose.yml).
+
+# --- Stage 1: build the Next.js dashboard static export -----------------
+FROM node:20-alpine AS dashboard
+WORKDIR /src/dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY dashboard ./
+RUN npm run build
+
+# --- Stage 2: compile prism with the dashboard embedded ----------------
+FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache git make build-base
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+# Drop in the freshly built dashboard so the dashboard build tag picks
+# it up via go:embed (see dashboard_prod.go).
+COPY --from=dashboard /src/dashboard/out ./dashboard/out
+RUN CGO_ENABLED=1 go build -tags=dashboard -o /out/prism ./cmd/prism \
+ && CGO_ENABLED=0 go build -o /out/prismcli ./cmd/prismcli
+
+# --- Stage 3: minimal runtime image ------------------------------------
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates curl
+COPY --from=builder /out/prism    /usr/local/bin/prism
+COPY --from=builder /out/prismcli /usr/local/bin/prismcli
+RUN mkdir -p /srv/prism /etc/prism
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/prism"]
+CMD ["--configfile=/etc/prism/prism.yaml"]
