@@ -201,6 +201,11 @@ type Aperture struct {
 	proxyCleanup  func()
 	adminCleanup  func()
 
+	// lndChain is the blockchain name (e.g. "bitcoin", "sui") reported
+	// by the connected lnd at startup. Cached so the admin API can
+	// expose it without issuing a fresh GetInfo on every request.
+	lndChain string
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -243,13 +248,16 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}()
 	}
 
+	// mppSessionStore is held as the concrete *MPPSessionsStore so the
+	// admin API can surface session lists / stats. It still satisfies
+	// the auth.SessionStore interface used by the MPP authenticator.
 	var (
 		secretStore     mint.SecretStore
 		onionStore      tor.OnionStore
 		lncStore        lnc.Store
 		txnStore        *aperturedb.L402TransactionsStore
 		svcStore        *aperturedb.ServicesStore
-		mppSessionStore auth.SessionStore
+		mppSessionStore *aperturedb.MPPSessionsStore
 	)
 
 	// Connect to the chosen database backend.
@@ -371,13 +379,81 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				return err
 			}
 
-			a.challenger, err = challenger.NewLndChallenger(
+			// Query lnd's chain so the admin API can expose it
+			// (dashboard uses this to pick "SUI" vs "sats" as
+			// the unit label). GetInfo requires info:read, which
+			// invoice.macaroon lacks, so we open a separate
+			// read-only client just for this call. Best-effort:
+			// if readonly.macaroon is missing or the call fails,
+			// we proceed with an empty chain and log a warning.
+			readClient, roErr := lndclient.NewBasicClient(
+				authCfg.LndHost, authCfg.TLSPath,
+				authCfg.MacDir, authCfg.Network,
+				lndclient.MacFilename("readonly.macaroon"),
+			)
+			if roErr != nil {
+				log.Warnf("skip chain detection: cannot "+
+					"open readonly lnd client: %v", roErr)
+			} else {
+				infoCtx, cancelInfo := context.WithTimeout(
+					context.Background(), 5*time.Second,
+				)
+				infoResp, infoErr := readClient.GetInfo(
+					infoCtx, &lnrpc.GetInfoRequest{},
+				)
+				cancelInfo()
+				if infoErr != nil {
+					log.Warnf("unable to query lnd "+
+						"GetInfo for chain "+
+						"detection: %v", infoErr)
+				} else if len(infoResp.Chains) > 0 {
+					a.lndChain = infoResp.Chains[0].Chain
+					log.Infof("Connected lnd reports "+
+						"chain=%q network=%q",
+						a.lndChain,
+						infoResp.Chains[0].Network)
+				}
+			}
+
+			defaultChal, err := challenger.NewLndChallenger(
 				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
 				context.Background, errChan, a.cfg.StrictVerify,
 				challengerOpts...,
 			)
 			if err != nil {
 				return err
+			}
+
+			// Build per-service challengers for any service that
+			// opted into its own lnd backend via a `payment:`
+			// block. This is how multi-merchant deployments keep
+			// each merchant's funds isolated — payments land in
+			// the merchant's own wallet, the gateway never takes
+			// custody. Services without a payment block fall
+			// through to defaultChal (legacy single-lnd mode).
+			perServiceChallengers, err := buildPerServiceChallengers(
+				a.cfg.Services, authCfg.Network,
+				a.cfg.InvoiceBatchSize, genInvoiceReq,
+				errChan, a.cfg.StrictVerify,
+				challengerOpts,
+			)
+			if err != nil {
+				return fmt.Errorf("unable to build per-"+
+					"service challengers: %w", err)
+			}
+
+			if len(perServiceChallengers) == 0 {
+				// No per-service overrides → keep the single
+				// global challenger to minimise surface area.
+				a.challenger = defaultChal
+			} else {
+				log.Infof("Multi-merchant mode: %d service(s) "+
+					"bound to dedicated lnd backends; the "+
+					"rest fall back to the global lnd",
+					len(perServiceChallengers))
+				a.challenger = challenger.NewRouterChallenger(
+					defaultChal, perServiceChallengers,
+				)
 			}
 		}
 	}
@@ -394,6 +470,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
 			a.cfg, txnStore, secretStore, svcStore,
+			mppSessionStore,
+			a.lndChain,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
 				if err := a.UpdateServices(s); err != nil {
@@ -697,6 +775,16 @@ func getConfig() (*Config, error) {
 	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
 		cfg.Authenticator.MacDir,
 	)
+	if cfg.Sqlite != nil {
+		cfg.Sqlite.DatabaseFileName = lnd.CleanAndExpandPath(
+			cfg.Sqlite.DatabaseFileName,
+		)
+	}
+	if cfg.Admin != nil {
+		cfg.Admin.MacaroonPath = lnd.CleanAndExpandPath(
+			cfg.Admin.MacaroonPath,
+		)
+	}
 
 	// Set default mailbox address if none is set.
 	if cfg.Authenticator.MailboxAddress == "" {
@@ -949,9 +1037,110 @@ func buildChallengerOpts(
 				}
 			},
 		))
+
+		// When lnd observes an invoice reaching a terminal non-
+		// settled state (canceled or past-expiry + unpaid), flip
+		// any matching pending rows in our transaction store to
+		// "expired". Without this the abandoned sibling invoices
+		// that accompany every dual-scheme 402 (L402 + MPP, or
+		// L402 + MPP-charge + MPP-session) would pile up forever
+		// in pending state and skew admin reports.
+		opts = append(opts, challenger.WithExpirationCallback(
+			func(hash lntypes.Hash) {
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					aperturedb.DefaultStoreTimeout,
+				)
+				defer cancel()
+
+				err := txnStore.ExpireTransaction(
+					ctx, hash[:],
+				)
+				if err != nil {
+					log.Errorf("Error expiring "+
+						"transaction (hash=%x): %v",
+						hash[:], err)
+				}
+			},
+		))
 	}
 
 	return opts
+}
+
+// buildPerServiceChallengers creates one LndChallenger per service that
+// has an explicit `payment:` block in its config, each connected to the
+// merchant's own lnd node. Services without a payment block are omitted
+// from the result; the caller composes them under a RouterChallenger
+// alongside the global default challenger.
+//
+// The per-service challenger uses the same invoice generator, batch
+// size, strictVerify setting, and callbacks (settlement + expiration)
+// as the global challenger, so admin transaction bookkeeping behaves
+// identically across single-lnd and multi-merchant deployments.
+func buildPerServiceChallengers(services []*proxy.Service, network string,
+	batchSize int, genInvoiceReq challenger.InvoiceRequestGenerator,
+	errChan chan<- error, strictVerify bool,
+	opts []challenger.LndChallengerOption) (
+	map[string]challenger.Challenger, error) {
+
+	out := make(map[string]challenger.Challenger)
+	collisions := make(map[string]*challenger.MerchantKey)
+
+	for _, svc := range services {
+		if svc == nil || svc.Payment == nil {
+			continue
+		}
+		p := svc.Payment
+		if p.LndHost == "" || p.TLSPath == "" || p.MacPath == "" {
+			return nil, fmt.Errorf("service %q payment config "+
+				"requires all of lndhost, tlspath, macpath",
+				svc.Name)
+		}
+
+		client, err := lndclient.NewBasicClient(
+			p.LndHost,
+			p.TLSPath,
+			filepath.Dir(p.MacPath),
+			network,
+			lndclient.MacFilename(filepath.Base(p.MacPath)),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("service %q: cannot open "+
+				"merchant lnd client at %s: %w",
+				svc.Name, p.LndHost, err)
+		}
+
+		c, err := challenger.NewLndChallenger(
+			client, batchSize, genInvoiceReq,
+			context.Background, errChan, strictVerify, opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("service %q: cannot start "+
+				"challenger: %w", svc.Name, err)
+		}
+
+		log.Infof("Service %q bound to merchant lnd at %s",
+			svc.Name, p.LndHost)
+		out[svc.Name] = c
+		collisions[svc.Name] = &challenger.MerchantKey{
+			LndHost: p.LndHost,
+			MacPath: p.MacPath,
+		}
+	}
+
+	// Fail fast if two services share the same (lndhost, macpath) —
+	// that would silently pool their funds on the same lnd and defeat
+	// the whole point of per-merchant isolation.
+	if err := challenger.EnsureDistinctMerchants(collisions); err != nil {
+		// Shut down anything we already started before bailing.
+		for _, c := range out {
+			c.Stop()
+		}
+		return nil, err
+	}
+
+	return out, nil
 }
 
 // createAdminServer creates the admin gRPC server and REST gateway following
@@ -966,6 +1155,8 @@ func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
 	svcStore *aperturedb.ServicesStore,
+	sessionStore *aperturedb.MPPSessionsStore,
+	lndChain string,
 	getServices func() []*proxy.Service,
 	updateServices func([]*proxy.Service) error) (
 	[]proxy.LocalService, []proxy.LocalService, func(), error) {
@@ -1042,6 +1233,8 @@ func createAdminServer(cfg *Config,
 		MPPEnabled:       cfg.Authenticator.EnableMPP,
 		SessionsEnabled:  cfg.Authenticator.EnableSessions,
 		MPPRealm:         cfg.Authenticator.MPPRealm,
+		Chain:            lndChain,
+		SessionStore:     sessionStore,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)
@@ -1314,6 +1507,10 @@ func createAdminServer(cfg *Config,
 			},
 			"name": func(v string) bool {
 				return safeQueryValue(v, 128)
+			},
+			// MPP session list filter: "open" | "closed" | "".
+			"status": func(v string) bool {
+				return safeQueryValue(v, 16)
 			},
 		}
 

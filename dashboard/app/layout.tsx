@@ -9,11 +9,13 @@ import ThemeProvider from "@/components/ThemeProvider";
 import { ToastContainer } from "@/components/Toast";
 import { useInfo } from "@/lib/api";
 
-const navItems = [
+const baseNavItems: { href: string; label: string }[] = [
   { href: "/", label: "Dashboard" },
   { href: "/services", label: "Services" },
   { href: "/transactions", label: "Transactions" },
 ];
+
+const sessionsNavItem = { href: "/sessions", label: "Sessions" };
 
 const sfp = {
   shouldForwardProp: (prop: string) => !prop.startsWith("$"),
@@ -153,6 +155,17 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     [pathname]
   );
 
+  // Only show the Sessions tab when the server has MPP prepaid sessions
+  // enabled — otherwise /sessions returns 501 and the page would render
+  // an empty state for no reason.
+  const navItems = useMemo(() => {
+    const items = [...baseNavItems];
+    if (info?.mpp_enabled && info?.sessions_enabled) {
+      items.push(sessionsNavItem);
+    }
+    return items;
+  }, [info?.mpp_enabled, info?.sessions_enabled]);
+
   const links = useMemo(
     () =>
       navItems.map((item) => (
@@ -164,7 +177,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           {item.label}
         </Styled.NavLink>
       )),
-    [isActive]
+    [isActive, navItems]
   );
 
   const { Body, Nav, Brand, NetworkBadge, NavLinks, Status, StatusDot, Main } =

@@ -1,29 +1,29 @@
 ---
-name: aperture
-description: Manage Aperture L402 reverse proxy via aperturecli. Use when creating/updating/deleting services, checking transactions, managing tokens, viewing stats, or changing pricing on an Aperture instance.
+name: prism
+description: Manage Loka Prism L402 reverse proxy via prismcli. Use when creating/updating/deleting services, checking transactions, managing tokens, viewing stats, or changing pricing on a Prism instance.
 ---
 
-# Aperture CLI Skill
+# Prism CLI Skill
 
-Manage an Aperture L402 reverse proxy using `aperturecli`, the admin CLI and
+Manage a Loka Prism L402 reverse proxy using `prismcli`, the admin CLI and
 MCP server.
 
 ## Quick Reference
 
 | Action | Command |
 |--------|---------|
-| Server info | `aperturecli --insecure info` |
-| Health check | `aperturecli --insecure health` |
-| List services | `aperturecli --insecure services list` |
-| Create service | `aperturecli --insecure services create --name <name> --address <addr> --price <sats>` |
-| Update price | `aperturecli --insecure services update --name <name> --price <sats>` |
-| Delete service | `aperturecli --insecure services delete --name <name>` |
-| List transactions | `aperturecli --insecure transactions list` |
-| List tokens | `aperturecli --insecure tokens list` |
-| Revoke token | `aperturecli --insecure tokens revoke --token-id <id>` |
-| Revenue stats | `aperturecli --insecure stats` |
-| CLI schema | `aperturecli schema --all` |
-| Start MCP server | `aperturecli --insecure mcp serve` |
+| Server info | `prismcli --insecure info` |
+| Health check | `prismcli --insecure health` |
+| List services | `prismcli --insecure services list` |
+| Create service | `prismcli --insecure services create --name <name> --address <addr> --price <sats>` |
+| Update price | `prismcli --insecure services update --name <name> --price <sats>` |
+| Delete service | `prismcli --insecure services delete --name <name>` |
+| List transactions | `prismcli --insecure transactions list` |
+| List tokens | `prismcli --insecure tokens list` |
+| Revoke token | `prismcli --insecure tokens revoke --token-id <id>` |
+| Revenue stats | `prismcli --insecure stats` |
+| CLI schema | `prismcli schema --all` |
+| Start MCP server | `prismcli --insecure mcp serve` |
 
 ## Connection Flags
 
@@ -42,7 +42,7 @@ All commands accept these connection flags:
 To change a service's price without affecting other fields:
 
 ```bash
-aperturecli --insecure services update --name myapi --price 500
+prismcli --insecure services update --name myapi --price 500
 ```
 
 Only flags that are explicitly passed are updated. This enables targeted
@@ -53,7 +53,7 @@ changes to pricing, address, protocol, auth, or routing patterns.
 Preview mutating operations without executing them:
 
 ```bash
-aperturecli --insecure --dry-run services create \
+prismcli --insecure --dry-run services create \
   --name test --address 127.0.0.1:8080 --price 100
 ```
 
@@ -82,7 +82,7 @@ Outputs the request JSON and exits with code 10 (no mutation).
 Start the MCP server for agent framework integration:
 
 ```bash
-aperturecli --insecure mcp serve
+prismcli --insecure mcp serve
 ```
 
 This exposes all admin RPCs as typed MCP tools over stdio JSON-RPC:
@@ -95,8 +95,8 @@ This exposes all admin RPCs as typed MCP tools over stdio JSON-RPC:
 ```json
 {
   "mcpServers": {
-    "aperture": {
-      "command": "aperturecli",
+    "prism": {
+      "command": "prismcli",
       "args": ["--insecure", "mcp", "serve"]
     }
   }
@@ -107,7 +107,7 @@ This exposes all admin RPCs as typed MCP tools over stdio JSON-RPC:
 
 ```bash
 # Create a service gating an API behind Lightning payments:
-aperturecli --insecure services create \
+prismcli --insecure services create \
   --name weather-api \
   --address 10.0.0.5:8080 \
   --protocol http \
@@ -117,23 +117,23 @@ aperturecli --insecure services create \
   --auth on
 
 # Verify it was created:
-aperturecli --insecure services list
+prismcli --insecure services list
 
 # Check revenue:
-aperturecli --insecure stats --from 2026-01-01T00:00:00Z
+prismcli --insecure stats --from 2026-01-01T00:00:00Z
 ```
 
 ## Filtering Transactions
 
 ```bash
 # Filter by service and state:
-aperturecli --insecure transactions list \
+prismcli --insecure transactions list \
   --service weather-api \
   --state settled \
   --limit 100
 
 # Filter by date range:
-aperturecli --insecure transactions list \
+prismcli --insecure transactions list \
   --from 2026-03-01T00:00:00Z \
   --to 2026-03-31T23:59:59Z
 ```

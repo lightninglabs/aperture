@@ -7,6 +7,10 @@ import type {
   TransactionParams,
   InfoResponse,
   AuthScheme,
+  ListSessionsParams,
+  ListSessionsResponse,
+  MPPSession,
+  SessionStatsResponse,
 } from "./types";
 
 async function fetcher<T>(path: string): Promise<T> {
@@ -149,4 +153,72 @@ export async function deleteService(name: string) {
   }
   await mutate(SERVICES_KEY);
   return res.json();
+}
+
+/**
+ * useSessions fetches the MPP prepaid session list. Returns null if
+ * sessions are disabled on the server (the endpoint responds 501).
+ */
+export function useSessions(params: ListSessionsParams = {}) {
+  const sp = new URLSearchParams();
+  if (params.limit) sp.set("limit", String(params.limit));
+  if (params.offset) sp.set("offset", String(params.offset));
+  if (params.status) sp.set("status", params.status);
+  const qs = sp.toString();
+  const key = `/api/proxy/sessions${qs ? `?${qs}` : ""}`;
+
+  return useSWR<ListSessionsResponse | null>(
+    key,
+    async (path: string) => {
+      const res = await fetch(path);
+      if (res.status === 501) return null; // sessions disabled
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const raw = (await res.json()) as {
+        sessions?: Array<Record<string, unknown>>;
+        total?: number | string;
+      };
+      return {
+        sessions: (raw.sessions ?? []).map(
+          (s): MPPSession => ({
+            session_id: String(s.session_id ?? ""),
+            payment_hash: String(s.payment_hash ?? ""),
+            deposit_sats: Number(s.deposit_sats ?? 0),
+            spent_sats: Number(s.spent_sats ?? 0),
+            balance_sats: Number(s.balance_sats ?? 0),
+            return_invoice: String(s.return_invoice ?? ""),
+            status: String(s.status ?? ""),
+            created_at: String(s.created_at ?? ""),
+            updated_at: String(s.updated_at ?? ""),
+          })
+        ),
+        total: Number(raw.total ?? 0),
+      };
+    },
+    { refreshInterval: 30_000 }
+  );
+}
+
+/**
+ * useSessionStats fetches aggregate counters across MPP sessions. Returns
+ * null if sessions are disabled on the server.
+ */
+export function useSessionStats() {
+  return useSWR<SessionStatsResponse | null>(
+    "/api/proxy/sessions/stats",
+    async (path: string) => {
+      const res = await fetch(path);
+      if (res.status === 501) return null;
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const r = (await res.json()) as Record<string, unknown>;
+      return {
+        total_sessions: Number(r.total_sessions ?? 0),
+        open_sessions: Number(r.open_sessions ?? 0),
+        closed_sessions: Number(r.closed_sessions ?? 0),
+        total_deposit_sats: Number(r.total_deposit_sats ?? 0),
+        total_spent_sats: Number(r.total_spent_sats ?? 0),
+        open_balance_sats: Number(r.open_balance_sats ?? 0),
+      };
+    },
+    { refreshInterval: 30_000 }
+  );
 }

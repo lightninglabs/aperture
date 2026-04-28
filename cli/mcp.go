@@ -15,7 +15,7 @@ func NewMCPCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Model Context Protocol server",
-		Long:  "Expose aperturecli operations as MCP tools over stdio JSON-RPC.",
+		Long:  "Expose prismcli operations as MCP tools over stdio JSON-RPC.",
 	}
 
 	cmd.AddCommand(newMCPServeCmd())
@@ -30,9 +30,9 @@ func newMCPServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the MCP server on stdio",
 		Long: `Start an MCP (Model Context Protocol) server that exposes
-Aperture admin operations as typed tools over stdio JSON-RPC.
-This enables direct integration with agent frameworks like
-Claude Code.
+Loka Prism L402 admin operations as typed tools over stdio
+JSON-RPC. This enables direct integration with agent frameworks
+like Claude Code.
 
 Available tools: get_info, get_health, list_services,
 create_service, update_service, delete_service,

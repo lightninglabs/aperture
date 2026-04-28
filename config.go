@@ -13,16 +13,16 @@ import (
 )
 
 var (
-	apertureDataDir         = btcutil.AppDataDir("aperture", false)
-	defaultConfigFilename   = "aperture.yaml"
+	apertureDataDir         = btcutil.AppDataDir("prism", false)
+	defaultConfigFilename   = "prism.yaml"
 	defaultTLSKeyFilename   = "tls.key"
 	defaultTLSCertFilename  = "tls.cert"
 	defaultLogLevel         = "info"
-	defaultLogFilename      = "aperture.log"
+	defaultLogFilename      = "prism.log"
 	defaultInvoiceBatchSize = 100000
 	defaultStrictVerify     = false
 
-	defaultSqliteDatabaseFileName = "aperture.db"
+	defaultSqliteDatabaseFileName = "prism.db"
 
 	// defaultSqliteDatabasePath is the default path under which we store
 	// the SQLite database file.
@@ -192,7 +192,7 @@ type AdminConfig struct {
 
 	// CORSOrigins controls which origins are allowed to call the admin REST
 	// API. If empty, CORS is disabled and browsers can only use same-origin.
-	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API." yaml:"corsorigin"`
 }
 
 type Config struct {

@@ -191,10 +191,10 @@ that are explicitly provided will be changed.
 
 Examples:
   # Change price only:
-  aperturecli services update --name myapi --price 500
+  prismcli services update --name myapi --price 500
 
   # Change address and protocol:
-  aperturecli services update --name myapi --address 10.0.0.5:8080 --protocol https`,
+  prismcli services update --name myapi --address 10.0.0.5:8080 --protocol https`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return ErrInvalidArgsf("--name is required")

@@ -117,6 +117,16 @@ type ServerConfig struct {
 
 	// MPPRealm is the realm string used in MPP challenge headers.
 	MPPRealm string
+
+	// Chain identifies the blockchain the connected lnd is running on.
+	// Populated from lnd GetInfo.chains[0].chain at aperture startup
+	// (e.g. "bitcoin", "sui"). Empty if lnd could not be queried.
+	Chain string
+
+	// SessionStore exposes MPP prepaid session data to the admin API.
+	// Optional — nil when sessions are disabled; the ListSessions and
+	// GetSessionStats RPCs return Unimplemented in that case.
+	SessionStore *aperturedb.MPPSessionsStore
 }
 
 // Server implements the adminrpc.AdminServer gRPC interface. Thread safety
@@ -144,6 +154,7 @@ func (s *Server) GetInfo(_ context.Context,
 		MppEnabled:      s.cfg.MPPEnabled,
 		SessionsEnabled: s.cfg.SessionsEnabled,
 		MppRealm:        s.cfg.MPPRealm,
+		Chain:           s.cfg.Chain,
 	}, nil
 }
 
@@ -1001,5 +1012,107 @@ func validateAuthLevel(s string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid auth level %q, must be "+
 			"'on', 'off', or 'freebie N'", s)
+	}
+}
+
+// ListSessions returns paginated MPP prepaid sessions with an optional
+// status filter ("open" | "closed" | "").
+//
+// NOTE: This is part of the adminrpc.AdminServer interface.
+func (s *Server) ListSessions(ctx context.Context,
+	req *adminrpc.ListSessionsRequest) (*adminrpc.ListSessionsResponse,
+	error) {
+
+	if s.cfg.SessionStore == nil {
+		return nil, status.Error(codes.Unimplemented,
+			"MPP sessions not enabled on this server")
+	}
+
+	// Validate status filter up front so we don't run a query that
+	// would return zero rows for a typo. Empty string means no filter.
+	switch req.Status {
+	case "", "open", "closed":
+	default:
+		return nil, status.Errorf(codes.InvalidArgument,
+			"status must be \"open\", \"closed\", or empty; got %q",
+			req.Status)
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	sessions, total, err := s.cfg.SessionStore.ListSessions(
+		ctx, req.Status, limit, offset,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"list sessions: %v", err)
+	}
+
+	resp := &adminrpc.ListSessionsResponse{
+		Sessions: make([]*adminrpc.MPPSession, 0, len(sessions)),
+		Total:    total,
+	}
+	for _, sess := range sessions {
+		resp.Sessions = append(
+			resp.Sessions, sessionToProto(sess),
+		)
+	}
+	return resp, nil
+}
+
+// GetSessionStats returns aggregate counters across all MPP sessions.
+//
+// NOTE: This is part of the adminrpc.AdminServer interface.
+func (s *Server) GetSessionStats(ctx context.Context,
+	_ *adminrpc.GetSessionStatsRequest) (
+	*adminrpc.GetSessionStatsResponse, error) {
+
+	if s.cfg.SessionStore == nil {
+		return nil, status.Error(codes.Unimplemented,
+			"MPP sessions not enabled on this server")
+	}
+
+	stats, err := s.cfg.SessionStore.GetStats(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"get session stats: %v", err)
+	}
+
+	return &adminrpc.GetSessionStatsResponse{
+		TotalSessions:    stats.TotalSessions,
+		OpenSessions:     stats.OpenSessions,
+		ClosedSessions:   stats.ClosedSessions,
+		TotalDepositSats: stats.TotalDepositSats,
+		TotalSpentSats:   stats.TotalSpentSats,
+		OpenBalanceSats:  stats.OpenBalanceSats,
+	}, nil
+}
+
+// sessionToProto converts an auth.Session to its wire representation. The
+// balance_sats field is computed as deposit-spent so callers don't have to
+// do it themselves; it's meaningful for open sessions (what's still owed
+// back to the client) and equal to what was refunded on close for closed
+// ones (well, ignoring route fees).
+func sessionToProto(sess *auth.Session) *adminrpc.MPPSession {
+	return &adminrpc.MPPSession{
+		SessionId:     sess.SessionID,
+		PaymentHash:   hex.EncodeToString(sess.PaymentHash[:]),
+		DepositSats:   sess.DepositSats,
+		SpentSats:     sess.SpentSats,
+		BalanceSats:   sess.DepositSats - sess.SpentSats,
+		ReturnInvoice: sess.ReturnInvoice,
+		Status:        sess.Status,
+		CreatedAt:     sess.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     sess.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }

@@ -53,27 +53,27 @@ $(GOACC_BIN):
 # ============
 
 build:
-	@$(call print, "Building aperture.")
-	$(GOBUILD) $(PKG)/cmd/aperture
-	$(GOBUILD) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
+	@$(call print, "Building prism.")
+	$(GOBUILD) $(PKG)/cmd/prism
+	$(GOBUILD) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/prismcli
 
 build-dashboard:
 	@$(call print, "Building dashboard static export.")
 	cd dashboard && npm ci && npm run build
 
 build-withdashboard: build-dashboard
-	@$(call print, "Building aperture with embedded dashboard.")
-	$(GOBUILD) -tags=dashboard $(PKG)/cmd/aperture
+	@$(call print, "Building prism with embedded dashboard.")
+	$(GOBUILD) -tags=dashboard $(PKG)/cmd/prism
 
 install:
-	@$(call print, "Installing aperture and aperturecli.")
-	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
-	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
+	@$(call print, "Installing prism and prismcli.")
+	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/prism
+	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/prismcli
 
 install-dashboard: build-dashboard
-	@$(call print, "Installing aperture with embedded dashboard.")
-	$(GOINSTALL) -tags="dashboard ${tags}" $(PKG)/cmd/aperture
-	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
+	@$(call print, "Installing prism with embedded dashboard.")
+	$(GOINSTALL) -tags="dashboard ${tags}" $(PKG)/cmd/prism
+	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/prismcli
 
 docker-tools:
 	@$(call print, "Building tools docker image.")
@@ -173,7 +173,7 @@ rpc-check: rpc
 
 clean:
 	@$(call print, "Cleaning source.$(NC)")
-	$(RM) ./aperture
-	$(RM) ./aperturecli
+	$(RM) ./prism
+	$(RM) ./prismcli
 	$(RM) coverage.txt
 	$(RM) -r dashboard/out

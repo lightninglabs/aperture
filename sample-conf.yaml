@@ -15,24 +15,24 @@ servestatic: false
 debuglevel: "debug"
 
 # Custom path to a config file.
-configfile: "/path/to/your/aperture.yaml"
+configfile: "/path/to/your/prism.yaml"
 
-# Directory to place all of aperture's files in.
-basedir: "/path/to/.aperture"
+# Directory to place all of prism's files in.
+basedir: "/path/to/.prism"
 
 # Whether the proxy should create a valid certificate through Let's Encrypt for
 # the fully qualifying domain name.
 autocert: false
-servername: aperture.example.com
+servername: prism.example.com
 
 # Whether to listen on an insecure connection, disabling TLS for incoming
 # connections.
 insecure: false
 
-# If TLS is terminated by a load balancer/ingress in front of aperture, make
+# If TLS is terminated by a load balancer/ingress in front of prism, make
 # sure the load balancer's ALPN policy includes "h2". On AWS NLB, the default
 # ALPN policy "None" does not negotiate ALPN and gRPC clients may fail with
-# "missing selected ALPN property". With TCP passthrough, aperture negotiates
+# "missing selected ALPN property". With TCP passthrough, prism negotiates
 # ALPN directly.
 
 # Whether we should verify the invoice status strictly or not. If set to true,
@@ -128,7 +128,7 @@ authenticator:
 # transactions, and tokens at runtime. Disabled by default.
 # admin:
 #   enabled: true
-#   macaroonpath: "/path/to/aperture/data/admin.macaroon"
+#   macaroonpath: "/path/to/prism/data/admin.macaroon"
 #   corsorigin:
 #     - "https://dashboard.example.com"
 
@@ -137,15 +137,15 @@ blocklist:
   - "1.1.1.1"
   - "1.0.0.1"
   
-# The selected database backend. The current default backend is "sqlite". 
-# Aperture also has support for postgres and etcd.
+# The selected database backend. The current default backend is "sqlite".
+# Prism also has support for postgres and etcd.
 dbbackend: "sqlite"
 
 # Settings for the sqlite process which the proxy will use to reliably store and
 # retrieve token information.
 sqlite:
     # The full path to the database.
-    dbfile: "/path/to/.aperture/aperture.db"
+    dbfile: "/path/to/.prism/prism.db"
 
     # Skip applying migrations on startup.
     skipmigrations: false
@@ -230,7 +230,7 @@ services:
     # The set of constraints that are applied to tokens of the service at the
     # base tier.
     constraints:
-        # This is just an example of how aperture could be extended
+        # This is just an example of how prism could be extended
         # but would not have any effect without additional support added.
         "valid_until": 1682483169
       
@@ -238,9 +238,18 @@ services:
     # 31557600 = 1 year.
     timeout: 31557600    
 
-    # The L402 value in satoshis for the service. It is ignored if
+    # Price in the connected chain's base unit:
+    #   - bitcoin: satoshis (1 sat = 10^-8 BTC)
+    #   - sui:     MIST     (1 MIST = 10^-9 SUI; 1 SUI = 1_000_000_000 MIST)
+    # The dashboard scales for display (shows SUI or sats depending on
+    # the chain advertised by the connected lnd). Ignored if
     # dynamicprice.enabled is set to true.
-    price: 0
+    #
+    # Examples:
+    #   1_000_000    → 0.001  SUI   (~$0.001 at $1/SUI)  or 10^6 sats
+    #   10_000_000   → 0.01   SUI   (~$0.01 per request)
+    #   100_000_000  → 0.1    SUI
+    price: 10000000
 
     # A list of regular expressions for path that are free of charge.
     authwhitelistpaths:
@@ -299,7 +308,8 @@ services:
     protocol: https
     constraints:
         "valid_until": "2020-01-01"
-    price: 1
+    # 1_000_000 MIST = 0.001 SUI (cheap per-call endpoint).
+    price: 1000000
 
   - name: "service3"
     hostregexp: "service3.com:8083"
@@ -313,6 +323,72 @@ services:
       grpcaddress: 123.456.789:8083
       insecure: false
       tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
+
+  # Mixed-auth example: a single backend where health checks and public
+  # documentation are free, most API calls require payment, and streaming
+  # endpoints require a pre-paid token but never issue a new one themselves.
+  - name: "mixed-api"
+    hostregexp: '^api\.example\.com$'
+    pathregexp: '^/.*$'          # match everything, then filter below
+    address: "127.0.0.1:9999"
+    protocol: http
+    timeout: 31557600            # L402 token valid for 1 year
+    # 10_000_000 MIST = 0.01 SUI (reasonable micropayment on Sui at ~$1).
+    # On bitcoin this would be 10^7 sats; tune per chain.
+    price: 10000000
+
+    # Free paths — no L402 challenge, request is proxied straight through.
+    # Use for health checks, docs, and any public read-only endpoint.
+    authwhitelistpaths:
+      - '^/health$'
+      - '^/metrics$'
+      - '^/docs$'
+      - '^/docs/.*$'
+      - '^/openapi\.json$'
+
+    # "Token required, no new invoice" paths. Prism does NOT return a 402
+    # challenge on these paths — a request without a valid L402 token gets
+    # 401 Unauthorized instead. The client must first acquire a token on a
+    # normal paid path (e.g. POST /auth/bootstrap, which returns 402 →
+    # client pays → gets macaroon+preimage), then replay that token here.
+    #
+    # Why this exists: streaming protocols (SSE, WebSocket, gRPC streams)
+    # can't gracefully consume a 402 response — the client is expecting a
+    # long-lived stream, not a JSON error body. So we force the token to
+    # be obtained on a regular request first.
+    authskipinvoicecreationpaths:
+      - '^/stream/.*$'           # server-sent events / WebSocket upgrade
+      - '^/events/subscribe$'
+      - '^/grpc\.StreamService/.*$'
+
+    # Any path not matched above costs `price` satoshis per token.
+
+  # Multi-merchant example — a service that routes its own invoices to
+  # the merchant's own lnd node instead of the global authenticator lnd.
+  # Use this when onboarding third-party developers so payments land
+  # directly in their wallet and the gateway never takes custody.
+  #
+  # The merchant should bake a minimum-privilege macaroon on their lnd:
+  #   lncli bakemacaroon --save_to=prism-gateway.macaroon \
+  #       --ip_address=<gateway-public-ip> --expiry=7776000 \
+  #       invoices:read invoices:write info:read
+  #
+  # Then hand tls.cert + prism-gateway.macaroon + lnd host:port to the
+  # gateway operator. See docs/admin-api.md "Merchant onboarding" for
+  # the full procedure, permission rationale, and rotation advice.
+  #
+  # Services WITHOUT this block keep using the global authenticator.lnd
+  # — both modes coexist in one prism deployment.
+  # - name: "merchant-a"
+  #   hostregexp: '^a\.example\.com$'
+  #   pathregexp: '^/.*$'
+  #   address: "https://merchant-a.api.internal:8443"
+  #   protocol: https
+  #   price: 10000000
+  #   payment:
+  #     lndhost: "merchant-a.lnd.internal:10009"
+  #     tlspath: "/gateway-secrets/merchant-a/tls.cert"
+  #     macpath: "/gateway-secrets/merchant-a/prism-gateway.macaroon"
 
 # Settings for a Tor instance to allow requests over Tor as onion services.
 # Configuring Tor is optional.

@@ -39,6 +39,33 @@ type RewriteConfig struct {
 	Prefix string `long:"prefix" description:"Absolute path prefix to prepend to the request path"`
 }
 
+// PaymentBackend overrides the global authenticator lnd for a specific
+// service. Use this when each merchant runs their own lnd node, so
+// payments for their API land directly in their wallet and the gateway
+// operator never takes custody.
+//
+// When unset (nil on a Service), the service uses the global
+// authenticator.lndhost, which is the legacy single-operator-multi-
+// services behavior.
+//
+// The macaroon at MacPath should be the minimum-privilege one baked
+// for this gateway — typically `invoices:read invoices:write info:read`
+// (see docs/admin-api.md "Merchant onboarding" section). The gateway
+// never needs payment-sending, channel-management, or wallet keys.
+type PaymentBackend struct {
+	// LndHost is the host:port of the merchant's lnd gRPC endpoint.
+	LndHost string `long:"lndhost" description:"Merchant lnd gRPC host:port"`
+
+	// TLSPath is the path to the merchant's lnd tls.cert. The gateway
+	// reads this file at startup; rotate cert → restart gateway.
+	TLSPath string `long:"tlspath" description:"Path to the merchant lnd TLS cert"`
+
+	// MacPath is the absolute path to the merchant-supplied macaroon
+	// file. The macaroon should grant invoices:read invoices:write
+	// info:read only.
+	MacPath string `long:"macpath" description:"Path to the merchant-supplied macaroon (minimum: invoices:read, invoices:write, info:read)"`
+}
+
 // Service generically specifies configuration data for backend services to the
 // Aperture proxy.
 type Service struct {
@@ -132,6 +159,14 @@ type Service struct {
 
 	// Rewrite defines what should be rewritten in the client request.
 	Rewrite RewriteConfig `long:"rewrite" description:"Values to rewrite in the client request"`
+
+	// Payment optionally overrides the global authenticator lnd for
+	// this service. When nil, the service uses the single global lnd
+	// (backwards-compatible single-operator mode). When set, invoices
+	// for this service are issued against the merchant's own lnd —
+	// payments land directly in the merchant's wallet, never the
+	// gateway's.
+	Payment *PaymentBackend `long:"payment" description:"Optional per-service lnd override; the merchant's own lnd node" yaml:"payment"`
 
 	// compiledHostRegexp is the compiled host regex.
 	compiledHostRegexp *regexp.Regexp

@@ -46,7 +46,7 @@ The admin REST API is served under the `/api/admin/` prefix via gRPC-gateway.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/admin/health` | No | Health check, returns `{"status": "ok"}` |
-| GET | `/api/admin/info` | Yes | Server info (network, listen address, insecure flag, MPP config) |
+| GET | `/api/admin/info` | Yes | Server info (network, listen address, insecure flag, MPP config, chain) |
 | GET | `/api/admin/services` | Yes | List all configured proxy services |
 | POST | `/api/admin/services` | Yes | Create a new service |
 | PUT | `/api/admin/services/{name}` | Yes | Update an existing service (partial update) |
@@ -55,6 +55,8 @@ The admin REST API is served under the `/api/admin/` prefix via gRPC-gateway.
 | GET | `/api/admin/tokens` | Yes | List active L402 tokens (settled transactions) |
 | DELETE | `/api/admin/tokens/{token_id}` | Yes | Revoke an L402 token |
 | GET | `/api/admin/stats` | Yes | Revenue statistics with optional date range |
+| GET | `/api/admin/sessions` | Yes | List MPP prepaid sessions (filterable, paginated) |
+| GET | `/api/admin/sessions/stats` | Yes | Aggregate counters across all MPP sessions |
 
 ## Service Management
 
@@ -122,6 +124,22 @@ curl -H "Grpc-Metadata-Macaroon: $ADMIN_MAC" \
   "http://localhost:8081/api/admin/transactions?limit=20&offset=0&service=my-api&state=settled"
 ```
 
+**Transaction states**:
+
+| State | Meaning |
+|-------|---------|
+| `pending` | Challenge issued; underlying Lightning invoice still `OPEN`. |
+| `settled` | Invoice was paid; `settled_at` is populated. |
+| `expired` | Invoice reached a terminal non-settled state (`CANCELED` or past expiry + unpaid). Prism reconciles this on startup by scanning `lnd.ListInvoices`. Live-stream reconciliation is not triggered because `SubscribeInvoices` does not publish `CANCELED` events. |
+
+Prism records a `pending` row per 402 challenge. When a service accepts
+multiple auth schemes simultaneously (`l402+mpp`), each 402 produces two
+rows; the client only pays one, so the other stays unpaid and eventually
+transitions to `expired` once lnd flags the invoice as `CANCELED` (default
+`expiry` 24h). Filter by `state=settled` for accounting and business
+metrics.
+
+
 **Query Parameters**:
 
 | Param | Description |
@@ -129,7 +147,7 @@ curl -H "Grpc-Metadata-Macaroon: $ADMIN_MAC" \
 | `limit` | Max results (1–1000, default 50) |
 | `offset` | Pagination offset |
 | `service` | Filter by service name |
-| `state` | Filter by state: `pending` or `settled` |
+| `state` | Filter by state: `pending`, `settled`, or `expired` |
 | `start_date` | Start of date range (RFC 3339) |
 | `end_date` | End of date range (RFC 3339) |
 
@@ -171,6 +189,118 @@ Response:
   ]
 }
 ```
+
+## Sessions (MPP prepaid)
+
+These endpoints surface MPP prepaid session data (the one-shot charge-intent
+flow is already covered by `/transactions`). Available only when the server
+is started with both `authenticator.enablempp: true` and
+`authenticator.enablesessions: true`; otherwise they return **HTTP 501
+Unimplemented**.
+
+> **Amount units.** All `*_sats` fields are in the connected chain's base
+> unit — satoshis for bitcoin, MIST for sui (1 SUI = 10⁹ MIST). The naming
+> keeps proto wire-compatibility with existing fields; pair with
+> `GET /api/admin/info`'s `chain` field to decide display scaling. The
+> embedded dashboard does this automatically via `lib/currency.ts`.
+
+### List sessions
+
+```bash
+# All sessions, most recent first
+curl -H "Grpc-Metadata-Macaroon: $ADMIN_MAC" \
+  http://localhost:8081/api/admin/sessions
+
+# Only open sessions
+curl -H "Grpc-Metadata-Macaroon: $ADMIN_MAC" \
+  "http://localhost:8081/api/admin/sessions?status=open&limit=50"
+```
+
+Query parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `status` | string | `"open"`, `"closed"`, or empty (all). |
+| `limit` | int | Page size. Defaults to 50. Max 1000. |
+| `offset` | int | 0-based pagination offset. |
+
+Response:
+
+```json
+{
+  "sessions": [
+    {
+      "session_id": "e0cf5388ba0b467b400377f16868fd11a155a18b32c51ff09eb95f88e66978f7",
+      "payment_hash": "e0cf5388ba0b467b400377f16868fd11a155a18b32c51ff09eb95f88e66978f7",
+      "deposit_sats": "200000000",
+      "spent_sats": "20000000",
+      "balance_sats": "180000000",
+      "return_invoice": "lnbcrt1p57nc3j...",
+      "status": "closed",
+      "created_at": "2026-04-23T09:11:17Z",
+      "updated_at": "2026-04-23T09:11:17Z"
+    }
+  ],
+  "total": "2"
+}
+```
+
+Field notes:
+
+- `session_id` equals `payment_hash` of the deposit invoice (redundant but
+  kept for clarity).
+- `balance_sats` is `deposit_sats - spent_sats`. For open sessions it's the
+  remaining prepaid credit; for closed sessions it's the amount that was
+  refunded to the client's ReturnInvoice at close time.
+- `total` is the full match count ignoring `limit`/`offset`, for pagination
+  UIs.
+
+### Session statistics
+
+```bash
+curl -H "Grpc-Metadata-Macaroon: $ADMIN_MAC" \
+  http://localhost:8081/api/admin/sessions/stats
+```
+
+Response:
+
+```json
+{
+  "total_sessions": "12",
+  "open_sessions": "3",
+  "closed_sessions": "9",
+  "total_deposit_sats": "2400000000",
+  "total_spent_sats": "180000000",
+  "open_balance_sats": "420000000"
+}
+```
+
+Field notes:
+
+- `total_spent_sats` is the real revenue (what clients consumed via bearer
+  requests). This is **not** reflected in `/api/admin/stats` — that endpoint
+  only aggregates L402 charge-intent transactions, not session debits.
+- `open_balance_sats` is the sum of `deposit - spent` across sessions still
+  in the `open` state: the prepaid balance you currently owe back to
+  clients if every open session were closed right now.
+- `total_deposit_sats` is lifetime deposits including amounts that have
+  since been refunded. Useful for volume metrics, not cash-basis accounting.
+
+### Why sessions are a separate endpoint
+
+Sessions are a different economic primitive from one-shot charges:
+
+- A `/transactions` row is created for every 402 challenge and transitions
+  to `settled` only if that specific invoice is paid. Sessions instead
+  track a running balance that debits per request without creating new
+  invoices.
+- Session `open`/`close` do trigger individual Lightning payments (deposit
+  in, refund out) but those don't produce `/transactions` rows — they're
+  bookkept against the session record.
+
+So for full payment visibility on a server that uses both schemes, sum
+`/api/admin/stats.total_revenue_sats` (L402/MPP charges) **plus**
+`/api/admin/sessions/stats.total_spent_sats` (session debits).
 
 ## gRPC
 
@@ -233,6 +363,164 @@ curl -X POST \
 When `auth_scheme` is `AUTH_SCHEME_L402_MPP`, the 402 response includes both
 `WWW-Authenticate: L402` and `WWW-Authenticate: Payment` headers, and the
 response body uses RFC 9457 Problem Details JSON.
+
+## Multi-merchant (per-service LND routing)
+
+By default prism routes every service's invoices through a single LND node
+(the one configured under `authenticator.lndhost`). In that mode the
+gateway operator's wallet receives all payments and is responsible for
+splitting revenue to merchants out-of-band. That works for a single-
+operator-multi-services deployment but makes the operator a custodian of
+merchants' funds, with all the regulatory weight that implies.
+
+Prism supports an alternative **per-service** routing mode: each service
+can opt into its own dedicated LND backend via a `payment:` block. When
+set, invoices for that service are issued against the merchant's own LND
+so payments land directly in the merchant's wallet. The gateway never
+takes custody.
+
+The two modes coexist in the same deployment — services without a
+`payment:` block continue to use the global LND, services with one use
+theirs. The router composes them transparently.
+
+### Config
+
+```yaml
+services:
+  # Legacy single-lnd mode: no `payment:` block, uses global lnd.
+  - name: "loka-internal-api"
+    hostregexp: '^api\.loka\.local$'
+    address: "127.0.0.1:8080"
+    price: 10000000
+
+  # Multi-merchant mode: this service's invoices land in the merchant's
+  # own lnd, not the gateway's.
+  - name: "merchant-a"
+    hostregexp: '^a\.example\.com$'
+    address: "https://merchant-a.api.internal:8443"
+    price: 10000000
+    payment:
+      lndhost: "merchant-a.lnd.internal:10009"
+      tlspath: "/gateway-secrets/merchant-a/tls.cert"
+      macpath: "/gateway-secrets/merchant-a/prism-gateway.macaroon"
+```
+
+Runtime behavior:
+
+- Startup log: `Service "merchant-a" bound to merchant lnd at ...`
+- Startup log: `Multi-merchant mode: N service(s) bound to dedicated lnd backends`
+- A 402 challenge for `merchant-a` returns a BOLT11 invoice whose
+  destination is the merchant's node pubkey.
+- Admin `transactions` / `stats` still aggregate across all services;
+  each row's `payment_hash` is unique per lnd.
+- Prism validates that no two `payment:` blocks share the same
+  `(lndhost, macpath)` — shared endpoints would silently pool funds.
+
+### Merchant onboarding: bake a minimum-privilege macaroon
+
+Prism only needs three RPC permissions on the merchant's lnd:
+`invoices:read`, `invoices:write`, `info:read`. Give it anything more and
+you increase blast radius without benefit. LND's `bakemacaroon` creates
+tokens scoped to exactly those permissions; the merchant runs the
+command on their own node, then hands the file to the gateway operator
+(you).
+
+**1. Verify you have LND (v0.14+) with `bakemacaroon` support:**
+
+```bash
+lncli --version
+lncli bakemacaroon --help
+```
+
+**2. Bake the macaroon:**
+
+```bash
+# Minimum permissions. No payment-send, no wallet, no channels.
+lncli bakemacaroon --save_to=prism-gateway.macaroon \
+    invoices:read invoices:write info:read
+```
+
+**3. (Recommended) Add IP-lock + expiry:**
+
+```bash
+lncli bakemacaroon --save_to=prism-gateway.macaroon \
+    --ip_address=<gateway-public-ip> \
+    --expiry=7776000 \
+    invoices:read invoices:write info:read
+```
+
+- `--ip_address` pins the macaroon to the gateway's IP — even if the
+  file is stolen, it can't be used from anywhere else.
+- `--expiry=7776000` = 90 days. Plan to re-bake before it lapses.
+
+**4. Hand over to the gateway operator:**
+
+```
+Send over an encrypted channel (Signal, PGP email, Vault):
+  - tls.cert                           (your lnd's TLS cert, from $LND_DIR/tls.cert)
+  - prism-gateway.macaroon             (the file you just baked)
+  - host:port                          (your lnd's gRPC listen address, publicly reachable)
+```
+
+**5. What this macaroon can and can't do:**
+
+| RPC | Allowed? | Why |
+|---|---|---|
+| `AddInvoice`, `LookupInvoice`, `ListInvoices`, `SubscribeInvoices` | Yes | Prism's invoice-creation and reconciliation flow |
+| `GetInfo` | Yes | Prism reads `chains[0].chain` once at startup for unit labelling |
+| `SendPayment`, `SendPaymentSync`, `RouterSendPaymentV2` | **No** | `offchain:write` not granted — gateway cannot move merchant's money |
+| `OpenChannel`, `CloseChannel`, `AbandonChannel` | **No** | `onchain:write` + `lightning:write` not granted |
+| `ListChannels`, `ChannelBalance`, `WalletBalance` | **No** | `lightning:read` / `onchain:read` not granted; gateway can't even see the merchant's balance |
+| `SignMessage`, `DeriveKey`, `DeriveNextKey` | **No** | `signer:generate` not granted |
+| `StopDaemon`, `DebugLevel` | **No** | `meta:write` not granted |
+
+Worst case (macaroon leaked, `--ip_address` bypassed somehow): attacker
+can create arbitrary fake invoices on the merchant's lnd, which clutters
+the database but moves zero value — no one has to pay those invoices,
+and even if someone did, the money goes to the merchant.
+
+**6. Revocation:**
+
+If you suspect the macaroon was compromised, the merchant runs:
+
+```bash
+lncli listmacaroonids                     # find the id of the gateway's macaroon
+lncli deletemacaroonid <id>               # revokes immediately
+```
+
+Then they bake a new one and send it over. Prism reloads the macaroon on
+restart; plan a brief maintenance window or a hot-reload path if zero
+downtime matters.
+
+### Hardening checklist (merchant side)
+
+In addition to the macaroon scope, merchants can defend in depth:
+
+- **Network ACL**: restrict inbound gRPC (`:10009`) to the gateway's IP
+  range via firewall. The gateway doesn't need public access to the lnd.
+- **TLS pinning**: the gateway stores the merchant's `tls.cert`; on
+  every connection LND verifies the cert. Rotate cert → notify gateway
+  to re-deploy.
+- **Watch logs**: if the macaroon's monthly RPC pattern changes
+  abruptly (many `AddInvoice` with amount 0, or calls from new IPs),
+  rotate.
+- **Rebake every 90 days**: document the rotation date alongside the
+  gateway operator, put it in the calendar.
+
+### Migration from single-lnd mode
+
+To convert an existing single-lnd deployment to multi-merchant:
+
+1. Each target merchant bakes their own gateway macaroon (step 2 above).
+2. Edit prism config: add `payment:` blocks to the relevant services.
+3. Restart prism. Services with `payment:` start issuing invoices on
+   the merchant's lnd; services without continue on the global lnd.
+4. Migrate one merchant at a time; the two modes coexist.
+
+Existing settled transactions in the admin DB continue to be visible
+(they're keyed by payment hash, not lnd node). Newly created invoices
+after the cutover won't be visible on the global lnd — verify with
+`prismcli transactions list --service=<merchant>` on the gateway.
 
 ## Security
 

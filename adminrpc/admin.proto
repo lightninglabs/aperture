@@ -16,6 +16,16 @@ service Admin {
   rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
   rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
   rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+
+  // ListSessions returns MPP prepaid sessions (open + closed). Amounts
+  // are in the chain's base unit — clients pair with GetInfo.chain to
+  // decide display units.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // GetSessionStats returns aggregate counters across all MPP sessions
+  // (count by status, total deposits/spent, open balance). Complements
+  // GetStats which only covers L402 charge-intent transactions.
+  rpc GetSessionStats(GetSessionStatsRequest) returns (GetSessionStatsResponse);
 }
 
 message GetInfoRequest {}
@@ -34,6 +44,11 @@ message GetInfoResponse {
 
   // mpp_realm is the realm string used in MPP challenge headers.
   string mpp_realm = 6;
+
+  // chain is the underlying blockchain the connected lnd is running on,
+  // as reported by lnd's GetInfo.chains[0].chain (e.g. "bitcoin", "sui").
+  // Empty if lnd could not be queried at startup.
+  string chain = 7;
 }
 
 message GetHealthRequest {}
@@ -158,4 +173,64 @@ message GetStatsResponse {
 message ServiceRevenue {
   string service_name = 1;
   int64 total_revenue_sats = 2;
+}
+
+// MPPSession mirrors the on-server session record for the admin API.
+// Payment hash is hex-encoded. Amounts are in the chain's base unit.
+message MPPSession {
+  string session_id = 1;
+  string payment_hash = 2;
+  int64 deposit_sats = 3;
+  int64 spent_sats = 4;
+
+  // balance_sats is deposit_sats - spent_sats. Meaningful for open
+  // sessions; on closed ones this is what was refunded at close time.
+  int64 balance_sats = 5;
+
+  string return_invoice = 6;
+
+  // status is "open" or "closed".
+  string status = 7;
+
+  // created_at / updated_at are RFC 3339 timestamps.
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message ListSessionsRequest {
+  // status filters by "open" or "closed". Empty returns all.
+  string status = 1;
+
+  // limit defaults to 50 when zero. Max is 1000.
+  int32 limit = 2;
+
+  // offset is 0-based.
+  int32 offset = 3;
+}
+
+message ListSessionsResponse {
+  repeated MPPSession sessions = 1;
+
+  // total is the count matching status filter, ignoring pagination.
+  int64 total = 2;
+}
+
+message GetSessionStatsRequest {}
+
+message GetSessionStatsResponse {
+  int64 total_sessions = 1;
+  int64 open_sessions = 2;
+  int64 closed_sessions = 3;
+
+  // total_deposit_sats is the lifetime sum of deposits across all
+  // sessions (open + closed).
+  int64 total_deposit_sats = 4;
+
+  // total_spent_sats is the actual revenue — satoshis consumed by
+  // bearer requests.
+  int64 total_spent_sats = 5;
+
+  // open_balance_sats is the sum of deposit_sats - spent_sats over
+  // sessions still in the open state (prepaid balance owed to clients).
+  int64 open_balance_sats = 6;
 }

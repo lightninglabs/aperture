@@ -34,6 +34,24 @@ type Challenger interface {
 	Stop()
 }
 
+// ServiceAwareChallenger is an optional extension of Challenger for
+// deployments that route each service's invoices through a distinct lnd
+// node — typically because each merchant runs their own lnd and the
+// gateway operator must not take custody of funds. Callers that have a
+// service name available should prefer NewChallengeForService; the fall-
+// back path (NewChallenge without service context) keeps backwards
+// compatibility with single-lnd deployments.
+type ServiceAwareChallenger interface {
+	Challenger
+
+	// NewChallengeForService returns a new challenge against the lnd
+	// node bound to the named service. If no per-service lnd is
+	// configured for this service, implementations should fall back to
+	// the global default challenger.
+	NewChallengeForService(serviceName string, price int64) (
+		string, lntypes.Hash, error)
+}
+
 // SecretStore is the store responsible for storing L402 secrets. These secrets
 // are required for proper verification of each minted L402.
 type SecretStore interface {
@@ -128,9 +146,21 @@ func (m *Mint) MintL402(ctx context.Context,
 	// services.
 	price := maximumPrice(services)
 
+	// When all services share the same challenger, use any service name
+	// (they will all resolve the same way). In multi-merchant deploy-
+	// ments each service can be bound to its own lnd node, so we pick
+	// the name of the most-expensive service to ensure its invoice is
+	// the one that gets created.
+	serviceName := maximumPriceServiceName(services)
+
 	// We'll start by retrieving a new challenge in the form of a Lightning
-	// payment request to present the requester of the L402 with.
-	paymentRequest, paymentHash, err := m.cfg.Challenger.NewChallenge(price)
+	// payment request to present the requester of the L402 with. Prefer
+	// the service-aware path when the challenger supports it, so per-
+	// merchant lnd routing works; fall back to the plain path for
+	// single-lnd deployments.
+	paymentRequest, paymentHash, err := mintChallenge(
+		m.cfg.Challenger, serviceName, price,
+	)
 	if err != nil {
 		return nil, "", err
 	}
@@ -222,6 +252,38 @@ func maximumPrice(services []l402.Service) int64 {
 	}
 
 	return max
+}
+
+// maximumPriceServiceName returns the name of the most expensive service
+// in the given slice. In the multi-merchant case the invoice is routed
+// through this service's lnd, so the name selection must match whichever
+// service's price was chosen by maximumPrice. Returns empty string for
+// an empty input; an empty service name causes ServiceAwareChallenger
+// implementations to fall back to their default lnd.
+func maximumPriceServiceName(services []l402.Service) string {
+	var (
+		max  int64
+		name string
+	)
+	for _, svc := range services {
+		if svc.Price >= max {
+			max = svc.Price
+			name = svc.Name
+		}
+	}
+	return name
+}
+
+// mintChallenge issues a new challenge, preferring the service-aware
+// routing path when the challenger supports it. Returns the payment
+// request and payment hash.
+func mintChallenge(c Challenger, serviceName string, price int64) (
+	string, lntypes.Hash, error) {
+
+	if sac, ok := c.(ServiceAwareChallenger); ok {
+		return sac.NewChallengeForService(serviceName, price)
+	}
+	return c.NewChallenge(price)
 }
 
 // createUniqueIdentifier creates a new L402 identifier bound to a payment hash
