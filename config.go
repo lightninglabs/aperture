@@ -55,6 +55,15 @@ const (
 	// stale service configs on whichever replica didn't handle the
 	// write. Set to 0 to disable polling entirely.
 	defaultServicePollInterval = 30 * time.Second
+
+	// defaultInvoiceReconcileInterval is how often the periodic invoice
+	// reconciler re-runs its sweep over every invoice known to the
+	// connected lnd. The live SubscribeInvoices stream catches state
+	// changes in real time on the happy path; this is a safety net
+	// for events missed during transient lnd disconnects or in
+	// multi-replica HA setups where one replica may have been offline
+	// when an invoice expired. Set to 0 to disable.
+	defaultInvoiceReconcileInterval = 5 * time.Minute
 )
 
 type EtcdConfig struct {
@@ -321,6 +330,15 @@ type Config struct {
 	// to 0 to disable polling (single-replica deployments don't need
 	// it). Defaults to 30s.
 	ServicePollInterval time.Duration `long:"servicepollinterval" description:"How often replicas re-read service config from the DB to pick up admin-API changes made on other replicas. 0 disables polling."`
+
+	// InvoiceReconcileInterval controls how often the background
+	// invoice reconciler re-runs the same sweep that runs at startup.
+	// Acts as a safety net for state changes the live
+	// SubscribeInvoices stream may have missed (e.g. brief lnd
+	// disconnects, replica that didn't subscribe at the moment an
+	// invoice expired). Set to 0 to disable the periodic sweep — the
+	// startup-time sweep still runs once.
+	InvoiceReconcileInterval time.Duration `long:"invoicereconcileinterval" description:"How often the background invoice reconciler re-walks all known invoices to catch state changes missed by the live stream. 0 disables the periodic sweep."`
 }
 
 func (c *Config) validate() error {
@@ -364,24 +382,25 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
-		DatabaseBackend:     "etcd",
-		Etcd:                &EtcdConfig{},
-		Sqlite:              DefaultSqliteConfig(),
-		Postgres:            &aperturedb.PostgresConfig{},
-		Authenticator:       &AuthConfig{},
-		Tor:                 &TorConfig{},
-		HashMail:            &HashMailConfig{},
-		Prometheus:          &PrometheusConfig{},
-		Admin:               &AdminConfig{},
-		IdleTimeout:         defaultIdleTimeout,
-		ReadTimeout:         defaultReadTimeout,
-		WriteTimeout:        defaultWriteTimeout,
-		WsPingInterval:      defaultWsPingInterval,
-		WsPongWait:          defaultWsPongWait,
-		InvoiceBatchSize:    defaultInvoiceBatchSize,
-		ServicePollInterval: defaultServicePollInterval,
-		Logging:             build.DefaultLogConfig(),
-		Blocklist:           []string{},
-		StrictVerify:        defaultStrictVerify,
+		DatabaseBackend:          "etcd",
+		Etcd:                     &EtcdConfig{},
+		Sqlite:                   DefaultSqliteConfig(),
+		Postgres:                 &aperturedb.PostgresConfig{},
+		Authenticator:            &AuthConfig{},
+		Tor:                      &TorConfig{},
+		HashMail:                 &HashMailConfig{},
+		Prometheus:               &PrometheusConfig{},
+		Admin:                    &AdminConfig{},
+		IdleTimeout:              defaultIdleTimeout,
+		ReadTimeout:              defaultReadTimeout,
+		WriteTimeout:             defaultWriteTimeout,
+		WsPingInterval:           defaultWsPingInterval,
+		WsPongWait:               defaultWsPongWait,
+		InvoiceBatchSize:         defaultInvoiceBatchSize,
+		ServicePollInterval:      defaultServicePollInterval,
+		InvoiceReconcileInterval: defaultInvoiceReconcileInterval,
+		Logging:                  build.DefaultLogConfig(),
+		Blocklist:                []string{},
+		StrictVerify:             defaultStrictVerify,
 	}
 }

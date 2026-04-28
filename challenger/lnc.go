@@ -79,3 +79,11 @@ func (l *LNCChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
 
 	return l.lndChallenger.VerifyInvoiceStatus(hash, state, timeout)
 }
+
+// Reconcile delegates to the embedded lnd challenger so periodic
+// invoice reconciliation works in LNC mode too.
+//
+// NOTE: This is part of the InvoiceReconciler interface.
+func (l *LNCChallenger) Reconcile() error {
+	return l.lndChallenger.Reconcile()
+}

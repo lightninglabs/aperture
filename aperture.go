@@ -512,6 +512,29 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}()
 	}
 
+	// Periodic invoice reconciler. Complements the live
+	// SubscribeInvoices stream: re-runs the startup-time sweep on a
+	// timer so any expirations or settlements that the stream missed
+	// (transient lnd disconnect, replica offline at the moment of the
+	// event, etc.) get reconciled into the transaction store. Only
+	// matters when the challenger reports irrelevant invoices through
+	// onExpired or settled-on-startup through onSettled — without
+	// those callbacks Reconcile is a no-op.
+	if a.cfg.InvoiceReconcileInterval > 0 {
+		if recon, ok := a.challenger.(challenger.InvoiceReconciler); ok {
+			a.wg.Add(1)
+			go func() {
+				defer a.wg.Done()
+				a.runInvoiceReconciler(recon)
+			}()
+		} else {
+			log.Debugf("Active challenger does not implement "+
+				"InvoiceReconciler; periodic reconcile "+
+				"disabled (interval=%v ignored)",
+				a.cfg.InvoiceReconcileInterval)
+		}
+	}
+
 	// Create a payment sender for MPP session refunds if sessions are
 	// enabled and we have a direct LND connection.
 	var paymentSender auth.PaymentSender
@@ -703,6 +726,37 @@ func (a *Aperture) pollServiceConfig(svcStore *aperturedb.ServicesStore,
 		}
 		holder.set(merged)
 		lastHash = newHash
+	}
+}
+
+// runInvoiceReconciler periodically asks the active challenger to
+// replay terminal-state events for every known invoice. Catches state
+// changes that the live SubscribeInvoices stream missed — e.g. the
+// stream was disconnected during an expiration, or a replica started
+// after an event already fired. The reconcile is idempotent (settled
+// rows are gated by conditional SQL, expired rows by a per-hash
+// dedupe map inside the challenger), so a tighter interval just costs
+// a bit more lnd.ListInvoices traffic, never duplicate DB writes.
+func (a *Aperture) runInvoiceReconciler(
+	recon challenger.InvoiceReconciler) {
+
+	interval := a.cfg.InvoiceReconcileInterval
+	log.Infof("Invoice reconciler running (interval=%v); periodically "+
+		"replays missed settlement/expiration events", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+		case <-a.quit:
+			log.Debugf("Invoice reconciler stopping")
+			return
+		}
+		if err := recon.Reconcile(); err != nil {
+			log.Warnf("Periodic invoice reconcile failed: %v", err)
+		}
 	}
 }
 

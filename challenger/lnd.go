@@ -350,6 +350,82 @@ func (l *LndChallenger) Start() error {
 	return nil
 }
 
+// Reconcile pages through every invoice currently known to the
+// connected lnd and replays terminal-state callbacks for any in
+// SETTLED, CANCELED, or expired-unpaid states. Used both at startup
+// (via Start) to catch up after downtime and by a periodic background
+// ticker to defend against the live SubscribeInvoices stream missing
+// an event (e.g. transient lnd disconnect, message loss).
+//
+// Idempotency:
+//   - Expired callbacks are gated by markSeenExpired, so each hash is
+//     delivered at most once across all sweep + stream paths.
+//   - Settled callbacks are deduped at the storage layer (the SQL
+//     UPDATE is conditional on state='pending'), so duplicate enqueues
+//     are no-ops in the DB.
+//
+// Safe to call concurrently with the live subscription.
+func (l *LndChallenger) Reconcile() error {
+	if l.onSettled == nil && l.onExpired == nil {
+		return nil
+	}
+
+	ctx := l.clientCtx()
+	indexOffset := uint64(0)
+	settledCount := 0
+	expiredCount := 0
+
+	for {
+		invoiceResp, err := l.client.ListInvoices(
+			ctx, &lnrpc.ListInvoiceRequest{
+				IndexOffset:    indexOffset,
+				NumMaxInvoices: uint64(l.batchSize),
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("reconcile: list invoices: %w",
+				err)
+		}
+		if len(invoiceResp.Invoices) == 0 {
+			break
+		}
+
+		for _, invoice := range invoiceResp.Invoices {
+			if invoice.RHash == nil {
+				continue
+			}
+			hash, err := lntypes.MakeHash(invoice.RHash)
+			if err != nil {
+				continue
+			}
+
+			switch {
+			case invoice.State == lnrpc.Invoice_SETTLED &&
+				l.onSettled != nil:
+
+				l.settlementQueue.ChanIn() <- hash
+				settledCount++
+
+			case l.onExpired != nil &&
+				invoice.State != lnrpc.Invoice_SETTLED &&
+				invoiceIrrelevant(invoice) &&
+				l.markSeenExpired(hash):
+
+				l.expirationQueue.ChanIn() <- hash
+				expiredCount++
+			}
+		}
+
+		indexOffset = invoiceResp.LastIndexOffset
+	}
+
+	if settledCount > 0 || expiredCount > 0 {
+		log.Debugf("Reconcile: enqueued %d settled, %d expired",
+			settledCount, expiredCount)
+	}
+	return nil
+}
+
 // markSeenExpired records a hash in the dedupe set. Returns true if this
 // is the first time we've seen it, false if it was already marked.
 func (l *LndChallenger) markSeenExpired(hash lntypes.Hash) bool {

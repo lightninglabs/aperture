@@ -148,6 +148,36 @@ func (r *RouterChallenger) Stop() {
 	}
 }
 
+// Reconcile fans out to every wrapped challenger that supports it
+// (LndChallenger and LNCChallenger do; the per-service merchant lnds
+// in `perService` each have their own pending tx rows so they all
+// need their own sweep). Errors are aggregated — a failure on one
+// merchant lnd shouldn't stop the rest.
+//
+// NOTE: This is part of the InvoiceReconciler interface.
+func (r *RouterChallenger) Reconcile() error {
+	var firstErr error
+	tryReconcile := func(name string, c Challenger) {
+		recon, ok := c.(InvoiceReconciler)
+		if !ok {
+			return
+		}
+		if err := recon.Reconcile(); err != nil {
+			log.Errorf("Reconcile failed for %s: %v", name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if r.defaultChallenger != nil {
+		tryReconcile("default", r.defaultChallenger)
+	}
+	for serviceName, c := range r.perService {
+		tryReconcile("service:"+serviceName, c)
+	}
+	return firstErr
+}
+
 // ensureDistinctMerchants is a helper used by aperture startup to
 // sanity-check that no two services share the same (lndhost, macpath)
 // pair by accident — which would silently pool their funds on the same
