@@ -1,0 +1,89 @@
+# Production deployment of prism, sharing the host's existing
+# Postgres and nginx with sibling services (agents-pay-service etc).
+#
+# Differences from deploy/ha-prototype/docker-compose.yml:
+#   • No bundled postgres — connects to the Postgres already running
+#     on the host (used by agents-pay-service). Saves memory, keeps
+#     ops surface minimal. See README for the one-time CREATE USER /
+#     CREATE DATABASE incantations.
+#   • No bundled nginx — host's system nginx terminates TLS and
+#     fans out to prism-N. Each prism replica publishes its 8080
+#     port to a distinct loopback port on the host so nginx upstream
+#     can target 127.0.0.1:8081/8082/8083. See nginx-prism.conf.
+#
+# Bring it up:
+#   cd deploy/production
+#   cp prism.yaml.example prism.yaml   # then edit pg password etc
+#   docker compose up -d --build
+
+services:
+  prism-1:
+    build:
+      context: ../..
+      dockerfile: deploy/ha-prototype/Dockerfile.prism   # reuse dev image
+    image: loka-prism-l402:prod
+    restart: unless-stopped
+    environment:
+      - PRISM_REPLICA_ID=1
+    volumes:
+      - prism-state:/srv/prism
+      - ./prism.yaml:/etc/prism/prism.yaml:ro
+      # Mount your real lnd's tls.cert + macaroons here.
+      # Adjust source paths to your actual lnd install.
+      - /opt/lnd-loka/tls.cert:/srv/lnd/tls.cert:ro
+      - /opt/lnd-loka/data/chain/sui/devnet:/srv/lnd/macaroons:ro
+    ports:
+      # Bind to loopback only — host nginx is the only thing that
+      # should be able to reach prism. Public access goes through
+      # nginx (TLS + Host-based routing).
+      - "127.0.0.1:8081:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://localhost:8080/ || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 10s
+
+  prism-2:
+    image: loka-prism-l402:prod
+    restart: unless-stopped
+    depends_on:
+      prism-1:
+        condition: service_healthy
+    environment:
+      - PRISM_REPLICA_ID=2
+    volumes:
+      - prism-state:/srv/prism
+      - ./prism.yaml:/etc/prism/prism.yaml:ro
+      - /opt/lnd-loka/tls.cert:/srv/lnd/tls.cert:ro
+      - /opt/lnd-loka/data/chain/sui/devnet:/srv/lnd/macaroons:ro
+    ports:
+      - "127.0.0.1:8082:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  prism-3:
+    image: loka-prism-l402:prod
+    restart: unless-stopped
+    depends_on:
+      prism-1:
+        condition: service_healthy
+    environment:
+      - PRISM_REPLICA_ID=3
+    volumes:
+      - prism-state:/srv/prism
+      - ./prism.yaml:/etc/prism/prism.yaml:ro
+      - /opt/lnd-loka/tls.cert:/srv/lnd/tls.cert:ro
+      - /opt/lnd-loka/data/chain/sui/devnet:/srv/lnd/macaroons:ro
+    ports:
+      - "127.0.0.1:8083:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  # Holds the shared admin.macaroon + admin.rootkey across all replicas.
+  # Critical: see deploy/ha-prototype/README.md "Shared state requirements"
+  # for why this can't be per-replica.
+  prism-state:

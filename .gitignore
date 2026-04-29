@@ -31,3 +31,7 @@ docs/payment-architecture-and-fiat-compliance.md
 docs/payment-architecture-and-fiat-compliance.docx
 
 tls.*
+
+# Production prism config holds the Postgres password. Only the
+# .example template should be in the tree.
+deploy/production/prism.yaml

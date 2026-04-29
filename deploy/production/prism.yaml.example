@@ -1,0 +1,85 @@
+# Production prism config — adapted from deploy/ha-prototype/prism.yaml
+# but pointed at the host's shared Postgres + behind the host's nginx.
+#
+# Copy to prism.yaml and edit the placeholder values BEFORE
+# `docker compose up`. prism.yaml is gitignored so secrets stay
+# off the tree.
+
+listenaddr: "0.0.0.0:8080"
+servestatic: false
+debuglevel: "info"
+basedir: "/srv/prism"
+
+# Each replica re-reads service config from the DB at this interval to
+# pick up admin-API changes made on a sibling replica. 30s is the safe
+# default; production deployments rarely need it tighter.
+servicepollinterval: 30s
+
+# Periodic safety-net sweep over invoices. Catches any settlement /
+# expiration the live SubscribeInvoices stream may have missed.
+invoicereconcileinterval: 5m
+
+# Host nginx terminates TLS facing the public internet; prism only
+# speaks plain HTTP on 127.0.0.1:8081/8082/8083 to the host nginx
+# (those ports are bound to loopback by docker-compose.yml).
+insecure: true
+
+strictverify: false
+invoicebatchsize: 100000
+idletimeout: 2m
+readtimeout: 15s
+writetimeout: 30s
+
+authenticator:
+  network: "devnet"           # match your lnd-sui setup
+  disable: false
+  lndhost: "host.docker.internal:10009"
+  tlspath: "/srv/lnd/tls.cert"
+  macdir: "/srv/lnd/macaroons"
+
+  enablempp: true
+  mpprealm: "prism.loka.cash"
+  enablesessions: true
+
+# Admin macaroon goes on the shared volume so all 3 replicas issue and
+# accept the same macaroon. Without this, each replica would generate
+# its own root key and the LB would return ~50% "invalid macaroon".
+admin:
+  enabled: true
+  macaroonpath: "/srv/prism/admin.macaroon"
+
+# Connect to the host's Postgres (shared with agents-pay-service).
+# A dedicated `prism` user + database keeps the two services isolated;
+# see README for the CREATE USER / CREATE DATABASE incantations.
+dbbackend: "postgres"
+postgres:
+  host: "host.docker.internal"
+  port: 5432
+  user: "prism"
+  password: "REPLACE_ME_STRONG_PASSWORD"
+  dbname: "prism"
+  maxconnections: 25
+  requireSSL: false       # loopback only — no need for TLS
+
+services:
+  # Static services here are baked into config and seen by every
+  # replica at startup. Services created at runtime via the admin API
+  # land in Postgres and propagate via servicepollinterval polling.
+  - name: "service1"
+    hostregexp: '^service1\.prism\.loka\.cash$'
+    pathregexp: '^/.*$'
+    address: "127.0.0.1:9998"        # your real backend
+    protocol: http
+    price: 10000000                  # 0.01 SUI per request
+
+prometheus:
+  enabled: true
+  listenaddr: "0.0.0.0:9000"
+
+logging:
+  console:
+    style: false
+    notimestamps: false
+    level: "info"
+  file:
+    disable: true
