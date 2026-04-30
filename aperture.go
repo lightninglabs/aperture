@@ -1514,7 +1514,29 @@ func createAdminServer(cfg *Config,
 						return
 					}
 					ip := net.ParseIP(host)
-					if ip == nil || !ip.IsLoopback() {
+					if ip == nil {
+						http.Error(
+							w, "forbidden",
+							http.StatusForbidden,
+						)
+						return
+					}
+
+					// Allow loopback OR private networks (Docker bridge)
+					// BUT only if the Host header also indicates a
+					// local request. This prevents Nginx from exposing
+					// administrative endpoints.
+					isLocalIP := ip.IsLoopback() || ip.IsPrivate()
+
+					h, _, _ := net.SplitHostPort(r.Host)
+					if h == "" {
+						h = r.Host
+					}
+					isLocalHost := h == "localhost" || h == "127.0.0.1"
+
+					if !isLocalIP || !isLocalHost {
+						log.Warnf("Rejecting non-local administrative "+
+							"request from %s (Host: %s)", ip, r.Host)
 						http.Error(
 							w, "forbidden",
 							http.StatusForbidden,
@@ -1792,12 +1814,37 @@ func createAdminServer(cfg *Config,
 		wrappedDash := requireLoopback(
 			addSecurityHeaders(dashHandler),
 		)
-		fallbackServices = append(
-			fallbackServices, proxy.NewLocalService(
-				wrappedDash,
-				func(r *http.Request) bool {
-					return true
-				},
+
+		// Define a match function for the dashboard. It should only
+		// match if the request is coming from a loopback or private
+		// IP (Docker) AND the Host header is localhost or 127.0.0.1.
+		// This allows it to skip L402 auth when accessed locally
+		// (e.g. via SSH tunnel or healthcheck) without hijacking
+		// traffic for external services proxied via Nginx.
+		isLocalDashboardRequest := func(r *http.Request) bool {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				return false
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || (!ip.IsLoopback() && !ip.IsPrivate()) {
+				return false
+			}
+
+			// Only skip auth if the Host header also indicates a
+			// local access attempt.
+			h, _, _ := net.SplitHostPort(r.Host)
+			if h == "" {
+				h = r.Host
+			}
+			return h == "localhost" || h == "127.0.0.1"
+		}
+
+		// Add as priority service so it skips L402 auth for local
+		// users/healthchecks.
+		priorityServices = append(
+			priorityServices, proxy.NewLocalService(
+				wrappedDash, isLocalDashboardRequest,
 			),
 		)
 
