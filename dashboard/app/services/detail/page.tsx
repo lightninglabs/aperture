@@ -15,6 +15,7 @@ import styled from "@emotion/styled";
 import { toast } from "@/components/Toast";
 import type { AuthScheme } from "@/lib/types";
 import { authSchemeLabels } from "@/lib/types";
+import { formatAmount, unitLabel, baseUnitLabel } from "@/lib/currency";
 import Button from "@/components/Button";
 import StatTile from "@/components/StatTile";
 import EmptyState from "@/components/EmptyState";
@@ -301,6 +302,7 @@ function ServiceDetailContent() {
     limit: 50,
   });
   const { data: info, error: infoError, mutate: mutateInfo } = useInfo();
+  const chain = info?.chain;
   const { data: stats } = useStats();
 
   const [editingPrice, setEditingPrice] = useState(false);
@@ -337,7 +339,7 @@ function ServiceDetailContent() {
     setSaving(true);
     try {
       await updateService(decodedName, { price });
-      toast(`Price updated to ${price} sats`);
+      toast(`Price updated to ${formatAmount(price, chain).value} ${unitLabel(chain)}`);
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : "Failed to update price", "error");
     }
@@ -383,7 +385,7 @@ function ServiceDetailContent() {
     const trimmed = hostregexpValue.trim();
     setSaving(true);
     try {
-      await updateService(decodedName, { hostregexp: trimmed });
+      await updateService(decodedName, { host_regexp: trimmed });
       toast(
         trimmed ? `Host regexp updated to "${trimmed}"` : "Host regexp cleared"
       );
@@ -401,7 +403,7 @@ function ServiceDetailContent() {
     const trimmed = pathregexpValue.trim();
     setSaving(true);
     try {
-      await updateService(decodedName, { pathregexp: trimmed });
+      await updateService(decodedName, { path_regexp: trimmed });
       toast(
         trimmed ? `Path regexp updated to "${trimmed}"` : "Path regexp cleared"
       );
@@ -464,6 +466,28 @@ function ServiceDetailContent() {
       );
       setSaving(false);
     }
+  }, [decodedName]);
+
+  const handleClearPayment = useCallback(async () => {
+    if (
+      !confirm(
+        "Remove the per-service lnd override? This service will fall " +
+          "back to the gateway's global lnd on the next prism restart."
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateService(decodedName, { clear_payment: true });
+      toast("Payment override cleared. Restart prism to apply.");
+    } catch (e: unknown) {
+      toast(
+        e instanceof Error ? e.message : "Failed to clear payment",
+        "error"
+      );
+    }
+    setSaving(false);
   }, [decodedName]);
 
   const startPriceEdit = useCallback(() => {
@@ -609,14 +633,14 @@ function ServiceDetailContent() {
       <StatGrid>
         <StatTile
           title="Revenue"
-          text={totalRevenue.toLocaleString()}
-          suffix="sats"
+          text={formatAmount(totalRevenue, chain).value}
+          suffix={unitLabel(chain)}
         />
         <StatTile title="Settled Payments" text={String(settledCount)} />
         <StatTile
           title="Price"
-          text={svc.price.toLocaleString()}
-          suffix="sats"
+          text={formatAmount(svc.price, chain).value}
+          suffix={unitLabel(chain)}
         />
       </StatGrid>
 
@@ -686,7 +710,7 @@ function ServiceDetailContent() {
                   />
                 ) : (
                   <EditablePrice onClick={startPriceEdit}>
-                    {svc.price.toLocaleString()} sats
+                    {formatAmount(svc.price, chain).value} {unitLabel(chain)}
                   </EditablePrice>
                 )}
               </ConfigValue>
@@ -786,6 +810,57 @@ function ServiceDetailContent() {
         </Card>
       </ConfigGrid>
 
+      <Card style={{ marginBottom: 24 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 16,
+          }}
+        >
+          <SectionTitle style={{ margin: 0 }}>Payment Backend</SectionTitle>
+          {svc.payment?.lnd_host && (
+            <Button
+              variant="ghost"
+              compact
+              disabled={saving}
+              onClick={handleClearPayment}
+            >
+              Clear override
+            </Button>
+          )}
+        </div>
+        {svc.payment?.lnd_host ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <ConfigRow>
+              <ConfigLabel>Merchant lnd</ConfigLabel>
+              <ConfigValue $mono>{svc.payment.lnd_host}</ConfigValue>
+            </ConfigRow>
+            <ConfigRow>
+              <ConfigLabel>tls.cert</ConfigLabel>
+              <ConfigValue $mono>{svc.payment.tls_path}</ConfigValue>
+            </ConfigRow>
+            <ConfigRow>
+              <ConfigLabel>macaroon</ConfigLabel>
+              <ConfigValue $mono>{svc.payment.mac_path}</ConfigValue>
+            </ConfigRow>
+            <HelpText>
+              Invoices for this service are issued against the merchant&apos;s
+              own lnd, so payments land in their wallet — the gateway never
+              takes custody. Changes take effect on the next prism restart.
+            </HelpText>
+          </div>
+        ) : (
+          <HelpText style={{ marginTop: 0 }}>
+            This service uses the gateway&apos;s global lnd. To route
+            payments to a merchant&apos;s own lnd, set the{" "}
+            <Code>payment</Code> block via the admin API or{" "}
+            <Code>prismcli services update --payment-*</Code>.
+          </HelpText>
+        )}
+      </Card>
+
       <CardNopad>
         <TableHeader>
           <SectionTitle style={{ marginBottom: 0 }}>
@@ -814,7 +889,7 @@ function ServiceDetailContent() {
                   <Row key={tx.id}>
                     <IdCell>{tx.id}</IdCell>
                     <AmountCell>
-                      {tx.price_sats.toLocaleString()} sats
+                      {formatAmount(tx.price_sats, chain).value} {unitLabel(chain)}
                     </AmountCell>
                     <Td>
                       <Badge $settled={tx.state === "settled"}>

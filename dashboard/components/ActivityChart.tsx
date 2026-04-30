@@ -11,6 +11,7 @@ import { bisector } from "d3-array";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { theme } from "@/lib/theme";
 import type { Transaction } from "@/lib/types";
+import { formatAmount, unitLabel } from "@/lib/currency";
 
 interface Bucket {
   time: Date;
@@ -66,10 +67,12 @@ function Chart({
   data,
   width,
   height,
+  chain,
 }: {
   data: Bucket[];
   width: number;
   height: number;
+  chain?: string;
 }) {
   const {
     showTooltip,
@@ -263,7 +266,7 @@ function Chart({
             })}
           </div>
           <div style={{ color: theme.colors.gold, fontWeight: 600 }}>
-            {tooltipData.sats.toLocaleString()} sats
+            {formatAmount(tooltipData.sats, chain).value} {unitLabel(chain)}
           </div>
         </TooltipInPortal>
       )}
@@ -273,9 +276,10 @@ function Chart({
 
 interface Props {
   transactions: Transaction[];
+  chain?: string;
 }
 
-export default function ActivityChart({ transactions }: Props) {
+export default function ActivityChart({ transactions, chain }: Props) {
   const data = bucketTransactions(transactions);
 
   if (data.length === 0) return null;
@@ -285,7 +289,7 @@ export default function ActivityChart({ transactions }: Props) {
       <ParentSize>
         {({ width, height }) =>
           width > 0 && height > 0 ? (
-            <Chart data={data} width={width} height={height} />
+            <Chart data={data} width={width} height={height} chain={chain} />
           ) : null
         }
       </ParentSize>

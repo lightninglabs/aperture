@@ -303,6 +303,53 @@ func (s *L402TransactionsStore) SettleTransaction(ctx context.Context,
 	return nil
 }
 
+// ExpireTransaction marks all pending transactions with the given payment
+// hash as expired. Used when the challenger observes that the underlying
+// Lightning invoice was canceled or passed its expiry without being paid,
+// so these rows don't accumulate as stale "pending" forever.
+//
+// Only affects rows still in "pending" state — a transaction that was
+// already settled is left alone. The settled_at column is deliberately
+// not touched (remains NULL for expired rows), so reports that join on
+// settled_at continue to exclude them.
+func (s *L402TransactionsStore) ExpireTransaction(ctx context.Context,
+	paymentHash []byte) error {
+
+	var writeTxOpts L402TransactionsDBTxOptions
+	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx L402TransactionsDB) error {
+		nRows, err := tx.UpdateL402TransactionState(
+			ctx, UpdateL402TxState{
+				State:       "expired",
+				SettledAt:   sql.NullTime{},
+				PaymentHash: paymentHash,
+			},
+		)
+		if err != nil {
+			return err
+		}
+
+		if nRows == 0 {
+			// Expected when the invoice was never tracked (e.g.
+			// canceled before any challenge was recorded), or
+			// when the row was already settled/expired.
+			log.Tracef("ExpireTransaction affected 0 rows "+
+				"(hash=%x)", paymentHash)
+		} else {
+			log.Debugf("ExpireTransaction marked %d row(s) as "+
+				"expired (hash=%x)", nRows, paymentHash)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("unable to expire L402 transaction "+
+			"(hash=%x): %w", paymentHash, err)
+	}
+
+	return nil
+}
+
 // ListTransactions returns a paginated list of all transactions.
 func (s *L402TransactionsStore) ListTransactions(ctx context.Context,
 	limit, offset int32) ([]L402Transaction, error) {

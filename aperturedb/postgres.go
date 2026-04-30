@@ -34,8 +34,8 @@ type PostgresConfig struct {
 	User               string `long:"user" description:"Database user."`
 	Password           string `long:"password" description:"Database user's password."`
 	DBName             string `long:"dbname" description:"Database name to use."`
-	MaxOpenConnections int32  `long:"maxconnections" description:"Max open connections to keep alive to the database server."`
-	RequireSSL         bool   `long:"requiressl" description:"Whether to require using SSL (mode: require) when connecting to the server."`
+	MaxOpenConnections int32  `long:"maxconnections" description:"Max open connections to keep alive to the database server." yaml:"maxconnections"`
+	RequireSSL         bool   `long:"requiressl" description:"Whether to require using SSL (mode: require) when connecting to the server." yaml:"requireSSL"`
 }
 
 // DSN returns the dns to connect to the database.

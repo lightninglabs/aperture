@@ -13,6 +13,7 @@ import { toast } from "@/components/Toast";
 import type { ServiceCreateRequest, AuthScheme } from "@/lib/types";
 import { authSchemeLabels } from "@/lib/types";
 import { useInfo } from "@/lib/api";
+import { formatAmount, unitLabel, baseUnitLabel } from "@/lib/currency";
 import Button from "@/components/Button";
 import PageHeader from "@/components/PageHeader";
 import EmptyState from "@/components/EmptyState";
@@ -32,11 +33,26 @@ const initialForm: ServiceCreateRequest = {
   name: "",
   address: "",
   protocol: "http",
-  hostregexp: ".*",
-  pathregexp: "",
+  host_regexp: ".*",
+  path_regexp: "",
   price: 0,
   auth: "on",
   auth_scheme: "AUTH_SCHEME_L402",
+};
+
+// Local UI state for the payment backend fields on the create form.
+// Tracked separately from the request body so an empty form doesn't
+// emit a half-filled `payment` object (which the server rejects).
+interface PaymentForm {
+  lnd_host: string;
+  tls_path: string;
+  mac_path: string;
+}
+
+const initialPaymentForm: PaymentForm = {
+  lnd_host: "",
+  tls_path: "",
+  mac_path: "",
 };
 
 const Styled = {
@@ -205,6 +221,13 @@ const Styled = {
     width: 80px;
     text-align: right;
   `,
+  PaymentHint: styled.div`
+    margin-top: 4px;
+    font-size: 11px;
+    color: ${(p) => p.theme.colors.lightningYellow};
+    font-family: monospace;
+    letter-spacing: 0.2px;
+  `,
   AuthBadge: styled.span<{ $level: "on" | "off" | "freebie" }>`
     display: inline-block;
     padding: 2px 10px;
@@ -239,6 +262,8 @@ export default function ServicesPage() {
     error: servicesError,
     mutate: refreshServices,
   } = useServices();
+  const { data: info } = useInfo();
+  const chain = info?.chain;
   const { sorted, sortField, sortDir, onSort } = useSort(services, "name");
   const [editingPrice, setEditingPrice] = useState<string | null>(null);
   const [priceValue, setPriceValue] = useState("");
@@ -246,6 +271,9 @@ export default function ServicesPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<ServiceCreateRequest>({ ...initialForm });
+  const [paymentForm, setPaymentForm] = useState<PaymentForm>({
+    ...initialPaymentForm,
+  });
 
   const handlePriceSave = useCallback(
     async (name: string) => {
@@ -254,7 +282,7 @@ export default function ServicesPage() {
       setSaving(true);
       try {
         await updateService(name, { price });
-        toast(`Price updated to ${price} sats`);
+        toast(`Price updated to ${formatAmount(price, chain).value} ${unitLabel(chain)}`);
       } catch (e: unknown) {
         toast(
           e instanceof Error ? e.message : "Failed to update price",
@@ -300,11 +328,31 @@ export default function ServicesPage() {
         toast("Name and address are required", "error");
         return;
       }
+      // All-or-nothing payment backend — mirrors the server check so the
+      // user gets immediate feedback instead of a round-trip 400.
+      const paymentSet = [
+        paymentForm.lnd_host,
+        paymentForm.tls_path,
+        paymentForm.mac_path,
+      ].filter((v) => v.trim() !== "");
+      if (paymentSet.length > 0 && paymentSet.length < 3) {
+        toast(
+          "Payment backend: lnd host, tls path and macaroon path must " +
+            "all be set together or all be empty",
+          "error"
+        );
+        return;
+      }
+      const body: ServiceCreateRequest = { ...form };
+      if (paymentSet.length === 3) {
+        body.payment = { ...paymentForm };
+      }
       setSaving(true);
       try {
-        await createService(form);
+        await createService(body);
         toast(`Service "${form.name}" created`);
         setForm({ ...initialForm });
+        setPaymentForm({ ...initialPaymentForm });
         setShowAdd(false);
         setShowAdvanced(false);
       } catch (e: unknown) {
@@ -315,7 +363,7 @@ export default function ServicesPage() {
       }
       setSaving(false);
     },
-    [form]
+    [form, paymentForm]
   );
 
   const toggleAdd = useCallback(() => {
@@ -329,6 +377,7 @@ export default function ServicesPage() {
     setShowAdd(false);
     setShowAdvanced(false);
     setForm({ ...initialForm });
+    setPaymentForm({ ...initialPaymentForm });
   }, []);
 
   const toggleAdvanced = useCallback(() => setShowAdvanced((s) => !s), []);
@@ -361,6 +410,7 @@ export default function ServicesPage() {
     EditablePrice,
     PriceInput,
     AuthBadge,
+    PaymentHint,
     Skeleton,
   } = Styled;
 
@@ -435,8 +485,8 @@ export default function ServicesPage() {
             <Grid2>
               <div>
                 <Label>
-                  Price (sats)
-                  <Tooltip text="Cost per request in satoshis. Clients pay a Lightning invoice for this amount to receive an L402 access token." />
+                  Price ({baseUnitLabel(chain)})
+                  <Tooltip text={`Cost per request in ${baseUnitLabel(chain)} — the base unit of the connected chain. Clients pay a Lightning invoice for this amount to receive an L402 access token.`} />
                 </Label>
                 <Input
                   type="number"
@@ -500,34 +550,89 @@ export default function ServicesPage() {
               {showAdvanced ? "\u25BE" : "\u25B8"} Advanced options
             </AdvancedToggle>
             {showAdvanced && (
-              <Grid2>
-                <div>
-                  <Label>
-                    Host Regexp
-                    <Tooltip text="Regex matched against the HTTP Host header. Determines which incoming requests route to this service. Default .* matches all hosts." />
-                  </Label>
-                  <Input
-                    value={form.hostregexp}
-                    onChange={(e) =>
-                      setForm({ ...form, hostregexp: e.target.value })
-                    }
-                    placeholder=".*"
-                  />
+              <>
+                <Grid2>
+                  <div>
+                    <Label>
+                      Host Regexp
+                      <Tooltip text="Regex matched against the HTTP Host header. Determines which incoming requests route to this service. Default .* matches all hosts." />
+                    </Label>
+                    <Input
+                      value={form.host_regexp}
+                      onChange={(e) =>
+                        setForm({ ...form, host_regexp: e.target.value })
+                      }
+                      placeholder=".*"
+                    />
+                  </div>
+                  <div>
+                    <Label>
+                      Path Regexp
+                      <Tooltip text="Regex matched against the request URL path. Only requests with matching paths are routed to this service. Leave empty to match all paths." />
+                    </Label>
+                    <Input
+                      value={form.path_regexp}
+                      onChange={(e) =>
+                        setForm({ ...form, path_regexp: e.target.value })
+                      }
+                      placeholder="^/api/.*$"
+                    />
+                  </div>
+                </Grid2>
+                <div
+                  style={{
+                    marginTop: 8,
+                    marginBottom: 10,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "var(--text-muted, #848a99)",
+                  }}
+                >
+                  Payment backend (optional)
+                  <Tooltip text="Route this service's invoices to a merchant's own lnd. All three fields must be set together. Leave blank to use the gateway's global lnd. Changes take effect after prism restart." />
                 </div>
-                <div>
-                  <Label>
-                    Path Regexp
-                    <Tooltip text="Regex matched against the request URL path. Only requests with matching paths are routed to this service. Leave empty to match all paths." />
-                  </Label>
-                  <Input
-                    value={form.pathregexp}
-                    onChange={(e) =>
-                      setForm({ ...form, pathregexp: e.target.value })
-                    }
-                    placeholder="^/api/.*$"
-                  />
-                </div>
-              </Grid2>
+                <Grid3>
+                  <div>
+                    <Label>Merchant lnd host</Label>
+                    <Input
+                      value={paymentForm.lnd_host}
+                      onChange={(e) =>
+                        setPaymentForm({
+                          ...paymentForm,
+                          lnd_host: e.target.value,
+                        })
+                      }
+                      placeholder="merchant.example:10009"
+                    />
+                  </div>
+                  <div>
+                    <Label>tls.cert path</Label>
+                    <Input
+                      value={paymentForm.tls_path}
+                      onChange={(e) =>
+                        setPaymentForm({
+                          ...paymentForm,
+                          tls_path: e.target.value,
+                        })
+                      }
+                      placeholder="/etc/prism/merchants/foo/tls.cert"
+                    />
+                  </div>
+                  <div>
+                    <Label>macaroon path</Label>
+                    <Input
+                      value={paymentForm.mac_path}
+                      onChange={(e) =>
+                        setPaymentForm({
+                          ...paymentForm,
+                          mac_path: e.target.value,
+                        })
+                      }
+                      placeholder="/etc/prism/merchants/foo/invoice.macaroon"
+                    />
+                  </div>
+                </Grid3>
+              </>
             )}
             <FormActions>
               <Button type="submit" variant="primary" compact disabled={saving}>
@@ -624,7 +729,19 @@ export default function ServicesPage() {
                         {svc.name}
                       </NameLink>
                     </Td>
-                    <AddressCell>{svc.address}</AddressCell>
+                    <AddressCell>
+                      {svc.address}
+                      {svc.payment?.lnd_host && (
+                        <PaymentHint
+                          title={
+                            `Per-service lnd: ${svc.payment.lnd_host}\n` +
+                            `macaroon: ${svc.payment.mac_path}`
+                          }
+                        >
+                          ↪ lnd {svc.payment.lnd_host}
+                        </PaymentHint>
+                      )}
+                    </AddressCell>
                     <Td>
                       <ProtoBadge>{svc.protocol}</ProtoBadge>
                     </Td>
@@ -650,7 +767,7 @@ export default function ServicesPage() {
                           }}
                           title="Click to edit"
                         >
-                          {svc.price.toLocaleString()} sats
+                          {formatAmount(svc.price, chain).value} {unitLabel(chain)}
                         </EditablePrice>
                       )}
                     </PriceCell>

@@ -23,20 +23,66 @@ var (
 )
 
 const (
-	// defaultServicePrice is price in satoshis to be used as the default
-	// service price.
-	defaultServicePrice = 1
+	// defaultServicePriceSats is the default service price in satoshis,
+	// used when the connected lnd reports a bitcoin chain (or no chain).
+	// Kept at 1 sat for backward compatibility with single-sat L402
+	// deployments.
+	defaultServicePriceSats = 1
+
+	// defaultServicePriceMIST is the default service price in MIST for
+	// sui chains. 10_000_000 MIST = 0.01 SUI (~1¢ at $1/SUI), which is
+	// closer to a sensible micropayment unit on sui than 1 MIST would
+	// be. Picked to match the sample-conf example so an unconfigured
+	// service price doesn't render as 0.000000001 SUI in the dashboard.
+	defaultServicePriceMIST = 10_000_000
 
 	// maxServicePrice is the maximum price in satoshis that can be used
 	// to create an invoice through lnd.
 	maxServicePrice = btcutil.SatoshiPerBitcoin * 100000
 )
 
+// defaultPriceForChain returns the default service price (in the chain's
+// base unit) to use when a service is configured without an explicit
+// `price`. Uses sui's MIST scale on sui, satoshis everywhere else.
+func defaultPriceForChain(chain string) int64 {
+	if chain == "sui" {
+		return defaultServicePriceMIST
+	}
+	return defaultServicePriceSats
+}
+
 // RewriteConfig defines what should be rewritten in a proxied client request.
 type RewriteConfig struct {
 	// Prefix is an absolute path that is prepended to the request path
 	// before forwarding to the backend service.
 	Prefix string `long:"prefix" description:"Absolute path prefix to prepend to the request path"`
+}
+
+// PaymentBackend overrides the global authenticator lnd for a specific
+// service. Use this when each merchant runs their own lnd node, so
+// payments for their API land directly in their wallet and the gateway
+// operator never takes custody.
+//
+// When unset (nil on a Service), the service uses the global
+// authenticator.lndhost, which is the legacy single-operator-multi-
+// services behavior.
+//
+// The macaroon at MacPath should be the minimum-privilege one baked
+// for this gateway — typically `invoices:read invoices:write info:read`
+// (see docs/admin-api.md "Merchant onboarding" section). The gateway
+// never needs payment-sending, channel-management, or wallet keys.
+type PaymentBackend struct {
+	// LndHost is the host:port of the merchant's lnd gRPC endpoint.
+	LndHost string `long:"lndhost" description:"Merchant lnd gRPC host:port"`
+
+	// TLSPath is the path to the merchant's lnd tls.cert. The gateway
+	// reads this file at startup; rotate cert → restart gateway.
+	TLSPath string `long:"tlspath" description:"Path to the merchant lnd TLS cert"`
+
+	// MacPath is the absolute path to the merchant-supplied macaroon
+	// file. The macaroon should grant invoices:read invoices:write
+	// info:read only.
+	MacPath string `long:"macpath" description:"Path to the merchant-supplied macaroon (minimum: invoices:read, invoices:write, info:read)"`
 }
 
 // Service generically specifies configuration data for backend services to the
@@ -133,6 +179,14 @@ type Service struct {
 	// Rewrite defines what should be rewritten in the client request.
 	Rewrite RewriteConfig `long:"rewrite" description:"Values to rewrite in the client request"`
 
+	// Payment optionally overrides the global authenticator lnd for
+	// this service. When nil, the service uses the single global lnd
+	// (backwards-compatible single-operator mode). When set, invoices
+	// for this service are issued against the merchant's own lnd —
+	// payments land directly in the merchant's wallet, never the
+	// gateway's.
+	Payment *PaymentBackend `long:"payment" description:"Optional per-service lnd override; the merchant's own lnd node" yaml:"payment"`
+
 	// compiledHostRegexp is the compiled host regex.
 	compiledHostRegexp *regexp.Regexp
 
@@ -218,9 +272,11 @@ func (s *Service) SkipInvoiceCreation(r *http.Request) bool {
 	return false
 }
 
-// prepareServices prepares the backend service configurations to be used by the
-// proxy.
-func prepareServices(services []*Service) error {
+// prepareServices prepares the backend service configurations to be used by
+// the proxy. `chain` is the underlying chain reported by lnd (e.g. "bitcoin",
+// "sui") and is used to pick a sensible default for services that omit
+// `price`. Empty chain falls back to the bitcoin default.
+func prepareServices(services []*Service, chain string) error {
 	for _, service := range services {
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
@@ -387,14 +443,16 @@ func prepareServices(services []*Service) error {
 		}
 
 		// Check that the price for the service is not negative and not
-		// more than the maximum amount allowed by lnd. If no price, or
-		// a price of zero satoshis, is set the then default price of 1
-		// satoshi is to be used.
+		// more than the maximum amount allowed by lnd. If no price (or
+		// a price of zero) is set then a chain-appropriate default is
+		// used: 1 sat on bitcoin, 10_000_000 MIST (0.01 SUI) on sui.
 		switch {
 		case service.Price == 0:
-			log.Debugf("Using default L402 price of %v satoshis for "+
-				"service %s.", defaultServicePrice, service.Name)
-			service.Price = defaultServicePrice
+			defaultPrice := defaultPriceForChain(chain)
+			log.Debugf("Using default L402 price of %d (chain=%q) "+
+				"for service %s.", defaultPrice, chain,
+				service.Name)
+			service.Price = defaultPrice
 		case service.Price < 0:
 			return fmt.Errorf("negative price set for "+
 				"service %s", service.Name)

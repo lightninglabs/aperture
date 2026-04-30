@@ -1,0 +1,111 @@
+# Local HA prototype for prism. Three replicas behind nginx, sharing
+# state via Postgres + a basedir volume. Run with:
+#
+#   cd deploy/ha-prototype
+#   ./gen-tls.sh                 # generate nginx self-signed cert
+#   docker compose up --build
+#
+# Verify:
+#   curl -sk https://localhost:8443/api/admin/info \
+#     -H "Grpc-Metadata-Macaroon: $(xxd -ps -c 99999 prism-state/admin.macaroon)"
+#   docker compose logs nginx | grep upstream_addr   # round-robin proof
+#
+# Prerequisites on the host:
+#   - alice's lnd running on :10009
+#   - tls.cert + macaroon at /tmp/lnd-sui-test/alice/...
+#   - (optional) demo backend on :9998 (scripts/serve_demo_backend.sh)
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: prism
+      POSTGRES_PASSWORD: prism
+      POSTGRES_DB: prism
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prism -d prism"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # ------- prism-1 boots first to seed admin macaroon + DB schema -----
+  prism-1:
+    build:
+      context: ../..
+      dockerfile: deploy/ha-prototype/Dockerfile.prism
+    image: loka-prism-l402:ha
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - PRISM_REPLICA_ID=1
+    volumes:
+      - prism-state:/srv/prism
+      - ./prism.yaml:/etc/prism/prism.yaml:ro
+      - /tmp/lnd-sui-test/alice/tls.cert:/srv/lnd/tls.cert:ro
+      - /tmp/lnd-sui-test/alice/data/chain/sui/devnet:/srv/lnd/macaroons:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # `/` serves the dashboard index without auth, which is fine for a
+    # liveness probe — it only requires that prism finished startup
+    # and the embedded dashboard is being served.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://localhost:8080/ || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 10s
+
+  # prism-2 / prism-3 wait until prism-1 is healthy so the DB
+  # migration + admin macaroon are already done — avoids any boot race.
+  prism-2:
+    image: loka-prism-l402:ha
+    depends_on:
+      prism-1:
+        condition: service_healthy
+    environment:
+      - PRISM_REPLICA_ID=2
+    volumes:
+      - prism-state:/srv/prism
+      - ./prism.yaml:/etc/prism/prism.yaml:ro
+      - /tmp/lnd-sui-test/alice/tls.cert:/srv/lnd/tls.cert:ro
+      - /tmp/lnd-sui-test/alice/data/chain/sui/devnet:/srv/lnd/macaroons:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  prism-3:
+    image: loka-prism-l402:ha
+    depends_on:
+      prism-1:
+        condition: service_healthy
+    environment:
+      - PRISM_REPLICA_ID=3
+    volumes:
+      - prism-state:/srv/prism
+      - ./prism.yaml:/etc/prism/prism.yaml:ro
+      - /tmp/lnd-sui-test/alice/tls.cert:/srv/lnd/tls.cert:ro
+      - /tmp/lnd-sui-test/alice/data/chain/sui/devnet:/srv/lnd/macaroons:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./tls.crt:/etc/nginx/tls.crt:ro
+      - ./tls.key:/etc/nginx/tls.key:ro
+    depends_on:
+      prism-1:
+        condition: service_healthy
+      prism-2:
+        condition: service_started
+      prism-3:
+        condition: service_started
+
+volumes:
+  pgdata:
+  prism-state:

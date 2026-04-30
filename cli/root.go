@@ -1,4 +1,4 @@
-// Package cli provides the command-line interface for aperturecli.
+// Package cli provides the command-line interface for prismcli.
 package cli
 
 import (
@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultHost     = "localhost:8081"
-	defaultMacaroon = "~/.aperture/admin.macaroon"
+	defaultMacaroon = "~/.prism/admin.macaroon"
 )
 
 // flags holds the CLI flags.
@@ -41,14 +41,14 @@ var flags struct {
 	timeout time.Duration
 }
 
-// NewRootCmd creates the root aperturecli command with all subcommands
+// NewRootCmd creates the root prismcli command with all subcommands
 // registered.
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "aperturecli",
-		Short: "CLI for the Aperture admin API",
-		Long: `aperturecli is a command-line interface and MCP server for
-managing an Aperture L402 reverse proxy. It connects to the
+		Use:   "prismcli",
+		Short: "CLI for the Loka Prism L402 admin API",
+		Long: `prismcli is a command-line interface and MCP server for
+managing a Loka Prism L402 reverse proxy. It connects to the
 admin gRPC API to manage services, view transactions, and
 control the system.
 
@@ -127,9 +127,9 @@ var Version = "dev"
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print aperturecli version",
+		Short: "Print prismcli version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("aperturecli version %s\n", Version)
+			fmt.Printf("prismcli version %s\n", Version)
 		},
 	}
 }

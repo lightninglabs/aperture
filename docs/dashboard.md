@@ -1,6 +1,6 @@
 # Dashboard
 
-Aperture includes an embedded web dashboard for monitoring L402 payment
+Prism includes an embedded web dashboard for monitoring L402 payment
 activity, managing proxy services, and viewing transaction history. The
 dashboard is a Next.js static export compiled into the Go binary at build
 time.
@@ -15,7 +15,7 @@ make build-withdashboard
 
 # Or step by step:
 cd dashboard && npm ci && npm run build   # produces dashboard/out/
-go build -tags=dashboard ./cmd/aperture   # embeds dashboard/out/ via go:embed
+go build -tags=dashboard ./cmd/prism      # embeds dashboard/out/ via go:embed
 ```
 
 The default `make build` produces a binary **without** the dashboard. This
@@ -24,7 +24,7 @@ means the standard build works without Node.js or npm installed.
 ## Accessing
 
 When the admin API is enabled (`admin.enabled: true`), the dashboard is served
-at the root path of the aperture listen address:
+at the root path of the prism listen address:
 
 ```
 http://localhost:8081/
@@ -160,7 +160,7 @@ npm ci
 npm run dev    # Start Next.js dev server on :3000
 ```
 
-The dev server expects the aperture admin API to be running at
+The dev server expects the prism admin API to be running at
 `localhost:8081`. Edit `dashboard/next.config.ts` to adjust the proxy target
 if needed.
 

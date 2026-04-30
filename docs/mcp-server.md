@@ -1,13 +1,13 @@
 # MCP Server
 
-`aperturecli` includes an embedded MCP (Model Context Protocol) server that
+`prismcli` includes an embedded MCP (Model Context Protocol) server that
 exposes all admin API operations as typed tools over stdio JSON-RPC. This
 enables direct integration with AI agent frameworks like Claude Code.
 
 ## Starting the Server
 
 ```bash
-aperturecli --insecure mcp serve
+prismcli --insecure mcp serve
 ```
 
 The server uses the same connection flags as the CLI (`--host`, `--macaroon`,
@@ -22,8 +22,8 @@ project-level):
 ```json
 {
   "mcpServers": {
-    "aperture": {
-      "command": "aperturecli",
+    "prism": {
+      "command": "prismcli",
       "args": ["--insecure", "mcp", "serve"]
     }
   }
@@ -35,10 +35,10 @@ For production with TLS:
 ```json
 {
   "mcpServers": {
-    "aperture": {
-      "command": "aperturecli",
+    "prism": {
+      "command": "prismcli",
       "args": [
-        "--host", "aperture.example.com:8081",
+        "--host", "prism.example.com:8081",
         "--macaroon", "/path/to/admin.macaroon",
         "--tls-cert", "/path/to/tls.cert",
         "mcp", "serve"
@@ -84,7 +84,7 @@ like dynamic pricing changes.
 
 ## Example Agent Interaction
 
-An agent can manage Aperture services programmatically:
+An agent can manage Prism services programmatically:
 
 ```
 Agent: "List all services"

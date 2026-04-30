@@ -1,9 +1,9 @@
-# aperturecli
+# prismcli
 
-`aperturecli` is a standalone command-line interface for the Aperture admin
-gRPC API. It provides full CRUD management of backend services, transaction
-queries, token management, revenue statistics, and an embedded MCP server for
-AI agent integration.
+`prismcli` is a standalone command-line interface for the Loka Prism L402
+admin gRPC API. It provides full CRUD management of backend services,
+transaction queries, token management, revenue statistics, and an embedded
+MCP server for AI agent integration.
 
 ## Installation
 
@@ -12,20 +12,20 @@ AI agent integration.
 make install
 
 # Or directly:
-go install github.com/lightninglabs/aperture/cmd/aperturecli@latest
+go install github.com/lightninglabs/aperture/cmd/prismcli@latest
 ```
 
 ## Quick Start
 
 ```bash
 # Check server health (insecure mode for local dev):
-aperturecli --insecure health
+prismcli --insecure health
 
 # List all services:
-aperturecli --insecure services list
+prismcli --insecure services list
 
 # Create a new service with pricing:
-aperturecli --insecure services create \
+prismcli --insecure services create \
   --name myapi \
   --address 127.0.0.1:8080 \
   --protocol http \
@@ -33,17 +33,17 @@ aperturecli --insecure services create \
   --auth on
 
 # Dynamically change pricing:
-aperturecli --insecure services update --name myapi --price 500
+prismcli --insecure services update --name myapi --price 500
 
 # Preview a change without executing:
-aperturecli --insecure --dry-run services delete --name myapi
+prismcli --insecure --dry-run services delete --name myapi
 ```
 
 ## Global Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--host` | `localhost:8081` | Aperture admin gRPC host:port |
+| `--host` | `localhost:8081` | Prism admin gRPC host:port |
 | `--macaroon` | `~/.aperture/admin.macaroon` | Path to admin macaroon file |
 | `--tls-cert` | | Path to TLS certificate for server verification |
 | `--insecure` | `false` | Skip TLS (plaintext gRPC) |
@@ -54,7 +54,7 @@ aperturecli --insecure --dry-run services delete --name myapi
 
 ## Output Modes
 
-`aperturecli` is agent-friendly by default:
+`prismcli` is agent-friendly by default:
 
 - **When stdout is a TTY** (interactive terminal): human-readable tables.
 - **When stdout is piped** (agent/script mode): JSON output.
@@ -99,10 +99,10 @@ explicitly provided are changed, enabling targeted updates:
 
 ```bash
 # Change only the price:
-aperturecli services update --name myapi --price 500
+prismcli services update --name myapi --price 500
 
 # Change address and protocol:
-aperturecli services update --name myapi --address 10.0.0.5:8080 --protocol https
+prismcli services update --name myapi --address 10.0.0.5:8080 --protocol https
 ```
 
 ### `services delete`
@@ -112,7 +112,7 @@ Delete a backend service by name.
 Query L402 transactions with optional filters:
 
 ```bash
-aperturecli transactions list \
+prismcli transactions list \
   --service myapi \
   --state settled \
   --from 2026-01-01T00:00:00Z \
@@ -124,13 +124,13 @@ aperturecli transactions list \
 List issued L402 tokens with pagination (`--limit`, `--offset`).
 
 ### `tokens revoke`
-Revoke a token by ID: `aperturecli tokens revoke --token-id <id>`.
+Revoke a token by ID: `prismcli tokens revoke --token-id <id>`.
 
 ### `stats`
 Revenue statistics with optional date range and per-service breakdown:
 
 ```bash
-aperturecli stats --from 2026-01-01T00:00:00Z --to 2026-03-25T00:00:00Z
+prismcli stats --from 2026-01-01T00:00:00Z --to 2026-03-25T00:00:00Z
 ```
 
 ### `schema`
@@ -138,13 +138,13 @@ Machine-readable CLI introspection for agent discovery:
 
 ```bash
 # List top-level commands:
-aperturecli schema
+prismcli schema
 
 # Full schema tree:
-aperturecli schema --all
+prismcli schema --all
 
 # Schema for a specific command:
-aperturecli schema services
+prismcli schema services
 ```
 
 ### `version`
@@ -156,7 +156,7 @@ All mutating commands support `--dry-run`, which serializes the gRPC request
 as JSON without calling the server:
 
 ```bash
-$ aperturecli --dry-run services create --name test --address 127.0.0.1:8080 --price 100
+$ prismcli --dry-run services create --name test --address 127.0.0.1:8080 --price 100
 {
   "dry_run": true,
   "rpc": "CreateService",

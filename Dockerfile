@@ -13,8 +13,8 @@ ARG checkout="master"
 RUN apk add --no-cache --update alpine-sdk \
     git \
     make \
-    && git clone https://github.com/lightninglabs/aperture /go/src/github.com/lightninglabs/aperture \
-    && cd /go/src/github.com/lightninglabs/aperture \
+    && git clone https://github.com/loka-network/loka-prism-l402 /go/src/github.com/loka-network/loka-prism-l402 \
+    && cd /go/src/github.com/loka-network/loka-prism-l402 \
     && git checkout $checkout \
     && make install
 
