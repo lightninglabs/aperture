@@ -121,6 +121,70 @@ func TestDeleteService(t *testing.T) {
 	require.Equal(t, "l402+mpp", svcs[0].AuthScheme)
 }
 
+func TestUpsertServiceTimeout(t *testing.T) {
+	db := NewTestDB(t)
+	store := newServicesStoreWithDB(db.BaseDB)
+
+	ctxt, cancel := context.WithTimeout(
+		context.Background(), defaultTestTimeout,
+	)
+	defer cancel()
+
+	// Insert a service with a non-zero timeout.
+	err := store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-timeout",
+		Address:    "localhost:8080",
+		Protocol:   "http",
+		HostRegexp: ".*",
+		PathRegexp: "/api/.*",
+		AuthScheme: "l402",
+		Price:      100,
+		Timeout:    60,
+	})
+	require.NoError(t, err)
+
+	svcs, err := store.ListServices(ctxt)
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	require.Equal(t, int64(60), svcs[0].Timeout)
+
+	// Update to a different timeout value.
+	err = store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-timeout",
+		Address:    "localhost:8080",
+		Protocol:   "http",
+		HostRegexp: ".*",
+		PathRegexp: "/api/.*",
+		AuthScheme: "l402",
+		Price:      100,
+		Timeout:    120,
+	})
+	require.NoError(t, err)
+
+	svcs, err = store.ListServices(ctxt)
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	require.Equal(t, int64(120), svcs[0].Timeout)
+
+	// Reset to zero (no expiry).
+	err = store.UpsertService(ctxt, ServiceParams{
+		Name:       "svc-timeout",
+		Address:    "localhost:8080",
+		Protocol:   "http",
+		HostRegexp: ".*",
+		PathRegexp: "/api/.*",
+		AuthScheme: "l402",
+		Price:      100,
+		Timeout:    0,
+	})
+	require.NoError(t, err)
+
+	svcs, err = store.ListServices(ctxt)
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	require.Equal(t, int64(0), svcs[0].Timeout)
+}
+
 func TestListFilteredTransactions(t *testing.T) {
 	db := NewTestDB(t)
 	store := newL402TransactionsStoreWithDB(db.BaseDB)
