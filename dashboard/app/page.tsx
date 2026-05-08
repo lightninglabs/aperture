@@ -448,7 +448,7 @@ export default function DashboardPage() {
                         >
                           <Price>{formatAmount(svc.price, chain).value} {unitLabel(chain)}</Price>
                           {rev > 0 && (
-                            <Earned>{rev.toLocaleString()} earned</Earned>
+                            <Earned>{formatAmount(rev, chain).value} {unitLabel(chain)} earned</Earned>
                           )}
                           <Chevron>&rsaquo;</Chevron>
                         </div>
