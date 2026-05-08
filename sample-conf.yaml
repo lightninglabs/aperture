@@ -434,10 +434,14 @@ hashmail:
   staletimeout: -1s # Example: 5m for 5 minutes, or -1s to disable
 
 # Enable the prometheus metrics exporter so that a prometheus server can scrape
-# the metrics.
+# the metrics. NOTE: do not use port 9000 here — Sui localnet's fullnode JSON-RPC
+# binds the same port by default. Because this exporter shares Go's
+# DefaultServeMux, leaving it on a port reachable by lnd will silently shadow
+# Sui's RPC and lnd will get back the pprof index page (HTML), causing payments
+# to fail with "JSON decode error: invalid character '<'" / FAILURE_REASON_ERROR.
 prometheus:
   enabled: true
-  listenaddr: "localhost:9000"
+  listenaddr: "localhost:9990"
 
 # Console and file logger settings.
 logging:
