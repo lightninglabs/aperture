@@ -28,8 +28,11 @@ func TestMacaroonInterceptor(t *testing.T) {
 	macHex := hex.EncodeToString(macBytes)
 
 	interceptor := MacaroonInterceptor(rootKey)
+	// CreateService is admin-gated (ListServices is intentionally NOT — see
+	// unauthenticatedMethods in auth.go), so it's the right method to drive
+	// the rejection paths below.
 	authedInfo := &grpc.UnaryServerInfo{
-		FullMethod: "/adminrpc.Admin/ListServices",
+		FullMethod: "/adminrpc.Admin/CreateService",
 	}
 
 	handler := func(ctx context.Context, req interface{}) (
@@ -78,15 +81,20 @@ func TestMacaroonInterceptor(t *testing.T) {
 	s, _ = status.FromError(err)
 	require.Equal(t, codes.Unauthenticated, s.Code())
 
-	// Test that health endpoint bypasses authentication.
-	healthInfo := &grpc.UnaryServerInfo{
-		FullMethod: "/adminrpc.Admin/GetHealth",
+	// Test that whitelisted methods bypass authentication, even with no
+	// metadata at all. Two cases today: GetHealth (LB probes) and
+	// ListServices (public catalog for end-user clients).
+	for _, method := range []string{
+		"/adminrpc.Admin/GetHealth",
+		"/adminrpc.Admin/ListServices",
+	} {
+		info := &grpc.UnaryServerInfo{FullMethod: method}
+		resp, err = interceptor(
+			context.Background(), nil, info, handler,
+		)
+		require.NoError(t, err, "method %s should bypass auth", method)
+		require.Equal(t, "ok", resp, "method %s", method)
 	}
-	resp, err = interceptor(
-		context.Background(), nil, healthInfo, handler,
-	)
-	require.NoError(t, err)
-	require.Equal(t, "ok", resp)
 }
 
 func TestGenerateAndWriteReadMacaroon(t *testing.T) {
