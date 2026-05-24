@@ -540,7 +540,7 @@ func (p *Proxy) director(req *http.Request) {
 		// Now overwrite header fields of the client request
 		// with the fields from the configuration file.
 		for name, value := range target.Headers {
-			req.Header.Add(name, value)
+			req.Header.Set(name, value)
 		}
 	}
 }
