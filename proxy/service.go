@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -109,6 +110,14 @@ type Service struct {
 	// the pricer if a gPRC server is to be used for price data.
 	DynamicPrice pricer.Config `long:"dynamicprice" description:"Configuration for connecting to the gRPC server to use for the pricer backend"`
 
+	// Formula is an optional formula pricing model surfaced through L402
+	// discovery. When Formula.Enabled is set, the discovery manifest
+	// advertises this service with a "formula" pricing model and the quote
+	// endpoint prices a bundle from the client's chosen constraint values. It
+	// does not affect the reactive 402 price, which continues to use Price or
+	// DynamicPrice.
+	Formula pricer.FormulaConfig `long:"formula" description:"Optional formula pricing model surfaced through L402 discovery"`
+
 	// AuthWhitelistPaths is an optional list of regular expressions that
 	// are matched against the path of the URL of a request. If the request
 	// URL matches any of those regular expressions, the call is treated as
@@ -174,6 +183,21 @@ func (s *Service) prepareRewrite() error {
 	s.Rewrite.Prefix = u.Path
 
 	return nil
+}
+
+// ResourcePrice returns the price in satoshis the service's configured pricer
+// assigns to the given request. It exposes the per-service pricer (static or
+// dynamic gRPC) to callers outside the proxy package, such as the L402
+// discovery quote endpoint. If no pricer has been initialized, the static Price
+// is returned.
+func (s *Service) ResourcePrice(ctx context.Context, r *http.Request) (int64,
+	error) {
+
+	if s.pricer == nil {
+		return s.Price, nil
+	}
+
+	return s.pricer.GetPrice(ctx, r)
 }
 
 // ResourceName returns the string to be used to identify which resource a
