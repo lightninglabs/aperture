@@ -292,6 +292,23 @@ services:
       # set to true then this path must be set.
       tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
+    # Optional formula pricing surfaced through the L402 discovery layer. When
+    # set, the discovery manifest (/.well-known/l402.json) advertises this
+    # service with a "formula" pricing model, and the quote endpoint
+    # (/l402/quote) prices a bundle from the client's chosen constraint values
+    # as basemsat + sum(pricemsatperunit * ceil(value / unit)). This does not
+    # affect the reactive 402 price, which still uses 'price' or 'dynamicprice'.
+    formula:
+      # Whether this service advertises formula pricing through discovery.
+      enabled: true
+      # Base price in millisatoshis before any per-unit charges.
+      basemsat: 1000
+      # Per-unit charges keyed by the constraint they price.
+      components:
+        - constraint: "add_monthly_volume"
+          pricemsatperunit: 10
+          unit: 1
+
   - name: "service2"
     hostregexp: "service2.com:8083"
     pathregexp: '^/.*$'
