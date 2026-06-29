@@ -16,6 +16,7 @@ type Querier interface {
 	CountL402TransactionsByDateRange(ctx context.Context, arg CountL402TransactionsByDateRangeParams) (int64, error)
 	CountL402TransactionsByService(ctx context.Context, serviceName string) (int64, error)
 	CountL402TransactionsFiltered(ctx context.Context, arg CountL402TransactionsFilteredParams) (int64, error)
+	CountMPPSessions(ctx context.Context, filterStatus interface{}) (int64, error)
 	DeleteL402TransactionByTokenID(ctx context.Context, tokenID []byte) (int64, error)
 	DeleteOnionPrivateKey(ctx context.Context) error
 	DeleteSecretByHash(ctx context.Context, hash []byte) (int64, error)
@@ -27,6 +28,10 @@ type Querier interface {
 	GetL402TotalRevenueByDateRange(ctx context.Context, arg GetL402TotalRevenueByDateRangeParams) (int64, error)
 	GetL402TransactionByIdentifierHash(ctx context.Context, identifierHash []byte) (L402Transaction, error)
 	GetL402TransactionsByPaymentHash(ctx context.Context, paymentHash []byte) ([]L402Transaction, error)
+	// Uses only portable SQL (no COUNT FILTER) so the same query runs against
+	// both postgres and sqlite. Casts to BIGINT to give sqlc a consistent
+	// int64 type on both drivers.
+	GetMPPSessionAggregateStats(ctx context.Context) (GetMPPSessionAggregateStatsRow, error)
 	GetMPPSessionByID(ctx context.Context, sessionID string) (MppSession, error)
 	GetSecretByHash(ctx context.Context, hash []byte) ([]byte, error)
 	GetSession(ctx context.Context, passphraseEntropy []byte) (LncSession, error)
@@ -39,6 +44,7 @@ type Querier interface {
 	ListL402TransactionsByService(ctx context.Context, arg ListL402TransactionsByServiceParams) ([]L402Transaction, error)
 	ListL402TransactionsByState(ctx context.Context, arg ListL402TransactionsByStateParams) ([]L402Transaction, error)
 	ListL402TransactionsFiltered(ctx context.Context, arg ListL402TransactionsFilteredParams) ([]L402Transaction, error)
+	ListMPPSessions(ctx context.Context, arg ListMPPSessionsParams) ([]MppSession, error)
 	ListServices(ctx context.Context) ([]Service, error)
 	SelectOnionPrivateKey(ctx context.Context) ([]byte, error)
 	SetExpiry(ctx context.Context, arg SetExpiryParams) error

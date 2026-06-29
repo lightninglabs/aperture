@@ -24,7 +24,7 @@ func (q *Queries) DeleteService(ctx context.Context, name string) (int64, error)
 }
 
 const listServices = `-- name: ListServices :many
-SELECT id, name, address, protocol, host_regexp, path_regexp, price, auth, created_at, updated_at, auth_scheme
+SELECT id, name, address, protocol, host_regexp, path_regexp, price, auth, created_at, updated_at, auth_scheme, payment_lndhost, payment_tlspath, payment_macpath
 FROM services
 ORDER BY name
 `
@@ -50,6 +50,9 @@ func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.AuthScheme,
+			&i.PaymentLndhost,
+			&i.PaymentTlspath,
+			&i.PaymentMacpath,
 		); err != nil {
 			return nil, err
 		}
@@ -67,9 +70,10 @@ func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {
 const upsertService = `-- name: UpsertService :exec
 INSERT INTO services (
     name, address, protocol, host_regexp, path_regexp, price, auth,
-    auth_scheme, created_at, updated_at
+    auth_scheme, payment_lndhost, payment_tlspath, payment_macpath,
+    created_at, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 )
 ON CONFLICT(name) DO UPDATE SET
     address = excluded.address,
@@ -79,20 +83,26 @@ ON CONFLICT(name) DO UPDATE SET
     price = excluded.price,
     auth = excluded.auth,
     auth_scheme = excluded.auth_scheme,
+    payment_lndhost = excluded.payment_lndhost,
+    payment_tlspath = excluded.payment_tlspath,
+    payment_macpath = excluded.payment_macpath,
     updated_at = excluded.updated_at
 `
 
 type UpsertServiceParams struct {
-	Name       string
-	Address    string
-	Protocol   string
-	HostRegexp string
-	PathRegexp string
-	Price      int64
-	Auth       string
-	AuthScheme string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	Name           string
+	Address        string
+	Protocol       string
+	HostRegexp     string
+	PathRegexp     string
+	Price          int64
+	Auth           string
+	AuthScheme     string
+	PaymentLndhost string
+	PaymentTlspath string
+	PaymentMacpath string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) error {
@@ -105,6 +115,9 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) er
 		arg.Price,
 		arg.Auth,
 		arg.AuthScheme,
+		arg.PaymentLndhost,
+		arg.PaymentTlspath,
+		arg.PaymentMacpath,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)

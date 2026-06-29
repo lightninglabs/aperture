@@ -26,6 +26,16 @@ func WithSettlementCallback(fn func(hash lntypes.Hash)) LndChallengerOption {
 	}
 }
 
+// WithExpirationCallback sets a callback that will be invoked when an invoice
+// is observed in a terminal non-settled state — either explicitly canceled or
+// passed its expiry without being paid. Used to clean up pending rows from
+// the transaction store so they don't accumulate forever.
+func WithExpirationCallback(fn func(hash lntypes.Hash)) LndChallengerOption {
+	return func(l *LndChallenger) {
+		l.onExpired = fn
+	}
+}
+
 // LndChallenger is a challenger that uses an lnd backend to create new L402
 // payment challenges.
 type LndChallenger struct {
@@ -50,6 +60,21 @@ type LndChallenger struct {
 	// settlementQueue is an unbounded concurrent queue used to serialize
 	// settlement callbacks without blocking the invoice stream reader.
 	settlementQueue *queue.ConcurrentQueue
+
+	// onExpired is an optional callback that is invoked when an invoice
+	// reaches a terminal non-settled state (canceled or expired).
+	onExpired func(hash lntypes.Hash)
+
+	// expirationQueue is an unbounded concurrent queue used to serialize
+	// expiration callbacks without blocking the invoice stream reader.
+	expirationQueue *queue.ConcurrentQueue
+
+	// seenExpired tracks hashes that have already been delivered to
+	// onExpired, so we don't re-deliver for the same invoice if lnd
+	// resends the same state (startup sweep + live stream overlap, or
+	// multiple CANCELED updates).
+	seenExpired   map[lntypes.Hash]struct{}
+	seenExpiredMu sync.Mutex
 
 	errChan chan<- error
 
@@ -104,10 +129,20 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		challenger.settlementQueue.Start()
 	}
 
+	// Same for expiration, so onExpired doesn't block the stream reader.
+	if challenger.onExpired != nil {
+		challenger.expirationQueue = queue.NewConcurrentQueue(100)
+		challenger.expirationQueue.Start()
+		challenger.seenExpired = make(map[lntypes.Hash]struct{})
+	}
+
 	err := challenger.Start()
 	if err != nil {
 		if challenger.settlementQueue != nil {
 			challenger.settlementQueue.Stop()
+		}
+		if challenger.expirationQueue != nil {
+			challenger.expirationQueue.Stop()
 		}
 
 		return nil, fmt.Errorf("unable to start challenger: %w", err)
@@ -121,9 +156,9 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 // invoices on startup and a subscription to all subsequent invoice updates
 // is created.
 func (l *LndChallenger) Start() error {
-	// If we aren't doing strict verification and have no settlement
-	// callback, we can skip invoice tracking entirely.
-	if !l.strictVerify && l.onSettled == nil {
+	// If we aren't doing strict verification and have no settlement or
+	// expiration callback, we can skip invoice tracking entirely.
+	if !l.strictVerify && l.onSettled == nil && l.onExpired == nil {
 		log.Infof("Skipping invoice state tracking strict_verify=%v",
 			l.strictVerify)
 		return nil
@@ -136,14 +171,15 @@ func (l *LndChallenger) Start() error {
 	addIndex := uint64(0)
 	settleIndex := uint64(0)
 	var startupSettled []lntypes.Hash
+	var startupExpired []lntypes.Hash
 
 	log.Debugf("Starting LND challenger")
 
-	// When strict verification or settlement reconciliation is enabled,
-	// paginate through all existing invoices on startup. This lets us
-	// seed the state cache and reconcile any invoices that were settled
-	// while we were offline.
-	if l.strictVerify || l.onSettled != nil {
+	// When strict verification or settlement/expiration reconciliation is
+	// enabled, paginate through all existing invoices on startup. This lets
+	// us seed the state cache and reconcile any invoices whose state
+	// changed while we were offline.
+	if l.strictVerify || l.onSettled != nil || l.onExpired != nil {
 		ctx := l.clientCtx()
 		indexOffset := uint64(0)
 		for {
@@ -188,6 +224,19 @@ func (l *LndChallenger) Start() error {
 
 					startupSettled = append(
 						startupSettled, hash,
+					)
+				}
+
+				// Collect canceled / expired-unpaid invoices
+				// so the caller can clean up stale pending
+				// transaction rows that were created for
+				// these challenges.
+				if l.onExpired != nil &&
+					invoice.State != lnrpc.Invoice_SETTLED &&
+					invoiceIrrelevant(invoice) {
+
+					startupExpired = append(
+						startupExpired, hash,
 					)
 				}
 
@@ -269,7 +318,127 @@ func (l *LndChallenger) Start() error {
 		}
 	}
 
+	// Symmetric worker for expirations.
+	if l.onExpired != nil {
+		l.wg.Add(1)
+		go func() {
+			defer l.wg.Done()
+			for {
+				select {
+				case item, ok := <-l.expirationQueue.ChanOut():
+					if !ok {
+						return
+					}
+					hash, valid := item.(lntypes.Hash)
+					if !valid {
+						continue
+					}
+					l.onExpired(hash)
+
+				case <-l.quit:
+					return
+				}
+			}
+		}()
+
+		for _, hash := range startupExpired {
+			l.markSeenExpired(hash)
+			l.expirationQueue.ChanIn() <- hash
+		}
+	}
+
 	return nil
+}
+
+// Reconcile pages through every invoice currently known to the
+// connected lnd and replays terminal-state callbacks for any in
+// SETTLED, CANCELED, or expired-unpaid states. Used both at startup
+// (via Start) to catch up after downtime and by a periodic background
+// ticker to defend against the live SubscribeInvoices stream missing
+// an event (e.g. transient lnd disconnect, message loss).
+//
+// Idempotency:
+//   - Expired callbacks are gated by markSeenExpired, so each hash is
+//     delivered at most once across all sweep + stream paths.
+//   - Settled callbacks are deduped at the storage layer (the SQL
+//     UPDATE is conditional on state='pending'), so duplicate enqueues
+//     are no-ops in the DB.
+//
+// Safe to call concurrently with the live subscription.
+func (l *LndChallenger) Reconcile() error {
+	if l.onSettled == nil && l.onExpired == nil {
+		return nil
+	}
+
+	ctx := l.clientCtx()
+	indexOffset := uint64(0)
+	settledCount := 0
+	expiredCount := 0
+
+	for {
+		invoiceResp, err := l.client.ListInvoices(
+			ctx, &lnrpc.ListInvoiceRequest{
+				IndexOffset:    indexOffset,
+				NumMaxInvoices: uint64(l.batchSize),
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("reconcile: list invoices: %w",
+				err)
+		}
+		if len(invoiceResp.Invoices) == 0 {
+			break
+		}
+
+		for _, invoice := range invoiceResp.Invoices {
+			if invoice.RHash == nil {
+				continue
+			}
+			hash, err := lntypes.MakeHash(invoice.RHash)
+			if err != nil {
+				continue
+			}
+
+			switch {
+			case invoice.State == lnrpc.Invoice_SETTLED &&
+				l.onSettled != nil:
+
+				l.settlementQueue.ChanIn() <- hash
+				settledCount++
+
+			case l.onExpired != nil &&
+				invoice.State != lnrpc.Invoice_SETTLED &&
+				invoiceIrrelevant(invoice) &&
+				l.markSeenExpired(hash):
+
+				l.expirationQueue.ChanIn() <- hash
+				expiredCount++
+			}
+		}
+
+		indexOffset = invoiceResp.LastIndexOffset
+	}
+
+	if settledCount > 0 || expiredCount > 0 {
+		log.Debugf("Reconcile: enqueued %d settled, %d expired",
+			settledCount, expiredCount)
+	}
+	return nil
+}
+
+// markSeenExpired records a hash in the dedupe set. Returns true if this
+// is the first time we've seen it, false if it was already marked.
+func (l *LndChallenger) markSeenExpired(hash lntypes.Hash) bool {
+	if l.seenExpired == nil {
+		return true
+	}
+	l.seenExpiredMu.Lock()
+	defer l.seenExpiredMu.Unlock()
+	if _, already := l.seenExpired[hash]; already {
+		return false
+	}
+	l.seenExpired[hash] = struct{}{}
+	return true
 }
 
 // readInvoiceStream reads the invoice update messages sent on the stream until
@@ -343,18 +512,19 @@ func (l *LndChallenger) readInvoiceStream(
 			return
 		}
 
+		irrelevant := invoiceIrrelevant(invoice)
 		l.invoicesMtx.Lock()
-		if invoiceIrrelevant(invoice) {
+		if irrelevant {
 			// Don't keep the state of canceled or expired invoices.
 			delete(l.invoiceStates, hash)
 		} else {
 			l.invoiceStates[hash] = invoice.State
 		}
 
-		// Determine if we need to enqueue a settlement callback
-		// before releasing the lock.
-		shouldEnqueue := invoice.State == lnrpc.Invoice_SETTLED &&
+		// Determine which callbacks to fire, while holding the lock.
+		shouldSettle := invoice.State == lnrpc.Invoice_SETTLED &&
 			l.onSettled != nil
+		shouldExpire := !shouldSettle && irrelevant && l.onExpired != nil
 
 		// Notify conditions that listen for invoice state updates,
 		// then release the lock before enqueuing to avoid blocking
@@ -362,12 +532,18 @@ func (l *LndChallenger) readInvoiceStream(
 		l.invoicesCond.Broadcast()
 		l.invoicesMtx.Unlock()
 
-		// Enqueue settlement outside the mutex. The
-		// ConcurrentQueue is unbounded, so this send will never
-		// block.
-		if shouldEnqueue {
+		// Enqueue outside the mutex. The ConcurrentQueue is
+		// unbounded, so these sends will never block.
+		if shouldSettle {
 			select {
 			case l.settlementQueue.ChanIn() <- hash:
+			case <-l.quit:
+				return
+			}
+		}
+		if shouldExpire && l.markSeenExpired(hash) {
+			select {
+			case l.expirationQueue.ChanIn() <- hash:
 			case <-l.quit:
 				return
 			}
@@ -383,10 +559,13 @@ func (l *LndChallenger) Stop() {
 	close(l.quit)
 	l.wg.Wait()
 
-	// Stop the settlement queue after all goroutines have exited so
-	// that any pending items are drained.
+	// Stop the settlement and expiration queues after all goroutines
+	// have exited so that any pending items are drained.
 	if l.settlementQueue != nil {
 		l.settlementQueue.Stop()
+	}
+	if l.expirationQueue != nil {
+		l.expirationQueue.Stop()
 	}
 }
 

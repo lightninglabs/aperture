@@ -9,13 +9,13 @@ import (
 )
 
 // CommandSchema is the machine-readable schema for a CLI command,
-// designed for agent introspection via aperturecli schema.
+// designed for agent introspection via prismcli schema.
 type CommandSchema struct {
 	// Name is the command name (e.g. "services").
 	Name string `json:"name"`
 
 	// FullPath is the fully qualified command path
-	// (e.g. "aperturecli services list").
+	// (e.g. "prismcli services list").
 	FullPath string `json:"full_path"`
 
 	// Description is the short description of the command.
@@ -90,9 +90,9 @@ func NewSchemaCmd() *cobra.Command {
 		Short: "Show machine-readable CLI schema",
 		Long: `Dump the CLI schema as JSON for agent introspection.
 
-  aperturecli schema              List all commands
-  aperturecli schema services     Show schema for the services command
-  aperturecli schema --all        Full schema tree`,
+  prismcli schema              List all commands
+  prismcli schema services     Show schema for the services command
+  prismcli schema --all        Full schema tree`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := cmd.Root()

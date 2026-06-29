@@ -7,6 +7,7 @@ import (
 
 	"github.com/lightninglabs/aperture/adminrpc"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -59,14 +60,19 @@ func newServicesListCmd() *cobra.Command {
 				os.Stdout, 0, 0, 2, ' ', 0,
 			)
 			fmt.Fprintln(
-				w, "NAME\tADDRESS\tPROTOCOL\tPRICE\tAUTH",
+				w, "NAME\tADDRESS\tPROTOCOL\tPRICE\t"+
+					"AUTH\tPAYMENT_LND",
 			)
 
 			for _, s := range resp.Services {
+				lnd := "-"
+				if s.Payment != nil && s.Payment.LndHost != "" {
+					lnd = s.Payment.LndHost
+				}
 				fmt.Fprintf(
-					w, "%s\t%s\t%s\t%d\t%s\n",
+					w, "%s\t%s\t%s\t%d\t%s\t%s\n",
 					s.Name, s.Address,
-					s.Protocol, s.Price, s.Auth,
+					s.Protocol, s.Price, s.Auth, lnd,
 				)
 			}
 
@@ -77,13 +83,16 @@ func newServicesListCmd() *cobra.Command {
 
 func newServicesCreateCmd() *cobra.Command {
 	var (
-		name       string
-		address    string
-		protocol   string
-		hostRegexp string
-		pathRegexp string
-		price      int64
-		auth       string
+		name           string
+		address        string
+		protocol       string
+		hostRegexp     string
+		pathRegexp     string
+		price          int64
+		auth           string
+		paymentLndhost string
+		paymentTLSPath string
+		paymentMacPath string
 	)
 
 	cmd := &cobra.Command{
@@ -99,6 +108,13 @@ func newServicesCreateCmd() *cobra.Command {
 				)
 			}
 
+			payment, err := buildPaymentBackend(
+				paymentLndhost, paymentTLSPath, paymentMacPath,
+			)
+			if err != nil {
+				return err
+			}
+
 			req := &adminrpc.CreateServiceRequest{
 				Name:       name,
 				Address:    address,
@@ -107,6 +123,7 @@ func newServicesCreateCmd() *cobra.Command {
 				PathRegexp: pathRegexp,
 				Price:      price,
 				Auth:       auth,
+				Payment:    payment,
 			}
 
 			if flags.dryRun {
@@ -168,19 +185,26 @@ func newServicesCreateCmd() *cobra.Command {
 		&auth, "auth", "on",
 		"Auth level: on, off, or freebie N",
 	)
+	addPaymentFlags(
+		f, &paymentLndhost, &paymentTLSPath, &paymentMacPath,
+	)
 
 	return cmd
 }
 
 func newServicesUpdateCmd() *cobra.Command {
 	var (
-		name       string
-		address    string
-		protocol   string
-		hostRegexp string
-		pathRegexp string
-		price      int64
-		auth       string
+		name           string
+		address        string
+		protocol       string
+		hostRegexp     string
+		pathRegexp     string
+		price          int64
+		auth           string
+		paymentLndhost string
+		paymentTLSPath string
+		paymentMacPath string
+		clearPayment   bool
 	)
 
 	cmd := &cobra.Command{
@@ -191,10 +215,10 @@ that are explicitly provided will be changed.
 
 Examples:
   # Change price only:
-  aperturecli services update --name myapi --price 500
+  prismcli services update --name myapi --price 500
 
   # Change address and protocol:
-  aperturecli services update --name myapi --address 10.0.0.5:8080 --protocol https`,
+  prismcli services update --name myapi --address 10.0.0.5:8080 --protocol https`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return ErrInvalidArgsf("--name is required")
@@ -223,6 +247,29 @@ Examples:
 			}
 			if cmd.Flags().Changed("auth") {
 				req.Auth = auth
+			}
+
+			paymentSet := cmd.Flags().Changed("payment-lndhost") ||
+				cmd.Flags().Changed("payment-tlspath") ||
+				cmd.Flags().Changed("payment-macpath")
+			if paymentSet && clearPayment {
+				return ErrInvalidArgsf(
+					"--payment-* and --clear-payment " +
+						"are mutually exclusive",
+				)
+			}
+			if paymentSet {
+				payment, err := buildPaymentBackend(
+					paymentLndhost, paymentTLSPath,
+					paymentMacPath,
+				)
+				if err != nil {
+					return err
+				}
+				req.Payment = payment
+			}
+			if clearPayment {
+				req.ClearPayment = true
 			}
 
 			if flags.dryRun {
@@ -281,6 +328,15 @@ Examples:
 	f.StringVar(
 		&auth, "auth", "",
 		"Auth level: on, off, or freebie N",
+	)
+	addPaymentFlags(
+		f, &paymentLndhost, &paymentTLSPath, &paymentMacPath,
+	)
+	f.BoolVar(
+		&clearPayment, "clear-payment", false,
+		"Remove any existing per-service lnd override (returns "+
+			"the service to the global default lnd). Mutually "+
+			"exclusive with --payment-*.",
 	)
 
 	return cmd
@@ -344,4 +400,57 @@ func newServicesDeleteCmd() *cobra.Command {
 	)
 
 	return cmd
+}
+
+// addPaymentFlags registers the --payment-lndhost, --payment-tlspath and
+// --payment-macpath flags on f, binding them to the passed-in string
+// pointers. Kept in one place so the create and update commands stay in
+// sync with each other and with the server-side validation rules.
+func addPaymentFlags(f *pflag.FlagSet, lndHost, tlsPath, macPath *string) {
+	f.StringVar(
+		lndHost, "payment-lndhost", "",
+		"Merchant lnd gRPC host:port (enables per-service lnd "+
+			"routing; requires --payment-tlspath and "+
+			"--payment-macpath)",
+	)
+	f.StringVar(
+		tlsPath, "payment-tlspath", "",
+		"Absolute path to the merchant lnd's tls.cert on the "+
+			"gateway host",
+	)
+	f.StringVar(
+		macPath, "payment-macpath", "",
+		"Absolute path to the merchant's minimum-privilege "+
+			"macaroon file (invoices:read invoices:write "+
+			"info:read)",
+	)
+}
+
+// buildPaymentBackend validates that the three --payment-* values are
+// either all empty (no per-service override, use the global lnd) or all
+// set (per-service override). Returns a PaymentBackend pointer on the
+// all-set path and nil on the all-empty path. Mirrors the server-side
+// check so the user gets a clear error before the gRPC round-trip.
+func buildPaymentBackend(lndHost, tlsPath, macPath string) (
+	*adminrpc.PaymentBackend, error) {
+
+	allEmpty := lndHost == "" && tlsPath == "" && macPath == ""
+	allSet := lndHost != "" && tlsPath != "" && macPath != ""
+
+	switch {
+	case allEmpty:
+		return nil, nil
+	case allSet:
+		return &adminrpc.PaymentBackend{
+			LndHost: lndHost,
+			TlsPath: tlsPath,
+			MacPath: macPath,
+		}, nil
+	default:
+		return nil, ErrInvalidArgsf(
+			"--payment-lndhost, --payment-tlspath and " +
+				"--payment-macpath must all be set together " +
+				"or all be omitted",
+		)
+	}
 }

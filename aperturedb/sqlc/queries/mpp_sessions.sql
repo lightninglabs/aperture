@@ -33,3 +33,34 @@ UPDATE mpp_sessions
 SET status = 'closed', updated_at = $1
 WHERE session_id = $2 AND status = 'open'
 RETURNING CAST(deposit_sats - spent_sats AS BIGINT);
+
+-- name: ListMPPSessions :many
+SELECT *
+FROM mpp_sessions
+WHERE (sqlc.arg(filter_status) = '' OR status = sqlc.arg(filter_status))
+ORDER BY created_at DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountMPPSessions :one
+SELECT count(*)
+FROM mpp_sessions
+WHERE (sqlc.arg(filter_status) = '' OR status = sqlc.arg(filter_status));
+
+-- name: GetMPPSessionAggregateStats :one
+-- Uses only portable SQL (no COUNT FILTER) so the same query runs against
+-- both postgres and sqlite. Casts to BIGINT to give sqlc a consistent
+-- int64 type on both drivers.
+SELECT
+    CAST(COUNT(*) AS BIGINT) AS total_sessions,
+    CAST(COALESCE(SUM(
+        CASE WHEN status = 'open' THEN 1 ELSE 0 END
+    ), 0) AS BIGINT) AS open_sessions,
+    CAST(COALESCE(SUM(
+        CASE WHEN status = 'closed' THEN 1 ELSE 0 END
+    ), 0) AS BIGINT) AS closed_sessions,
+    CAST(COALESCE(SUM(deposit_sats), 0) AS BIGINT) AS total_deposit_sats,
+    CAST(COALESCE(SUM(spent_sats), 0) AS BIGINT) AS total_spent_sats,
+    CAST(COALESCE(SUM(
+        CASE WHEN status = 'open' THEN deposit_sats - spent_sats ELSE 0 END
+    ), 0) AS BIGINT) AS open_balance_sats
+FROM mpp_sessions;

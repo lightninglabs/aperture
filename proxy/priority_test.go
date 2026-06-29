@@ -64,7 +64,7 @@ func TestCatchAllPriorityHijacksBackend(t *testing.T) {
 	// When the catch-all is a priority service, it intercepts everything
 	// including requests that should go to the backend.
 	bugProxy, err := proxy.New(
-		mockAuth, services, nil,
+		mockAuth, services, "", nil,
 		[]proxy.LocalService{prefixHandler, catchAll}, // priority
 	)
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestCatchAllPriorityHijacksBackend(t *testing.T) {
 	// When the catch-all is moved to localServices (checked after proxy
 	// backend matching), backend requests are correctly forwarded.
 	fixedProxy, err := proxy.New(
-		mockAuth, services, nil,
+		mockAuth, services, "", nil,
 		[]proxy.LocalService{prefixHandler}, // priority: only prefix
 		catchAll,                            // local: catch-all
 	)

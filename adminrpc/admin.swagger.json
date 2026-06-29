@@ -169,35 +169,81 @@
             "in": "body",
             "required": true,
             "schema": {
-              "type": "object",
-              "properties": {
-                "address": {
-                  "type": "string"
-                },
-                "protocol": {
-                  "type": "string"
-                },
-                "host_regexp": {
-                  "type": "string"
-                },
-                "path_regexp": {
-                  "type": "string"
-                },
-                "price": {
-                  "type": "string",
-                  "format": "int64"
-                },
-                "auth": {
-                  "type": "string"
-                },
-                "auth_scheme": {
-                  "$ref": "#/definitions/adminrpcAuthScheme",
-                  "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
-                }
-              }
+              "$ref": "#/definitions/AdminUpdateServiceBody"
             }
           }
         ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/sessions": {
+      "get": {
+        "summary": "ListSessions returns MPP prepaid sessions (open + closed). Amounts\nare in the chain's base unit — clients pair with GetInfo.chain to\ndecide display units.",
+        "operationId": "Admin_ListSessions",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcListSessionsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "status",
+            "description": "status filters by \"open\" or \"closed\". Empty returns all.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "description": "limit defaults to 50 when zero. Max is 1000.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "offset",
+            "description": "offset is 0-based.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/sessions/stats": {
+      "get": {
+        "summary": "GetSessionStats returns aggregate counters across all MPP sessions\n(count by status, total deposits/spent, open balance). Complements\nGetStats which only covers L402 charge-intent transactions.",
+        "operationId": "Admin_GetSessionStats",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcGetSessionStatsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
         "tags": [
           "Admin"
         ]
@@ -371,6 +417,42 @@
     }
   },
   "definitions": {
+    "AdminUpdateServiceBody": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "host_regexp": {
+          "type": "string"
+        },
+        "path_regexp": {
+          "type": "string"
+        },
+        "price": {
+          "type": "string",
+          "format": "int64"
+        },
+        "auth": {
+          "type": "string"
+        },
+        "auth_scheme": {
+          "$ref": "#/definitions/adminrpcAuthScheme",
+          "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
+        },
+        "payment": {
+          "$ref": "#/definitions/adminrpcPaymentBackend",
+          "description": "payment updates the per-service lnd override. When omitted (nil),\nthe existing payment config is preserved (not reset). To explicitly\nremove a payment override from a service, set clear_payment=true\ninstead. As with CreateService, changes take effect on restart."
+        },
+        "clear_payment": {
+          "type": "boolean",
+          "description": "clear_payment, when true, removes any existing per-service lnd\noverride from the service, returning it to the global single-lnd\nmode. Mutually exclusive with setting payment."
+        }
+      }
+    },
     "adminrpcAuthScheme": {
       "type": "string",
       "enum": [
@@ -409,6 +491,10 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) to use. Defaults to\nAUTH_SCHEME_L402 if unset."
+        },
+        "payment": {
+          "$ref": "#/definitions/adminrpcPaymentBackend",
+          "description": "payment optionally configures a per-service lnd override. See the\nService message for field semantics. Omit for legacy single-lnd\nmode. Setting this takes effect after the next prism restart —\nthe in-memory challenger router is built at startup."
         }
       }
     },
@@ -451,6 +537,42 @@
         "mpp_realm": {
           "type": "string",
           "description": "mpp_realm is the realm string used in MPP challenge headers."
+        },
+        "chain": {
+          "type": "string",
+          "description": "chain is the underlying blockchain the connected lnd is running on,\nas reported by lnd's GetInfo.chains[0].chain (e.g. \"bitcoin\", \"sui\").\nEmpty if lnd could not be queried at startup."
+        }
+      }
+    },
+    "adminrpcGetSessionStatsResponse": {
+      "type": "object",
+      "properties": {
+        "total_sessions": {
+          "type": "string",
+          "format": "int64"
+        },
+        "open_sessions": {
+          "type": "string",
+          "format": "int64"
+        },
+        "closed_sessions": {
+          "type": "string",
+          "format": "int64"
+        },
+        "total_deposit_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "total_deposit_sats is the lifetime sum of deposits across all\nsessions (open + closed)."
+        },
+        "total_spent_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "total_spent_sats is the actual revenue — satoshis consumed by\nbearer requests."
+        },
+        "open_balance_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "open_balance_sats is the sum of deposit_sats - spent_sats over\nsessions still in the open state (prepaid balance owed to clients)."
         }
       }
     },
@@ -486,6 +608,23 @@
         }
       }
     },
+    "adminrpcListSessionsResponse": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/adminrpcMPPSession"
+          }
+        },
+        "total": {
+          "type": "string",
+          "format": "int64",
+          "description": "total is the count matching status filter, ignoring pagination."
+        }
+      }
+    },
     "adminrpcListTokensResponse": {
       "type": "object",
       "properties": {
@@ -517,6 +656,63 @@
           "format": "int64"
         }
       }
+    },
+    "adminrpcMPPSession": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "payment_hash": {
+          "type": "string"
+        },
+        "deposit_sats": {
+          "type": "string",
+          "format": "int64"
+        },
+        "spent_sats": {
+          "type": "string",
+          "format": "int64"
+        },
+        "balance_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "balance_sats is deposit_sats - spent_sats. Meaningful for open\nsessions; on closed ones this is what was refunded at close time."
+        },
+        "return_invoice": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "description": "status is \"open\" or \"closed\"."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "created_at / updated_at are RFC 3339 timestamps."
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "description": "MPPSession mirrors the on-server session record for the admin API.\nPayment hash is hex-encoded. Amounts are in the chain's base unit."
+    },
+    "adminrpcPaymentBackend": {
+      "type": "object",
+      "properties": {
+        "lnd_host": {
+          "type": "string",
+          "description": "lnd_host is the merchant lnd's gRPC address (host:port)."
+        },
+        "tls_path": {
+          "type": "string",
+          "description": "tls_path is the path to the merchant lnd's tls.cert (public)."
+        },
+        "mac_path": {
+          "type": "string",
+          "description": "mac_path is the absolute path to the minimum-privilege macaroon\nfile supplied by the merchant. Only invoices:{read,write} and\ninfo:read are expected to be granted."
+        }
+      },
+      "description": "PaymentBackend is an optional per-service lnd connection used in multi-\nmerchant deployments. The merchant runs their own lnd and hands the\ngateway a minimum-privilege macaroon (invoices:read invoices:write\ninfo:read) so the gateway can create/verify invoices but cannot move\nfunds or see wallet state.\n\nAll three fields are required when the block is present. Paths are\nabsolute paths on the gateway host's filesystem."
     },
     "adminrpcRevokeTokenResponse": {
       "type": "object",
@@ -554,6 +750,10 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) are used for this\nservice. Defaults to AUTH_SCHEME_L402 for backwards compatibility."
+        },
+        "payment": {
+          "$ref": "#/definitions/adminrpcPaymentBackend",
+          "description": "payment optionally overrides the global authenticator lnd for this\nservice (multi-merchant mode). When set, invoices for this service\nare issued against the merchant's own lnd so payments land in their\nwallet — the gateway never takes custody. Unset = legacy single-lnd\nmode using authenticator.lndhost."
         }
       }
     },

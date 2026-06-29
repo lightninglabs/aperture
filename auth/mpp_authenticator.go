@@ -188,9 +188,13 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 func (a *MPPAuthenticator) FreshChallengeHeader(serviceName string,
 	servicePrice int64) (http.Header, error) {
 
-	// Create a new Lightning invoice.
-	paymentRequest, paymentHash, err := a.challenger.NewChallenge(
-		servicePrice,
+	// Create a new Lightning invoice. If the underlying challenger
+	// supports per-service routing (multi-merchant deployment with each
+	// service bound to its own lnd), issue the invoice against that
+	// merchant's lnd so the payment lands directly in their wallet —
+	// the gateway never takes custody.
+	paymentRequest, paymentHash, err := newChallengeFor(
+		a.challenger, serviceName, servicePrice,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("MPP: failed to create invoice: %w",

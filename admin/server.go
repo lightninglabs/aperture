@@ -117,6 +117,16 @@ type ServerConfig struct {
 
 	// MPPRealm is the realm string used in MPP challenge headers.
 	MPPRealm string
+
+	// Chain identifies the blockchain the connected lnd is running on.
+	// Populated from lnd GetInfo.chains[0].chain at aperture startup
+	// (e.g. "bitcoin", "sui"). Empty if lnd could not be queried.
+	Chain string
+
+	// SessionStore exposes MPP prepaid session data to the admin API.
+	// Optional — nil when sessions are disabled; the ListSessions and
+	// GetSessionStats RPCs return Unimplemented in that case.
+	SessionStore *aperturedb.MPPSessionsStore
 }
 
 // Server implements the adminrpc.AdminServer gRPC interface. Thread safety
@@ -144,6 +154,7 @@ func (s *Server) GetInfo(_ context.Context,
 		MppEnabled:      s.cfg.MPPEnabled,
 		SessionsEnabled: s.cfg.SessionsEnabled,
 		MppRealm:        s.cfg.MPPRealm,
+		Chain:           s.cfg.Chain,
 	}, nil
 }
 
@@ -165,19 +176,59 @@ func (s *Server) ListServices(_ context.Context,
 	resp := make([]*adminrpc.Service, 0, len(services))
 
 	for _, svc := range services {
-		resp = append(resp, &adminrpc.Service{
-			Name:       svc.Name,
-			Address:    svc.Address,
-			Protocol:   svc.Protocol,
-			HostRegexp: svc.HostRegexp,
-			PathRegexp: svc.PathRegexp,
-			Price:      svc.Price,
-			Auth:       string(svc.Auth),
-			AuthScheme: stringToAuthScheme(svc.AuthScheme),
-		})
+		resp = append(resp, proxyServiceToProto(svc))
 	}
 
 	return &adminrpc.ListServicesResponse{Services: resp}, nil
+}
+
+// proxyServiceToProto converts an internal proxy.Service to its wire
+// representation. Keeping this in one place so fields added to Service
+// (like the payment override) reach every admin API response without
+// needing to update each handler.
+func proxyServiceToProto(svc *proxy.Service) *adminrpc.Service {
+	out := &adminrpc.Service{
+		Name:       svc.Name,
+		Address:    svc.Address,
+		Protocol:   svc.Protocol,
+		HostRegexp: svc.HostRegexp,
+		PathRegexp: svc.PathRegexp,
+		Price:      svc.Price,
+		Auth:       string(svc.Auth),
+		AuthScheme: stringToAuthScheme(svc.AuthScheme),
+	}
+	if svc.Payment != nil {
+		out.Payment = &adminrpc.PaymentBackend{
+			LndHost: svc.Payment.LndHost,
+			TlsPath: svc.Payment.TLSPath,
+			MacPath: svc.Payment.MacPath,
+		}
+	}
+	return out
+}
+
+// validatePaymentBackend enforces that a payment block is internally
+// consistent: either all three fields are populated or all three are
+// empty. Returns a user-friendly error message otherwise.
+func validatePaymentBackend(p *adminrpc.PaymentBackend) error {
+	if p == nil {
+		return nil
+	}
+	set := 0
+	if p.LndHost != "" {
+		set++
+	}
+	if p.TlsPath != "" {
+		set++
+	}
+	if p.MacPath != "" {
+		set++
+	}
+	if set != 0 && set != 3 {
+		return fmt.Errorf("payment block requires all of lnd_host, "+
+			"tls_path, mac_path (got %d of 3 populated)", set)
+	}
+	return nil
 }
 
 // CreateService creates a new backend service. When a ServiceStore is
@@ -278,6 +329,10 @@ func (s *Server) CreateService(ctx context.Context,
 
 	authScheme := authSchemeToString(req.AuthScheme)
 
+	if err := validatePaymentBackend(req.Payment); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
 	newSvc := &proxy.Service{
 		Name:       req.Name,
 		Address:    req.Address,
@@ -289,6 +344,16 @@ func (s *Server) CreateService(ctx context.Context,
 	}
 	if normalizedAuth != "" {
 		newSvc.Auth = auth.Level(normalizedAuth)
+	}
+	// Attach the payment override when the client supplied a fully
+	// populated block. Takes effect on the next prism restart — the
+	// in-memory challenger router is built during startup only.
+	if req.Payment != nil && req.Payment.LndHost != "" {
+		newSvc.Payment = &proxy.PaymentBackend{
+			LndHost: req.Payment.LndHost,
+			TLSPath: req.Payment.TlsPath,
+			MacPath: req.Payment.MacPath,
+		}
 	}
 
 	services = append(services, newSvc)
@@ -302,32 +367,29 @@ func (s *Server) CreateService(ctx context.Context,
 	// Persist the new service to the database if a store is
 	// configured.
 	if s.cfg.ServiceStore != nil {
+		params := aperturedb.ServiceParams{
+			Name:       newSvc.Name,
+			Address:    newSvc.Address,
+			Protocol:   newSvc.Protocol,
+			HostRegexp: newSvc.HostRegexp,
+			PathRegexp: newSvc.PathRegexp,
+			Auth:       string(newSvc.Auth),
+			AuthScheme: newSvc.AuthScheme,
+			Price:      newSvc.Price,
+		}
+		if newSvc.Payment != nil {
+			params.PaymentLndHost = newSvc.Payment.LndHost
+			params.PaymentTLSPath = newSvc.Payment.TLSPath
+			params.PaymentMacPath = newSvc.Payment.MacPath
+		}
 		if err := s.cfg.ServiceStore.UpsertService(
-			ctx, aperturedb.ServiceParams{
-				Name:       newSvc.Name,
-				Address:    newSvc.Address,
-				Protocol:   newSvc.Protocol,
-				HostRegexp: newSvc.HostRegexp,
-				PathRegexp: newSvc.PathRegexp,
-				Auth:       string(newSvc.Auth),
-				AuthScheme: newSvc.AuthScheme,
-				Price:      newSvc.Price,
-			},
+			ctx, params,
 		); err != nil {
 			log.Errorf("Error persisting service: %v", err)
 		}
 	}
 
-	return &adminrpc.Service{
-		Name:       newSvc.Name,
-		Address:    newSvc.Address,
-		Protocol:   newSvc.Protocol,
-		HostRegexp: newSvc.HostRegexp,
-		PathRegexp: newSvc.PathRegexp,
-		Price:      newSvc.Price,
-		Auth:       string(newSvc.Auth),
-		AuthScheme: stringToAuthScheme(newSvc.AuthScheme),
-	}, nil
+	return proxyServiceToProto(newSvc), nil
 }
 
 // UpdateService updates a service's mutable fields. When a ServiceStore is
@@ -438,6 +500,32 @@ func (s *Server) UpdateService(ctx context.Context,
 		updated.AuthScheme = authSchemeToString(*req.AuthScheme)
 	}
 
+	// Update payment block. Three cases: ClearPayment=true removes any
+	// existing override; Payment populated installs or replaces one;
+	// both unset leaves existing config untouched. We explicitly reject
+	// passing both together.
+	if req.ClearPayment && req.Payment != nil {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"clear_payment and payment are mutually exclusive",
+		)
+	}
+	switch {
+	case req.ClearPayment:
+		updated.Payment = nil
+	case req.Payment != nil && req.Payment.LndHost != "":
+		if err := validatePaymentBackend(req.Payment); err != nil {
+			return nil, status.Error(
+				codes.InvalidArgument, err.Error(),
+			)
+		}
+		updated.Payment = &proxy.PaymentBackend{
+			LndHost: req.Payment.LndHost,
+			TLSPath: req.Payment.TlsPath,
+			MacPath: req.Payment.MacPath,
+		}
+	}
+
 	// Replace the pointer in the slice with the updated copy.
 	for i, svc := range services {
 		if svc.Name == req.Name {
@@ -456,33 +544,34 @@ func (s *Server) UpdateService(ctx context.Context,
 	// Persist the updated service to the database if a store is
 	// configured.
 	if s.cfg.ServiceStore != nil {
+		params := aperturedb.ServiceParams{
+			Name:       updated.Name,
+			Address:    updated.Address,
+			Protocol:   updated.Protocol,
+			HostRegexp: updated.HostRegexp,
+			PathRegexp: updated.PathRegexp,
+			Auth:       string(updated.Auth),
+			AuthScheme: updated.AuthScheme,
+			Price:      updated.Price,
+		}
+		if updated.Payment != nil {
+			params.PaymentLndHost = updated.Payment.LndHost
+			params.PaymentTLSPath = updated.Payment.TLSPath
+			params.PaymentMacPath = updated.Payment.MacPath
+		}
+		// When ClearPayment was honored, updated.Payment is nil and
+		// params.Payment* fields are empty strings — the UPSERT will
+		// overwrite the old values with empties, which is the
+		// desired effect.
 		if err := s.cfg.ServiceStore.UpsertService(
-			ctx, aperturedb.ServiceParams{
-				Name:       updated.Name,
-				Address:    updated.Address,
-				Protocol:   updated.Protocol,
-				HostRegexp: updated.HostRegexp,
-				PathRegexp: updated.PathRegexp,
-				Auth:       string(updated.Auth),
-				AuthScheme: updated.AuthScheme,
-				Price:      updated.Price,
-			},
+			ctx, params,
 		); err != nil {
 			log.Errorf("Error persisting updated service: %v",
 				err)
 		}
 	}
 
-	return &adminrpc.Service{
-		Name:       updated.Name,
-		Address:    updated.Address,
-		Protocol:   updated.Protocol,
-		HostRegexp: updated.HostRegexp,
-		PathRegexp: updated.PathRegexp,
-		Price:      updated.Price,
-		Auth:       string(updated.Auth),
-		AuthScheme: stringToAuthScheme(updated.AuthScheme),
-	}, nil
+	return proxyServiceToProto(&updated), nil
 }
 
 // DeleteService removes a backend service by name.
@@ -1001,5 +1090,107 @@ func validateAuthLevel(s string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid auth level %q, must be "+
 			"'on', 'off', or 'freebie N'", s)
+	}
+}
+
+// ListSessions returns paginated MPP prepaid sessions with an optional
+// status filter ("open" | "closed" | "").
+//
+// NOTE: This is part of the adminrpc.AdminServer interface.
+func (s *Server) ListSessions(ctx context.Context,
+	req *adminrpc.ListSessionsRequest) (*adminrpc.ListSessionsResponse,
+	error) {
+
+	if s.cfg.SessionStore == nil {
+		return nil, status.Error(codes.Unimplemented,
+			"MPP sessions not enabled on this server")
+	}
+
+	// Validate status filter up front so we don't run a query that
+	// would return zero rows for a typo. Empty string means no filter.
+	switch req.Status {
+	case "", "open", "closed":
+	default:
+		return nil, status.Errorf(codes.InvalidArgument,
+			"status must be \"open\", \"closed\", or empty; got %q",
+			req.Status)
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	sessions, total, err := s.cfg.SessionStore.ListSessions(
+		ctx, req.Status, limit, offset,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"list sessions: %v", err)
+	}
+
+	resp := &adminrpc.ListSessionsResponse{
+		Sessions: make([]*adminrpc.MPPSession, 0, len(sessions)),
+		Total:    total,
+	}
+	for _, sess := range sessions {
+		resp.Sessions = append(
+			resp.Sessions, sessionToProto(sess),
+		)
+	}
+	return resp, nil
+}
+
+// GetSessionStats returns aggregate counters across all MPP sessions.
+//
+// NOTE: This is part of the adminrpc.AdminServer interface.
+func (s *Server) GetSessionStats(ctx context.Context,
+	_ *adminrpc.GetSessionStatsRequest) (
+	*adminrpc.GetSessionStatsResponse, error) {
+
+	if s.cfg.SessionStore == nil {
+		return nil, status.Error(codes.Unimplemented,
+			"MPP sessions not enabled on this server")
+	}
+
+	stats, err := s.cfg.SessionStore.GetStats(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal,
+			"get session stats: %v", err)
+	}
+
+	return &adminrpc.GetSessionStatsResponse{
+		TotalSessions:    stats.TotalSessions,
+		OpenSessions:     stats.OpenSessions,
+		ClosedSessions:   stats.ClosedSessions,
+		TotalDepositSats: stats.TotalDepositSats,
+		TotalSpentSats:   stats.TotalSpentSats,
+		OpenBalanceSats:  stats.OpenBalanceSats,
+	}, nil
+}
+
+// sessionToProto converts an auth.Session to its wire representation. The
+// balance_sats field is computed as deposit-spent so callers don't have to
+// do it themselves; it's meaningful for open sessions (what's still owed
+// back to the client) and equal to what was refunded on close for closed
+// ones (well, ignoring route fees).
+func sessionToProto(sess *auth.Session) *adminrpc.MPPSession {
+	return &adminrpc.MPPSession{
+		SessionId:     sess.SessionID,
+		PaymentHash:   hex.EncodeToString(sess.PaymentHash[:]),
+		DepositSats:   sess.DepositSats,
+		SpentSats:     sess.SpentSats,
+		BalanceSats:   sess.DepositSats - sess.SpentSats,
+		ReturnInvoice: sess.ReturnInvoice,
+		Status:        sess.Status,
+		CreatedAt:     sess.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     sess.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }

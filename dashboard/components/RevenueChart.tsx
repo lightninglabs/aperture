@@ -10,17 +10,20 @@ import { LinearGradient } from "@visx/gradient";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { theme } from "@/lib/theme";
 import type { ServiceRevenueItem } from "@/lib/types";
+import { formatAmount, unitLabel } from "@/lib/currency";
 
 const margin = { top: 10, right: 40, bottom: 30, left: 120 };
 
 interface Props {
   data: ServiceRevenueItem[];
+  chain?: string;
 }
 
 function Chart({
   data,
   width,
   height,
+  chain,
 }: Props & { width: number; height: number }) {
   const {
     showTooltip,
@@ -122,7 +125,7 @@ function Chart({
               fontFamily: "Open Sans, sans-serif",
               textAnchor: "middle",
             }}
-            label="sats"
+            label={unitLabel(chain)}
             labelProps={{
               fill: "#848a99",
               fontSize: 11,
@@ -151,16 +154,16 @@ function Chart({
           }}
         >
           <span style={{ color: theme.colors.gold, fontWeight: 600 }}>
-            {tooltipData.total_revenue_sats.toLocaleString()}
+            {formatAmount(tooltipData.total_revenue_sats, chain).value}
           </span>{" "}
-          sats
+          {unitLabel(chain)}
         </TooltipInPortal>
       )}
     </div>
   );
 }
 
-export default function RevenueChart({ data }: Props) {
+export default function RevenueChart({ data, chain }: Props) {
   if (!data.length) {
     return (
       <div
@@ -184,7 +187,7 @@ export default function RevenueChart({ data }: Props) {
       <ParentSize>
         {({ width, height }) =>
           width > 0 && height > 0 ? (
-            <Chart data={data} width={width} height={height} />
+            <Chart data={data} width={width} height={height} chain={chain} />
           ) : null
         }
       </ParentSize>

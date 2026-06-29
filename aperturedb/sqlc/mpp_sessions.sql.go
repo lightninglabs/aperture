@@ -45,6 +45,62 @@ func (q *Queries) CloseMPPSessionReturningBalance(ctx context.Context, arg Close
 	return column_1, err
 }
 
+const countMPPSessions = `-- name: CountMPPSessions :one
+SELECT count(*)
+FROM mpp_sessions
+WHERE ($1 = '' OR status = $1)
+`
+
+func (q *Queries) CountMPPSessions(ctx context.Context, filterStatus interface{}) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countMPPSessions, filterStatus)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const getMPPSessionAggregateStats = `-- name: GetMPPSessionAggregateStats :one
+SELECT
+    CAST(COUNT(*) AS BIGINT) AS total_sessions,
+    CAST(COALESCE(SUM(
+        CASE WHEN status = 'open' THEN 1 ELSE 0 END
+    ), 0) AS BIGINT) AS open_sessions,
+    CAST(COALESCE(SUM(
+        CASE WHEN status = 'closed' THEN 1 ELSE 0 END
+    ), 0) AS BIGINT) AS closed_sessions,
+    CAST(COALESCE(SUM(deposit_sats), 0) AS BIGINT) AS total_deposit_sats,
+    CAST(COALESCE(SUM(spent_sats), 0) AS BIGINT) AS total_spent_sats,
+    CAST(COALESCE(SUM(
+        CASE WHEN status = 'open' THEN deposit_sats - spent_sats ELSE 0 END
+    ), 0) AS BIGINT) AS open_balance_sats
+FROM mpp_sessions
+`
+
+type GetMPPSessionAggregateStatsRow struct {
+	TotalSessions    int64
+	OpenSessions     int64
+	ClosedSessions   int64
+	TotalDepositSats int64
+	TotalSpentSats   int64
+	OpenBalanceSats  int64
+}
+
+// Uses only portable SQL (no COUNT FILTER) so the same query runs against
+// both postgres and sqlite. Casts to BIGINT to give sqlc a consistent
+// int64 type on both drivers.
+func (q *Queries) GetMPPSessionAggregateStats(ctx context.Context) (GetMPPSessionAggregateStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getMPPSessionAggregateStats)
+	var i GetMPPSessionAggregateStatsRow
+	err := row.Scan(
+		&i.TotalSessions,
+		&i.OpenSessions,
+		&i.ClosedSessions,
+		&i.TotalDepositSats,
+		&i.TotalSpentSats,
+		&i.OpenBalanceSats,
+	)
+	return i, err
+}
+
 const getMPPSessionByID = `-- name: GetMPPSessionByID :one
 SELECT id, session_id, payment_hash, deposit_sats, spent_sats, return_invoice, status, created_at, updated_at
 FROM mpp_sessions
@@ -102,6 +158,53 @@ func (q *Queries) InsertMPPSession(ctx context.Context, arg InsertMPPSessionPara
 	var id int32
 	err := row.Scan(&id)
 	return id, err
+}
+
+const listMPPSessions = `-- name: ListMPPSessions :many
+SELECT id, session_id, payment_hash, deposit_sats, spent_sats, return_invoice, status, created_at, updated_at
+FROM mpp_sessions
+WHERE ($1 = '' OR status = $1)
+ORDER BY created_at DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListMPPSessionsParams struct {
+	FilterStatus interface{}
+	RowOffset    int32
+	RowLimit     int32
+}
+
+func (q *Queries) ListMPPSessions(ctx context.Context, arg ListMPPSessionsParams) ([]MppSession, error) {
+	rows, err := q.db.QueryContext(ctx, listMPPSessions, arg.FilterStatus, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MppSession
+	for rows.Next() {
+		var i MppSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.PaymentHash,
+			&i.DepositSats,
+			&i.SpentSats,
+			&i.ReturnInvoice,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateMPPSessionDeposit = `-- name: UpdateMPPSessionDeposit :execresult

@@ -1,4 +1,4 @@
-// Package main is the entry point for the aperturecli CLI.
+// Package main is the entry point for the prismcli CLI.
 package main
 
 import (

@@ -36,3 +36,16 @@ type Challenger interface {
 	mint.Challenger
 	auth.InvoiceChecker
 }
+
+// InvoiceReconciler is implemented by challengers that can replay the
+// state of every known invoice on demand. Used at startup to catch up
+// on events that fired while prism was offline, and by an optional
+// periodic ticker to recover from any gaps in the live SubscribeInvoices
+// stream (e.g. brief lnd disconnects).
+//
+// Implementations must be safe to call concurrently with the live
+// subscription. Settle/expire callbacks downstream are expected to be
+// idempotent so duplicate notifications don't cause spurious DB writes.
+type InvoiceReconciler interface {
+	Reconcile() error
+}

@@ -13,16 +13,16 @@ import (
 )
 
 var (
-	apertureDataDir         = btcutil.AppDataDir("aperture", false)
-	defaultConfigFilename   = "aperture.yaml"
+	apertureDataDir         = btcutil.AppDataDir("prism", false)
+	defaultConfigFilename   = "prism.yaml"
 	defaultTLSKeyFilename   = "tls.key"
 	defaultTLSCertFilename  = "tls.cert"
 	defaultLogLevel         = "info"
-	defaultLogFilename      = "aperture.log"
+	defaultLogFilename      = "prism.log"
 	defaultInvoiceBatchSize = 100000
 	defaultStrictVerify     = false
 
-	defaultSqliteDatabaseFileName = "aperture.db"
+	defaultSqliteDatabaseFileName = "prism.db"
 
 	// defaultSqliteDatabasePath is the default path under which we store
 	// the SQLite database file.
@@ -46,6 +46,24 @@ const (
 	// response after sending a WebSocket ping before considering the
 	// connection dead.
 	defaultWsPongWait = 15 * time.Second
+
+	// defaultServicePollInterval is how often each replica re-reads
+	// the persisted service list from the DB to pick up changes made
+	// via the admin API on another replica. Single-replica deployments
+	// don't need it (the admin handler updates in-memory state in the
+	// same process), but multi-replica HA setups would otherwise see
+	// stale service configs on whichever replica didn't handle the
+	// write. Set to 0 to disable polling entirely.
+	defaultServicePollInterval = 30 * time.Second
+
+	// defaultInvoiceReconcileInterval is how often the periodic invoice
+	// reconciler re-runs its sweep over every invoice known to the
+	// connected lnd. The live SubscribeInvoices stream catches state
+	// changes in real time on the happy path; this is a safety net
+	// for events missed during transient lnd disconnects or in
+	// multi-replica HA setups where one replica may have been offline
+	// when an invoice expired. Set to 0 to disable.
+	defaultInvoiceReconcileInterval = 5 * time.Minute
 )
 
 type EtcdConfig struct {
@@ -192,7 +210,7 @@ type AdminConfig struct {
 
 	// CORSOrigins controls which origins are allowed to call the admin REST
 	// API. If empty, CORS is disabled and browsers can only use same-origin.
-	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API." yaml:"corsorigin"`
 }
 
 type Config struct {
@@ -302,6 +320,25 @@ type Config struct {
 
 	// Blocklist is a list of IPs to deny access to.
 	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
+
+	// ServicePollInterval controls how often each replica re-reads the
+	// persisted service list from the DB to pick up admin-API changes
+	// made on a different replica. Required for multi-replica HA
+	// deployments — without it, services created via admin API only
+	// land in the receiving replica's in-memory state, and requests
+	// routed by the load balancer to other replicas return 403. Set
+	// to 0 to disable polling (single-replica deployments don't need
+	// it). Defaults to 30s.
+	ServicePollInterval time.Duration `long:"servicepollinterval" description:"How often replicas re-read service config from the DB to pick up admin-API changes made on other replicas. 0 disables polling."`
+
+	// InvoiceReconcileInterval controls how often the background
+	// invoice reconciler re-runs the same sweep that runs at startup.
+	// Acts as a safety net for state changes the live
+	// SubscribeInvoices stream may have missed (e.g. brief lnd
+	// disconnects, replica that didn't subscribe at the moment an
+	// invoice expired). Set to 0 to disable the periodic sweep — the
+	// startup-time sweep still runs once.
+	InvoiceReconcileInterval time.Duration `long:"invoicereconcileinterval" description:"How often the background invoice reconciler re-walks all known invoices to catch state changes missed by the live stream. 0 disables the periodic sweep."`
 }
 
 func (c *Config) validate() error {
@@ -345,23 +382,25 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
-		DatabaseBackend:  "etcd",
-		Etcd:             &EtcdConfig{},
-		Sqlite:           DefaultSqliteConfig(),
-		Postgres:         &aperturedb.PostgresConfig{},
-		Authenticator:    &AuthConfig{},
-		Tor:              &TorConfig{},
-		HashMail:         &HashMailConfig{},
-		Prometheus:       &PrometheusConfig{},
-		Admin:            &AdminConfig{},
-		IdleTimeout:      defaultIdleTimeout,
-		ReadTimeout:      defaultReadTimeout,
-		WriteTimeout:     defaultWriteTimeout,
-		WsPingInterval:   defaultWsPingInterval,
-		WsPongWait:       defaultWsPongWait,
-		InvoiceBatchSize: defaultInvoiceBatchSize,
-		Logging:          build.DefaultLogConfig(),
-		Blocklist:        []string{},
-		StrictVerify:     defaultStrictVerify,
+		DatabaseBackend:          "etcd",
+		Etcd:                     &EtcdConfig{},
+		Sqlite:                   DefaultSqliteConfig(),
+		Postgres:                 &aperturedb.PostgresConfig{},
+		Authenticator:            &AuthConfig{},
+		Tor:                      &TorConfig{},
+		HashMail:                 &HashMailConfig{},
+		Prometheus:               &PrometheusConfig{},
+		Admin:                    &AdminConfig{},
+		IdleTimeout:              defaultIdleTimeout,
+		ReadTimeout:              defaultReadTimeout,
+		WriteTimeout:             defaultWriteTimeout,
+		WsPingInterval:           defaultWsPingInterval,
+		WsPongWait:               defaultWsPongWait,
+		InvoiceBatchSize:         defaultInvoiceBatchSize,
+		ServicePollInterval:      defaultServicePollInterval,
+		InvoiceReconcileInterval: defaultInvoiceReconcileInterval,
+		Logging:                  build.DefaultLogConfig(),
+		Blocklist:                []string{},
+		StrictVerify:             defaultStrictVerify,
 	}
 }

@@ -172,7 +172,7 @@ func TestProxyMPP402Response(t *testing.T) {
 	}}
 
 	mockAuth := newMPPMockAuth()
-	p, err := proxy.New(mockAuth, services, []string{}, nil)
+	p, err := proxy.New(mockAuth, services, "", []string{}, nil)
 	require.NoError(t, err)
 
 	server := &http.Server{
@@ -304,7 +304,7 @@ func TestProxyMPPChargeEndToEnd(t *testing.T) {
 	mockAuth := newMPPMockAuth()
 	mockAuth.settledHashes[paymentHash] = true
 
-	p, err := proxy.New(mockAuth, services, []string{}, nil)
+	p, err := proxy.New(mockAuth, services, "", []string{}, nil)
 	require.NoError(t, err)
 
 	server := &http.Server{

@@ -198,7 +198,7 @@ func TestDirectorRewritePrefix(t *testing.T) {
 		Rewrite:    RewriteConfig{Prefix: "/api"},
 	}}
 
-	err := prepareServices(services)
+	err := prepareServices(services, "")
 	require.NoError(t, err)
 
 	p := &Proxy{

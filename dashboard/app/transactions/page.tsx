@@ -2,7 +2,8 @@
 
 import { Fragment, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useTransactions } from "@/lib/api";
+import { useTransactions, useInfo } from "@/lib/api";
+import { formatAmount, unitLabel } from "@/lib/currency";
 import styled from "@emotion/styled";
 import type { TransactionParams } from "@/lib/types";
 import ActivityChart from "@/components/ActivityChart";
@@ -277,6 +278,8 @@ export default function TransactionsPage() {
     error,
     mutate,
   } = useTransactions(params);
+  const { data: info } = useInfo();
+  const chain = info?.chain;
   const { sorted, sortField, sortDir, onSort } = useSort(
     transactions,
     "id",
@@ -316,7 +319,7 @@ export default function TransactionsPage() {
     const headers = [
       "ID",
       "Service",
-      "Amount (sats)",
+      `Amount (${unitLabel(chain)})`,
       "State",
       "Payment Hash",
       "Created",
@@ -411,7 +414,7 @@ export default function TransactionsPage() {
       <CardPadded>
         <SectionTitle>Activity</SectionTitle>
         {transactions ? (
-          <ActivityChart transactions={transactions} />
+          <ActivityChart transactions={transactions} chain={chain} />
         ) : (
           <LoadingBox>Loading...</LoadingBox>
         )}
@@ -531,7 +534,7 @@ export default function TransactionsPage() {
                       <IdCell>{tx.id}</IdCell>
                       <ServiceCell>{tx.service_name}</ServiceCell>
                       <AmountCell>
-                        {tx.price_sats.toLocaleString()} sats
+                        {formatAmount(tx.price_sats, chain).value} {unitLabel(chain)}
                       </AmountCell>
                       <Td>
                         <Badge $settled={tx.state === "settled"}>

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -201,6 +202,11 @@ type Aperture struct {
 	proxyCleanup  func()
 	adminCleanup  func()
 
+	// lndChain is the blockchain name (e.g. "bitcoin", "sui") reported
+	// by the connected lnd at startup. Cached so the admin API can
+	// expose it without issuing a fresh GetInfo on every request.
+	lndChain string
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -243,13 +249,16 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}()
 	}
 
+	// mppSessionStore is held as the concrete *MPPSessionsStore so the
+	// admin API can surface session lists / stats. It still satisfies
+	// the auth.SessionStore interface used by the MPP authenticator.
 	var (
 		secretStore     mint.SecretStore
 		onionStore      tor.OnionStore
 		lncStore        lnc.Store
 		txnStore        *aperturedb.L402TransactionsStore
 		svcStore        *aperturedb.ServicesStore
-		mppSessionStore auth.SessionStore
+		mppSessionStore *aperturedb.MPPSessionsStore
 	)
 
 	// Connect to the chosen database backend.
@@ -371,13 +380,90 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				return err
 			}
 
-			a.challenger, err = challenger.NewLndChallenger(
+			// Query lnd's chain so the admin API can expose it
+			// (dashboard uses this to pick "SUI" vs "sats" as
+			// the unit label). GetInfo requires info:read, which
+			// invoice.macaroon lacks, so we open a separate
+			// read-only client just for this call. Best-effort:
+			// if readonly.macaroon is missing or the call fails,
+			// we proceed with an empty chain and log a warning.
+			readClient, roErr := lndclient.NewBasicClient(
+				authCfg.LndHost, authCfg.TLSPath,
+				authCfg.MacDir, authCfg.Network,
+				lndclient.MacFilename("readonly.macaroon"),
+			)
+			if roErr != nil {
+				log.Warnf("skip chain detection: cannot "+
+					"open readonly lnd client: %v", roErr)
+			} else {
+				infoCtx, cancelInfo := context.WithTimeout(
+					context.Background(), 5*time.Second,
+				)
+				infoResp, infoErr := readClient.GetInfo(
+					infoCtx, &lnrpc.GetInfoRequest{},
+				)
+				cancelInfo()
+				if infoErr != nil {
+					log.Warnf("unable to query lnd "+
+						"GetInfo for chain "+
+						"detection: %v", infoErr)
+				} else if len(infoResp.Chains) > 0 {
+					a.lndChain = infoResp.Chains[0].Chain
+					log.Infof("Connected lnd reports "+
+						"chain=%q network=%q",
+						a.lndChain,
+						infoResp.Chains[0].Network)
+				}
+			}
+
+			defaultChal, err := challenger.NewLndChallenger(
 				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
 				context.Background, errChan, a.cfg.StrictVerify,
 				challengerOpts...,
 			)
 			if err != nil {
 				return err
+			}
+
+			// Build per-service challengers for any service that
+			// opted into its own lnd backend via a `payment:`
+			// block. This is how multi-merchant deployments keep
+			// each merchant's funds isolated — payments land in
+			// the merchant's own wallet, the gateway never takes
+			// custody. Services without a payment block fall
+			// through to defaultChal (legacy single-lnd mode).
+			//
+			// We merge DB-persisted services into the YAML list
+			// first, so services created at runtime via the
+			// admin API (and their payment overrides) are
+			// considered on restart — otherwise the router would
+			// only know about YAML-defined services.
+			mergedForChallengers := mergeServicesFromDB(
+				a.cfg.Services, svcStore,
+			)
+			perServiceChallengers, err := buildPerServiceChallengers(
+				mergedForChallengers, authCfg.Network,
+				a.cfg.InvoiceBatchSize, genInvoiceReq,
+				errChan, a.cfg.StrictVerify,
+				challengerOpts,
+			)
+			if err != nil {
+				return fmt.Errorf("unable to build per-"+
+					"service challengers: %w", err)
+			}
+
+			if len(perServiceChallengers) == 0 {
+				// No per-service overrides → keep the single
+				// global challenger to minimise surface area.
+				a.challenger = defaultChal
+			} else {
+				log.Infof("Multi-merchant mode: %d service(s) "+
+					"bound to dedicated lnd backends; the "+
+					"rest fall back to the global lnd",
+					len(perServiceChallengers))
+				a.challenger = challenger.NewRouterChallenger(
+					defaultChal, perServiceChallengers,
+				)
 			}
 		}
 	}
@@ -394,6 +480,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
 			a.cfg, txnStore, secretStore, svcStore,
+			mppSessionStore,
+			a.lndChain,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
 				if err := a.UpdateServices(s); err != nil {
@@ -407,6 +495,45 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		return err
 	}
 	a.adminCleanup = adminCleanup
+
+	// In a multi-replica HA deployment the admin handler only updates
+	// the in-memory state of whichever replica handled the write, so
+	// other replicas see stale config until they restart. Run a
+	// background poller that re-reads the merged config from the DB
+	// and reloads the proxy if anything changed. Single-replica
+	// deployments can disable this with ServicePollInterval=0; the
+	// admin handler still does its own in-process update so latency
+	// is unaffected for the local case.
+	if a.cfg.ServicePollInterval > 0 && svcStore != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.pollServiceConfig(svcStore, svcHolder)
+		}()
+	}
+
+	// Periodic invoice reconciler. Complements the live
+	// SubscribeInvoices stream: re-runs the startup-time sweep on a
+	// timer so any expirations or settlements that the stream missed
+	// (transient lnd disconnect, replica offline at the moment of the
+	// event, etc.) get reconciled into the transaction store. Only
+	// matters when the challenger reports irrelevant invoices through
+	// onExpired or settled-on-startup through onSettled — without
+	// those callbacks Reconcile is a no-op.
+	if a.cfg.InvoiceReconcileInterval > 0 {
+		if recon, ok := a.challenger.(challenger.InvoiceReconciler); ok {
+			a.wg.Add(1)
+			go func() {
+				defer a.wg.Done()
+				a.runInvoiceReconciler(recon)
+			}()
+		} else {
+			log.Debugf("Active challenger does not implement "+
+				"InvoiceReconciler; periodic reconcile "+
+				"disabled (interval=%v ignored)",
+				a.cfg.InvoiceReconcileInterval)
+		}
+	}
 
 	// Create a payment sender for MPP session refunds if sessions are
 	// enabled and we have a direct LND connection.
@@ -440,7 +567,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	}
 
 	a.proxy, a.proxyCleanup, err = createProxy(
-		a.cfg, initialServices, a.challenger, secretStore,
+		a.cfg, initialServices, a.lndChain, a.challenger, secretStore,
 		mppSessionStore, paymentSender, mintTxnStore,
 		txnRecorder, adminPriority, adminFallback,
 	)
@@ -555,6 +682,113 @@ func (h *serviceHolder) set(services []*proxy.Service) {
 	defer h.mu.Unlock()
 
 	h.services = services
+}
+
+// pollServiceConfig periodically re-reads the merged service list from
+// the DB (config-file services + persisted DB rows). When the result
+// differs from the last seen state — which happens when a sibling
+// replica handled an admin-API write — it reloads the proxy in-place.
+//
+// Polling is the simplest backend-agnostic path to multi-replica
+// consistency. A future optimisation is to add Postgres LISTEN/NOTIFY
+// for the postgres backend so changes propagate at low latency without
+// the polling tax; sqlite/etcd would still rely on this poller.
+func (a *Aperture) pollServiceConfig(svcStore *aperturedb.ServicesStore,
+	holder *serviceHolder) {
+
+	interval := a.cfg.ServicePollInterval
+	log.Infof("Service config poller running (interval=%v); reloads "+
+		"the proxy when DB-persisted service config changes",
+		interval)
+
+	lastHash := serviceStateHash(holder.get())
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+		case <-a.quit:
+			log.Debugf("Service config poller stopping")
+			return
+		}
+
+		merged := mergeServicesFromDB(a.cfg.Services, svcStore)
+		newHash := serviceStateHash(merged)
+		if newHash == lastHash {
+			continue
+		}
+		log.Infof("Service config changed externally — reloading "+
+			"proxy with %d service(s)", len(merged))
+		if err := a.UpdateServices(merged); err != nil {
+			log.Errorf("Service config reload failed: %v", err)
+			continue
+		}
+		holder.set(merged)
+		lastHash = newHash
+	}
+}
+
+// runInvoiceReconciler periodically asks the active challenger to
+// replay terminal-state events for every known invoice. Catches state
+// changes that the live SubscribeInvoices stream missed — e.g. the
+// stream was disconnected during an expiration, or a replica started
+// after an event already fired. The reconcile is idempotent (settled
+// rows are gated by conditional SQL, expired rows by a per-hash
+// dedupe map inside the challenger), so a tighter interval just costs
+// a bit more lnd.ListInvoices traffic, never duplicate DB writes.
+func (a *Aperture) runInvoiceReconciler(
+	recon challenger.InvoiceReconciler) {
+
+	interval := a.cfg.InvoiceReconcileInterval
+	log.Infof("Invoice reconciler running (interval=%v); periodically "+
+		"replays missed settlement/expiration events", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+		case <-a.quit:
+			log.Debugf("Invoice reconciler stopping")
+			return
+		}
+		if err := recon.Reconcile(); err != nil {
+			log.Warnf("Periodic invoice reconcile failed: %v", err)
+		}
+	}
+}
+
+// serviceStateHash returns a stable digest of the routing-relevant
+// fields on a service list. Used by the cross-replica config poller
+// to detect changes without re-running an expensive proxy reload on
+// every tick. Fields included are anything that affects how a request
+// matches a service or how its invoice is issued — name, host/path
+// regex, address/protocol, price, auth, and the per-service payment
+// override. Anything else (rate limits, freebie counts, dynamic
+// pricers etc.) would also change here if config changed, since they
+// live on the same DB row alongside the basics.
+func serviceStateHash(services []*proxy.Service) string {
+	sorted := make([]*proxy.Service, len(services))
+	copy(sorted, services)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Name < sorted[j].Name
+	})
+
+	h := sha256.New()
+	for _, s := range sorted {
+		fmt.Fprintf(h, "%s|%s|%s|%s|%s|%d|%s|%s",
+			s.Name, s.Address, s.Protocol, s.HostRegexp,
+			s.PathRegexp, s.Price, s.Auth, s.AuthScheme)
+		if s.Payment != nil {
+			fmt.Fprintf(h, "|%s|%s|%s",
+				s.Payment.LndHost, s.Payment.TLSPath,
+				s.Payment.MacPath)
+		}
+		h.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // UpdateServices instructs the proxy to re-initialize its internal
@@ -697,6 +931,16 @@ func getConfig() (*Config, error) {
 	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
 		cfg.Authenticator.MacDir,
 	)
+	if cfg.Sqlite != nil {
+		cfg.Sqlite.DatabaseFileName = lnd.CleanAndExpandPath(
+			cfg.Sqlite.DatabaseFileName,
+		)
+	}
+	if cfg.Admin != nil {
+		cfg.Admin.MacaroonPath = lnd.CleanAndExpandPath(
+			cfg.Admin.MacaroonPath,
+		)
+	}
 
 	// Set default mailbox address if none is set.
 	if cfg.Authenticator.MailboxAddress == "" {
@@ -949,9 +1193,110 @@ func buildChallengerOpts(
 				}
 			},
 		))
+
+		// When lnd observes an invoice reaching a terminal non-
+		// settled state (canceled or past-expiry + unpaid), flip
+		// any matching pending rows in our transaction store to
+		// "expired". Without this the abandoned sibling invoices
+		// that accompany every dual-scheme 402 (L402 + MPP, or
+		// L402 + MPP-charge + MPP-session) would pile up forever
+		// in pending state and skew admin reports.
+		opts = append(opts, challenger.WithExpirationCallback(
+			func(hash lntypes.Hash) {
+				ctx, cancel := context.WithTimeout(
+					context.Background(),
+					aperturedb.DefaultStoreTimeout,
+				)
+				defer cancel()
+
+				err := txnStore.ExpireTransaction(
+					ctx, hash[:],
+				)
+				if err != nil {
+					log.Errorf("Error expiring "+
+						"transaction (hash=%x): %v",
+						hash[:], err)
+				}
+			},
+		))
 	}
 
 	return opts
+}
+
+// buildPerServiceChallengers creates one LndChallenger per service that
+// has an explicit `payment:` block in its config, each connected to the
+// merchant's own lnd node. Services without a payment block are omitted
+// from the result; the caller composes them under a RouterChallenger
+// alongside the global default challenger.
+//
+// The per-service challenger uses the same invoice generator, batch
+// size, strictVerify setting, and callbacks (settlement + expiration)
+// as the global challenger, so admin transaction bookkeeping behaves
+// identically across single-lnd and multi-merchant deployments.
+func buildPerServiceChallengers(services []*proxy.Service, network string,
+	batchSize int, genInvoiceReq challenger.InvoiceRequestGenerator,
+	errChan chan<- error, strictVerify bool,
+	opts []challenger.LndChallengerOption) (
+	map[string]challenger.Challenger, error) {
+
+	out := make(map[string]challenger.Challenger)
+	collisions := make(map[string]*challenger.MerchantKey)
+
+	for _, svc := range services {
+		if svc == nil || svc.Payment == nil {
+			continue
+		}
+		p := svc.Payment
+		if p.LndHost == "" || p.TLSPath == "" || p.MacPath == "" {
+			return nil, fmt.Errorf("service %q payment config "+
+				"requires all of lndhost, tlspath, macpath",
+				svc.Name)
+		}
+
+		client, err := lndclient.NewBasicClient(
+			p.LndHost,
+			p.TLSPath,
+			filepath.Dir(p.MacPath),
+			network,
+			lndclient.MacFilename(filepath.Base(p.MacPath)),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("service %q: cannot open "+
+				"merchant lnd client at %s: %w",
+				svc.Name, p.LndHost, err)
+		}
+
+		c, err := challenger.NewLndChallenger(
+			client, batchSize, genInvoiceReq,
+			context.Background, errChan, strictVerify, opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("service %q: cannot start "+
+				"challenger: %w", svc.Name, err)
+		}
+
+		log.Infof("Service %q bound to merchant lnd at %s",
+			svc.Name, p.LndHost)
+		out[svc.Name] = c
+		collisions[svc.Name] = &challenger.MerchantKey{
+			LndHost: p.LndHost,
+			MacPath: p.MacPath,
+		}
+	}
+
+	// Fail fast if two services share the same (lndhost, macpath) —
+	// that would silently pool their funds on the same lnd and defeat
+	// the whole point of per-merchant isolation.
+	if err := challenger.EnsureDistinctMerchants(collisions); err != nil {
+		// Shut down anything we already started before bailing.
+		for _, c := range out {
+			c.Stop()
+		}
+		return nil, err
+	}
+
+	return out, nil
 }
 
 // createAdminServer creates the admin gRPC server and REST gateway following
@@ -966,6 +1311,8 @@ func createAdminServer(cfg *Config,
 	txnStore *aperturedb.L402TransactionsStore,
 	secretStore mint.SecretStore,
 	svcStore *aperturedb.ServicesStore,
+	sessionStore *aperturedb.MPPSessionsStore,
+	lndChain string,
 	getServices func() []*proxy.Service,
 	updateServices func([]*proxy.Service) error) (
 	[]proxy.LocalService, []proxy.LocalService, func(), error) {
@@ -1042,6 +1389,8 @@ func createAdminServer(cfg *Config,
 		MPPEnabled:       cfg.Authenticator.EnableMPP,
 		SessionsEnabled:  cfg.Authenticator.EnableSessions,
 		MPPRealm:         cfg.Authenticator.MPPRealm,
+		Chain:            lndChain,
+		SessionStore:     sessionStore,
 	})
 
 	adminGRPC := grpc.NewServer(serverOpts...)
@@ -1165,7 +1514,29 @@ func createAdminServer(cfg *Config,
 						return
 					}
 					ip := net.ParseIP(host)
-					if ip == nil || !ip.IsLoopback() {
+					if ip == nil {
+						http.Error(
+							w, "forbidden",
+							http.StatusForbidden,
+						)
+						return
+					}
+
+					// Allow loopback OR private networks (Docker bridge)
+					// BUT only if the Host header also indicates a
+					// local request. This prevents Nginx from exposing
+					// administrative endpoints.
+					isLocalIP := ip.IsLoopback() || ip.IsPrivate()
+
+					h, _, _ := net.SplitHostPort(r.Host)
+					if h == "" {
+						h = r.Host
+					}
+					isLocalHost := h == "localhost" || h == "127.0.0.1"
+
+					if !isLocalIP || !isLocalHost {
+						log.Warnf("Rejecting non-local administrative "+
+							"request from %s (Host: %s)", ip, r.Host)
 						http.Error(
 							w, "forbidden",
 							http.StatusForbidden,
@@ -1315,6 +1686,10 @@ func createAdminServer(cfg *Config,
 			"name": func(v string) bool {
 				return safeQueryValue(v, 128)
 			},
+			// MPP session list filter: "open" | "closed" | "".
+			"status": func(v string) bool {
+				return safeQueryValue(v, 16)
+			},
 		}
 
 		safeSegment := regexp.MustCompile(`^[\w-]+$`)
@@ -1439,12 +1814,37 @@ func createAdminServer(cfg *Config,
 		wrappedDash := requireLoopback(
 			addSecurityHeaders(dashHandler),
 		)
-		fallbackServices = append(
-			fallbackServices, proxy.NewLocalService(
-				wrappedDash,
-				func(r *http.Request) bool {
-					return true
-				},
+
+		// Define a match function for the dashboard. It should only
+		// match if the request is coming from a loopback or private
+		// IP (Docker) AND the Host header is localhost or 127.0.0.1.
+		// This allows it to skip L402 auth when accessed locally
+		// (e.g. via SSH tunnel or healthcheck) without hijacking
+		// traffic for external services proxied via Nginx.
+		isLocalDashboardRequest := func(r *http.Request) bool {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				return false
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || (!ip.IsLoopback() && !ip.IsPrivate()) {
+				return false
+			}
+
+			// Only skip auth if the Host header also indicates a
+			// local access attempt.
+			h, _, _ := net.SplitHostPort(r.Host)
+			if h == "" {
+				h = r.Host
+			}
+			return h == "localhost" || h == "127.0.0.1"
+		}
+
+		// Add as priority service so it skips L402 auth for local
+		// users/healthchecks.
+		priorityServices = append(
+			priorityServices, proxy.NewLocalService(
+				wrappedDash, isLocalDashboardRequest,
 			),
 		)
 
@@ -1531,7 +1931,7 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 	// Build a map of DB services keyed by name.
 	dbByName := make(map[string]*proxy.Service, len(dbRows))
 	for _, row := range dbRows {
-		dbByName[row.Name] = &proxy.Service{
+		svc := &proxy.Service{
 			Name:       row.Name,
 			Address:    row.Address,
 			Protocol:   row.Protocol,
@@ -1541,6 +1941,21 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 			Auth:       auth.Level(row.Auth),
 			AuthScheme: row.AuthScheme,
 		}
+		// Rehydrate per-service lnd override if set. We only attach
+		// the payment block when all three columns have non-empty
+		// values — partial state is nonsensical (and the admin API
+		// rejects it on write), but guard here too in case the DB
+		// was hand-edited.
+		if row.PaymentLndhost != "" && row.PaymentTlspath != "" &&
+			row.PaymentMacpath != "" {
+
+			svc.Payment = &proxy.PaymentBackend{
+				LndHost: row.PaymentLndhost,
+				TLSPath: row.PaymentTlspath,
+				MacPath: row.PaymentMacpath,
+			}
+		}
+		dbByName[row.Name] = svc
 	}
 
 	// Start with DB services, then add config services that are not
@@ -1627,7 +2042,7 @@ func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
 // adminPriorityServices are checked before proxy backend matching (e.g. admin
 // gRPC, REST, dashboard proxy). adminFallbackServices are checked after proxy
 // backend matching fails (e.g. dashboard catch-all static file server).
-func createProxy(cfg *Config, services []*proxy.Service,
+func createProxy(cfg *Config, services []*proxy.Service, chain string,
 	challenger challenger.Challenger,
 	store mint.SecretStore, mppSessionStore auth.SessionStore,
 	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
@@ -1752,7 +2167,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	))
 
 	prxy, err := proxy.New(
-		authenticator, services, cfg.Blocklist,
+		authenticator, services, chain, cfg.Blocklist,
 		adminPriorityServices, localServices...,
 	)
 	return prxy, proxyCleanup, err

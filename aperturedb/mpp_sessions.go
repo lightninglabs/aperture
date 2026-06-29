@@ -45,6 +45,21 @@ type MPPSessionsDB interface {
 	// returns the remaining balance (deposit_sats - spent_sats).
 	CloseMPPSessionReturningBalance(ctx context.Context,
 		arg sqlc.CloseMPPSessionReturningBalanceParams) (int64, error)
+
+	// ListMPPSessions returns sessions filtered by optional status, most
+	// recent first, with paginated results.
+	ListMPPSessions(ctx context.Context,
+		arg sqlc.ListMPPSessionsParams) ([]sqlc.MppSession, error)
+
+	// CountMPPSessions returns the total number of sessions matching the
+	// optional status filter. Used to paginate the list endpoint.
+	CountMPPSessions(ctx context.Context,
+		filterStatus interface{}) (int64, error)
+
+	// GetMPPSessionAggregateStats returns aggregate counters across all
+	// sessions (deposits, spent, remaining balance on open sessions).
+	GetMPPSessionAggregateStats(ctx context.Context) (
+		sqlc.GetMPPSessionAggregateStatsRow, error)
 }
 
 // MPPSessionsTxOptions defines the set of db txn options the
@@ -324,4 +339,118 @@ func (s *MPPSessionsStore) CloseSessionAndGetBalance(ctx context.Context,
 	}
 
 	return remainingBalance, nil
+}
+
+// MPPSessionStats aggregates counters across all MPP sessions for the admin
+// dashboard. Amounts are in the chain's base unit (sats for bitcoin, MIST
+// for sui) — the UI is responsible for display scaling via admin GetInfo.
+type MPPSessionStats struct {
+	// TotalSessions is the total number of sessions ever created.
+	TotalSessions int64
+
+	// OpenSessions is the current number of sessions in the "open" state
+	// (i.e., still accepting bearer / topUp requests).
+	OpenSessions int64
+
+	// ClosedSessions is the number of sessions that have been explicitly
+	// closed (refund attempted, no further activity accepted).
+	ClosedSessions int64
+
+	// TotalDepositSats is the sum of deposit_sats across all sessions —
+	// every satoshi ever locked up via open or topUp, regardless of
+	// whether it was later spent or refunded.
+	TotalDepositSats int64
+
+	// TotalSpentSats is the sum of spent_sats across all sessions — how
+	// much has been consumed by bearer requests (your actual revenue).
+	TotalSpentSats int64
+
+	// OpenBalanceSats is the sum of (deposit - spent) over the sessions
+	// still in the "open" state — prepaid balance the server currently
+	// owes back to clients on close.
+	OpenBalanceSats int64
+}
+
+// ListSessions returns sessions sorted most-recent-first. An empty
+// statusFilter returns both open and closed sessions; passing "open" or
+// "closed" narrows the result set. The returned total is the full count
+// (not limit-bounded) for pagination UI.
+func (s *MPPSessionsStore) ListSessions(ctx context.Context,
+	statusFilter string, limit, offset int32) (
+	[]*auth.Session, int64, error) {
+
+	var (
+		sessions []*auth.Session
+		total    int64
+	)
+
+	readOpts := NewMPPSessionsReadTx()
+	err := s.db.ExecTx(ctx, &readOpts, func(tx MPPSessionsDB) error {
+		rows, err := tx.ListMPPSessions(ctx, sqlc.ListMPPSessionsParams{
+			FilterStatus: statusFilter,
+			RowLimit:     limit,
+			RowOffset:    offset,
+		})
+		if err != nil {
+			return err
+		}
+
+		sessions = make([]*auth.Session, 0, len(rows))
+		for _, row := range rows {
+			hash, err := lntypes.MakeHash(row.PaymentHash)
+			if err != nil {
+				return fmt.Errorf("invalid payment hash in "+
+					"row id=%d: %w", row.ID, err)
+			}
+			sessions = append(sessions, &auth.Session{
+				SessionID:     row.SessionID,
+				PaymentHash:   hash,
+				DepositSats:   row.DepositSats,
+				SpentSats:     row.SpentSats,
+				ReturnInvoice: row.ReturnInvoice,
+				Status:        row.Status,
+				CreatedAt:     row.CreatedAt,
+				UpdatedAt:     row.UpdatedAt,
+			})
+		}
+
+		total, err = tx.CountMPPSessions(ctx, statusFilter)
+		return err
+	})
+
+	if err != nil {
+		return nil, 0, fmt.Errorf("unable to list MPP sessions: %w",
+			err)
+	}
+
+	return sessions, total, nil
+}
+
+// GetStats returns aggregate counters across all sessions.
+func (s *MPPSessionsStore) GetStats(ctx context.Context) (
+	*MPPSessionStats, error) {
+
+	var stats MPPSessionStats
+
+	readOpts := NewMPPSessionsReadTx()
+	err := s.db.ExecTx(ctx, &readOpts, func(tx MPPSessionsDB) error {
+		row, err := tx.GetMPPSessionAggregateStats(ctx)
+		if err != nil {
+			return err
+		}
+		stats.TotalSessions = row.TotalSessions
+		stats.OpenSessions = row.OpenSessions
+		stats.ClosedSessions = row.ClosedSessions
+		stats.TotalDepositSats = row.TotalDepositSats
+		stats.TotalSpentSats = row.TotalSpentSats
+		stats.OpenBalanceSats = row.OpenBalanceSats
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("unable to get MPP session stats: %w",
+			err)
+	}
+
+	return &stats, nil
 }

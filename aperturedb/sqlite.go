@@ -44,7 +44,7 @@ type SqliteConfig struct {
 
 	// DatabaseFileName is the full file path where the database file can be
 	// found.
-	DatabaseFileName string `long:"dbfile" description:"The full path to the database."`
+	DatabaseFileName string `long:"dbfile" description:"The full path to the database." yaml:"dbfile"`
 }
 
 // SqliteStore is a database store implementation that uses a sqlite backend.

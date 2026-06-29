@@ -96,6 +96,12 @@ type Proxy struct {
 	authenticator auth.Authenticator
 	services      []*Service
 	blocklist     map[string]struct{}
+
+	// chain is the underlying chain reported by lnd at startup (e.g.
+	// "bitcoin", "sui"). Used by prepareServices to pick a sensible
+	// default for services that omit `price`. Empty when lnd was
+	// unreachable at startup; defaults fall back to bitcoin.
+	chain string
 }
 
 // rewriteRequestPath rewrites the request path according to service config.
@@ -127,8 +133,10 @@ func (s *Service) rewriteRequestPath(req *http.Request) {
 
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
-// headers if necessary.
-func New(auth auth.Authenticator, services []*Service,
+// headers if necessary. `chain` is the underlying chain reported by lnd
+// (e.g. "bitcoin", "sui") and is used to pick chain-appropriate defaults
+// for services that omit per-service settings like `price`.
+func New(auth auth.Authenticator, services []*Service, chain string,
 	blocklist []string, priorityLocalServices []LocalService,
 	localServices ...LocalService) (*Proxy, error) {
 
@@ -148,6 +156,7 @@ func New(auth auth.Authenticator, services []*Service,
 		authenticator:         auth,
 		services:              services,
 		blocklist:             blMap,
+		chain:                 chain,
 	}
 	err := proxy.UpdateServices(services)
 	if err != nil {
@@ -415,7 +424,7 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
 func (p *Proxy) UpdateServices(services []*Service) error {
-	err := prepareServices(services)
+	err := prepareServices(services, p.chain)
 	if err != nil {
 		return err
 	}

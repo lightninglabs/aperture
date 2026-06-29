@@ -74,6 +74,16 @@ type ServiceParams struct {
 	Auth       string
 	AuthScheme string
 	Price      int64
+
+	// PaymentLndHost, PaymentTLSPath, PaymentMacPath together configure
+	// an optional per-service lnd override. When any of them is set,
+	// all three must be set — invoices for this service are routed
+	// through that lnd so payments land in the merchant's wallet.
+	// Empty on all three means the service uses the global
+	// authenticator.lndhost (legacy single-lnd mode).
+	PaymentLndHost string
+	PaymentTLSPath string
+	PaymentMacPath string
 }
 
 // UpsertService inserts or updates a service configuration.
@@ -84,16 +94,19 @@ func (s *ServicesStore) UpsertService(ctx context.Context,
 	now := s.clock.Now().UTC()
 	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx ServicesDB) error {
 		return tx.UpsertService(ctx, UpsertServiceParams{
-			Name:       params.Name,
-			Address:    params.Address,
-			Protocol:   params.Protocol,
-			HostRegexp: params.HostRegexp,
-			PathRegexp: params.PathRegexp,
-			Price:      params.Price,
-			Auth:       params.Auth,
-			AuthScheme: params.AuthScheme,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			Name:           params.Name,
+			Address:        params.Address,
+			Protocol:       params.Protocol,
+			HostRegexp:     params.HostRegexp,
+			PathRegexp:     params.PathRegexp,
+			Price:          params.Price,
+			Auth:           params.Auth,
+			AuthScheme:     params.AuthScheme,
+			PaymentLndhost: params.PaymentLndHost,
+			PaymentTlspath: params.PaymentTLSPath,
+			PaymentMacpath: params.PaymentMacPath,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		})
 	})
 

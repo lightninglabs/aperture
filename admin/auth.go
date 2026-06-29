@@ -79,10 +79,19 @@ func verifyMacaroon(ctx context.Context, rootKey []byte) error {
 }
 
 // unauthenticatedMethods lists gRPC full-method paths that should bypass
-// macaroon authentication, allowing health probes from load balancers and
-// monitoring systems without credentials.
+// macaroon authentication. Two classes of method live here:
+//
+//   - Health probes from load balancers / monitoring (GetHealth).
+//   - Read-only catalog endpoints that are safe to expose so external
+//     clients can discover the L402 services this gateway hosts without
+//     a credential. ListServices in particular is used by paycli (and
+//     other end-user clients) to render a service picker.
+//
+// Mutation endpoints (CreateService, UpdateService, RevokeToken, …) MUST
+// stay off this list — they remain admin-gated.
 var unauthenticatedMethods = map[string]struct{}{
-	"/adminrpc.Admin/GetHealth": {},
+	"/adminrpc.Admin/GetHealth":    {},
+	"/adminrpc.Admin/ListServices": {},
 }
 
 // MacaroonInterceptor returns a gRPC unary server interceptor that validates
