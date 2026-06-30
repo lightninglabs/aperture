@@ -198,6 +198,7 @@ type Aperture struct {
 	httpsServer   *http.Server
 	torHTTPServer *http.Server
 	proxy         *proxy.Proxy
+	limiter       *staticServiceLimiter
 	proxyCleanup  func()
 	adminCleanup  func()
 
@@ -396,6 +397,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			a.cfg, txnStore, secretStore, svcStore,
 			svcHolder.get,
 			func(s []*proxy.Service) error {
+				a.limiter.refresh(s)
 				if err := a.UpdateServices(s); err != nil {
 					return err
 				}
@@ -439,7 +441,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		txnRecorder = txnStore
 	}
 
-	a.proxy, a.proxyCleanup, err = createProxy(
+	a.proxy, a.limiter, a.proxyCleanup, err = createProxy(
 		a.cfg, initialServices, a.challenger, secretStore,
 		mppSessionStore, paymentSender, mintTxnStore,
 		txnRecorder, adminPriority, adminFallback,
@@ -1540,6 +1542,7 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 			Price:      row.Price,
 			Auth:       auth.Level(row.Auth),
 			AuthScheme: row.AuthScheme,
+			Timeout:    row.Timeout,
 		}
 	}
 
@@ -1633,12 +1636,13 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
 	txnRecorder auth.TransactionRecorder,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
-) (*proxy.Proxy, func(), error) {
+) (*proxy.Proxy, *staticServiceLimiter, func(), error) {
 
+	limiter := newStaticServiceLimiter(services)
 	minter := mint.New(&mint.Config{
 		Challenger:       challenger,
 		Secrets:          store,
-		ServiceLimiter:   newStaticServiceLimiter(services),
+		ServiceLimiter:   limiter,
 		Now:              time.Now,
 		TransactionStore: txnStore,
 	})
@@ -1656,7 +1660,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 		// it from a deterministic key stored via the secret store.
 		hmacSecret, err := deriveHMACSecret(store)
 		if err != nil {
-			return nil, nil, fmt.Errorf("MPP HMAC secret: %w",
+			return nil, nil, nil, fmt.Errorf("MPP HMAC secret: %w",
 				err)
 		}
 
@@ -1716,7 +1720,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	staticServer := http.NotFoundHandler()
 	if cfg.ServeStatic {
 		if len(strings.TrimSpace(cfg.StaticRoot)) == 0 {
-			return nil, nil, fmt.Errorf("staticroot cannot be " +
+			return nil, nil, nil, fmt.Errorf("staticroot cannot be " +
 				"empty, must contain path to directory that " +
 				"contains index.html")
 		}
@@ -1731,7 +1735,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	if cfg.HashMail.Enabled {
 		hashMailServices, cleanup, err := createHashMailServer(cfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		localServices = append(localServices, hashMailServices...)
@@ -1755,7 +1759,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 		authenticator, services, cfg.Blocklist,
 		adminPriorityServices, localServices...,
 	)
-	return prxy, proxyCleanup, err
+	return prxy, limiter, proxyCleanup, err
 }
 
 // createHashMailServer creates the gRPC server for the hash mail message

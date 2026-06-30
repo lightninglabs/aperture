@@ -193,6 +193,11 @@
                 "auth_scheme": {
                   "$ref": "#/definitions/adminrpcAuthScheme",
                   "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
+                },
+                "timeout": {
+                  "type": "string",
+                  "format": "int64",
+                  "description": "timeout is the per-service TTL in seconds. See Service.timeout. When not\nset, the existing timeout is preserved."
                 }
               }
             }
@@ -409,6 +414,11 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) to use. Defaults to\nAUTH_SCHEME_L402 if unset."
+        },
+        "timeout": {
+          "type": "string",
+          "format": "int64",
+          "description": "timeout is the per-service TTL in seconds. See Service.timeout."
         }
       }
     },
@@ -554,6 +564,11 @@
         "auth_scheme": {
           "$ref": "#/definitions/adminrpcAuthScheme",
           "description": "auth_scheme specifies which payment auth scheme(s) are used for this\nservice. Defaults to AUTH_SCHEME_L402 for backwards compatibility."
+        },
+        "timeout": {
+          "type": "string",
+          "format": "int64",
+          "description": "timeout is the per-service TTL in seconds. When non-zero, the L402 mint\nwill include a _valid_until caveat so macaroons expire after this many\nseconds. A value of 0 means no expiry (no _valid_until caveat minted)."
         }
       }
     },

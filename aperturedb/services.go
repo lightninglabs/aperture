@@ -74,6 +74,7 @@ type ServiceParams struct {
 	Auth       string
 	AuthScheme string
 	Price      int64
+	Timeout    int64
 }
 
 // UpsertService inserts or updates a service configuration.
@@ -92,6 +93,7 @@ func (s *ServicesStore) UpsertService(ctx context.Context,
 			Price:      params.Price,
 			Auth:       params.Auth,
 			AuthScheme: params.AuthScheme,
+			Timeout:    params.Timeout,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		})

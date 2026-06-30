@@ -2,6 +2,7 @@ package aperture
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/lightninglabs/aperture/l402"
@@ -9,10 +10,10 @@ import (
 	"github.com/lightninglabs/aperture/proxy"
 )
 
-// staticServiceLimiter provides static restrictions for services.
-//
-// TODO(wilmer): use etcd instead.
+// staticServiceLimiter provides live-updatable restrictions for services. Its
+// maps are rebuilt atomically via refresh whenever the service list changes.
 type staticServiceLimiter struct {
+	mu           sync.RWMutex
 	capabilities map[l402.Service]l402.Caveat
 	constraints  map[l402.Service][]l402.Caveat
 	timeouts     map[l402.Service]int64
@@ -27,9 +28,17 @@ var _ mint.ServiceLimiter = (*staticServiceLimiter)(nil)
 func newStaticServiceLimiter(
 	proxyServices []*proxy.Service) *staticServiceLimiter {
 
-	capabilities := make(map[l402.Service]l402.Caveat)
-	constraints := make(map[l402.Service][]l402.Caveat)
-	timeouts := make(map[l402.Service]int64)
+	l := &staticServiceLimiter{}
+	l.refresh(proxyServices)
+	return l
+}
+
+// refresh rebuilds all three service maps atomically from the given service
+// list. It is safe to call concurrently with the Service* read methods.
+func (l *staticServiceLimiter) refresh(proxyServices []*proxy.Service) {
+	caps := make(map[l402.Service]l402.Caveat)
+	cons := make(map[l402.Service][]l402.Caveat)
+	tos := make(map[l402.Service]int64)
 
 	for _, proxyService := range proxyServices {
 		s := l402.Service{
@@ -39,29 +48,32 @@ func newStaticServiceLimiter(
 		}
 
 		if proxyService.Timeout > 0 {
-			timeouts[s] = proxyService.Timeout
+			tos[s] = proxyService.Timeout
 		}
 
-		capabilities[s] = l402.NewCapabilitiesCaveat(
+		caps[s] = l402.NewCapabilitiesCaveat(
 			proxyService.Name, proxyService.Capabilities,
 		)
 		for cond, value := range proxyService.Constraints {
 			caveat := l402.Caveat{Condition: cond, Value: value}
-			constraints[s] = append(constraints[s], caveat)
+			cons[s] = append(cons[s], caveat)
 		}
 	}
 
-	return &staticServiceLimiter{
-		capabilities: capabilities,
-		constraints:  constraints,
-		timeouts:     timeouts,
-	}
+	l.mu.Lock()
+	l.capabilities = caps
+	l.constraints = cons
+	l.timeouts = tos
+	l.mu.Unlock()
 }
 
 // ServiceCapabilities returns the capabilities caveats for each service. This
 // determines which capabilities of each service can be accessed.
 func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 	services ...l402.Service) ([]l402.Caveat, error) {
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
@@ -80,6 +92,9 @@ func (l *staticServiceLimiter) ServiceCapabilities(ctx context.Context,
 func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
 	services ...l402.Service) ([]l402.Caveat, error) {
 
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
 		constraints, ok := l.constraints[service]
@@ -96,6 +111,9 @@ func (l *staticServiceLimiter) ServiceConstraints(ctx context.Context,
 // an expiration time for service access if enabled.
 func (l *staticServiceLimiter) ServiceTimeouts(ctx context.Context,
 	services ...l402.Service) ([]l402.Caveat, error) {
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {

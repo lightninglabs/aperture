@@ -70,4 +70,5 @@ type Service struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	AuthScheme string
+	Timeout    int64
 }

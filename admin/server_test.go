@@ -302,6 +302,115 @@ func TestUpdateServiceRejectsInvalidAuth(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid freebie count")
 }
 
+func TestCreateServiceWithTimeout(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer()
+
+	svc, err := s.CreateService(context.Background(),
+		&adminrpc.CreateServiceRequest{
+			Name:       "timed-svc",
+			Address:    "localhost:9999",
+			PathRegexp: "^/api/timed/.*",
+			Price:      100,
+			Timeout:    60,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(60), svc.Timeout)
+
+	// Verify timeout is returned by ListServices.
+	resp, err := s.ListServices(
+		context.Background(), &adminrpc.ListServicesRequest{},
+	)
+	require.NoError(t, err)
+	var found *adminrpc.Service
+	for _, s := range resp.Services {
+		if s.Name == "timed-svc" {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found)
+	require.Equal(t, int64(60), found.Timeout)
+}
+
+func TestUpdateServiceTimeout(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer()
+
+	timeout := int64(120)
+	svc, err := s.UpdateService(context.Background(),
+		&adminrpc.UpdateServiceRequest{
+			Name:    "test-svc",
+			Timeout: &timeout,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(120), svc.Timeout)
+}
+
+func TestUpdateServiceCanSetTimeoutToZero(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer()
+
+	// First set a non-zero timeout.
+	timeout := int64(60)
+	_, err := s.UpdateService(context.Background(),
+		&adminrpc.UpdateServiceRequest{
+			Name:    "test-svc",
+			Timeout: &timeout,
+		},
+	)
+	require.NoError(t, err)
+
+	// Now reset to 0 (no expiry) via optional field.
+	zero := int64(0)
+	svc, err := s.UpdateService(context.Background(),
+		&adminrpc.UpdateServiceRequest{
+			Name:    "test-svc",
+			Timeout: &zero,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), svc.Timeout)
+}
+
+func TestCreateServiceRejectsNegativeTimeout(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer()
+
+	_, err := s.CreateService(context.Background(),
+		&adminrpc.CreateServiceRequest{
+			Name:       "bad-timeout-svc",
+			Address:    "localhost:1234",
+			PathRegexp: "^/api/bad/.*",
+			Timeout:    -1,
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timeout must be >= 0")
+}
+
+func TestUpdateServiceRejectsNegativeTimeout(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer()
+
+	timeout := int64(-5)
+	_, err := s.UpdateService(context.Background(),
+		&adminrpc.UpdateServiceRequest{
+			Name:    "test-svc",
+			Timeout: &timeout,
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timeout must be >= 0")
+}
+
 func TestDeleteService(t *testing.T) {
 	t.Parallel()
 
