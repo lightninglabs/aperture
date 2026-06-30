@@ -40,6 +40,7 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
@@ -415,16 +416,16 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		a.cfg.Authenticator.LndHost != "" {
 
 		authCfg := a.cfg.Authenticator
-		adminClient, err := lndclient.NewBasicClient(
+		adminConn, err := lndclient.NewBasicConn(
 			authCfg.LndHost, authCfg.TLSPath,
 			authCfg.MacDir, authCfg.Network,
 		)
 		if err != nil {
-			log.Warnf("MPP: Unable to create admin LND client "+
+			log.Warnf("MPP: Unable to create admin LND connection "+
 				"for session refunds: %v", err)
 		} else {
 			paymentSender = challenger.NewLndPaymentSender(
-				adminClient,
+				routerrpc.NewRouterClient(adminConn),
 			)
 		}
 	}
@@ -910,7 +911,6 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 	}
 
 	if cfg.Tor.V3 {
-		onionCfg.Type = tor.V3
 		addr, err := torController.AddOnion(onionCfg)
 		if err != nil {
 			return nil, err
