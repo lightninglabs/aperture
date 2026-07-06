@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/v2"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/freebie"
 	"github.com/lightninglabs/aperture/pricer"

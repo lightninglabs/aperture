@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/v2"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/neutrino/cache/lru"
