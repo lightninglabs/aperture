@@ -303,7 +303,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r, resourceName, price)
+			p.handlePaymentRequired(w, r, target, resourceName, price)
+			return
+		}
+
+		// For metered services, consult the pricer on every
+		// authenticated request so prepaid balances are drawn down and
+		// exhausted tokens are challenged afresh.
+		var proceed bool
+		r, proceed = p.checkMeteredAccess(w, r, target, resourceName)
+		if !proceed {
 			return
 		}
 
@@ -356,7 +365,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				p.handlePaymentRequired(
-					w, r, resourceName, target.Price,
+					w, r, target, resourceName, price,
 				)
 				return
 			}
@@ -461,6 +470,11 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 					)
 				}
 			}
+
+			// For metered requests, observe the response body so
+			// the resulting usage is reported to the pricer once
+			// the response completes.
+			attachUsageObserver(res)
 
 			return nil
 		},
@@ -624,13 +638,28 @@ func addCorsHeaders(header http.Header) {
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
-	serviceName string, servicePrice int64) {
+	target *Service, serviceName string, servicePrice int64) {
 
 	header, err := p.authenticator.FreshChallengeHeader(
 		serviceName, servicePrice,
 	)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)
+		sendDirectResponse(
+			w, r, http.StatusInternalServerError,
+			"challenge failure",
+		)
+		return
+	}
+
+	// For metered services, the pricer must learn about the minted token
+	// before the challenge goes out: once the client pays, the pricer is
+	// the one honoring the purchased balance. If it cannot be notified,
+	// the challenge must not be sent, as the client would pay for a
+	// bundle the pricer will not honor.
+	if err := notifyChallengeMinted(r, target, header, servicePrice); err != nil {
+		log.Errorf("Error notifying pricer of minted challenge: %v",
+			err)
 		sendDirectResponse(
 			w, r, http.StatusInternalServerError,
 			"challenge failure",

@@ -370,6 +370,14 @@ func prepareServices(services []*Service) error {
 				len(service.RateLimits))
 		}
 
+		// Validate the dynamic pricer configuration, which also catches
+		// a metered-but-disabled misconfiguration that would silently
+		// turn metering off.
+		if err := service.DynamicPrice.Validate(); err != nil {
+			return fmt.Errorf("service %s dynamic price config: %w",
+				service.Name, err)
+		}
+
 		// If dynamic prices are enabled then use the provided
 		// DynamicPrice options to initialise a gRPC backed
 		// pricer client.
