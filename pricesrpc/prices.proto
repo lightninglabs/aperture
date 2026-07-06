@@ -6,6 +6,33 @@ option go_package = "github.com/lightninglabs/aperture/pricesrpc";
 
 service Prices {
     rpc GetPrice (GetPriceRequest) returns (GetPriceResponse);
+
+    /*
+    ChallengeMinted notifies the pricer that aperture minted a fresh L402
+    challenge for a metered service. The token ID identifies the macaroon
+    embedded in the challenge, and the price is the amount quoted by a
+    preceding GetPrice call. The pricer uses this to associate the token,
+    once paid, with the balance it purchased.
+    */
+    rpc ChallengeMinted (ChallengeMintedRequest)
+        returns (ChallengeMintedResponse);
+
+    /*
+    AuthorizeRequest is invoked for every authenticated request to a metered
+    service. The pricer decides whether the token still has balance left; if
+    not, aperture responds with a fresh 402 challenge at the returned price,
+    prompting the client to purchase a new bundle.
+    */
+    rpc AuthorizeRequest (AuthorizeRequestRequest)
+        returns (AuthorizeRequestResponse);
+
+    /*
+    ReportUsage is invoked once the response for an authorized request has
+    completed (or aborted). The pricer performs the cost analysis on the
+    captured response excerpt (for example the trailing usage object of an
+    SSE stream) and debits the token's balance.
+    */
+    rpc ReportUsage (ReportUsageRequest) returns (ReportUsageResponse);
 }
 
 message GetPriceRequest {
@@ -16,4 +43,91 @@ message GetPriceRequest {
 
 message GetPriceResponse {
     int64 price_sats = 1;
+}
+
+message ChallengeMintedRequest {
+    // The URL path of the request that triggered the challenge.
+    string path = 1;
+
+    // The full HTTP request serialized as text.
+    string http_request_text = 2;
+
+    // The hex-encoded L402 token ID of the minted macaroon.
+    string token_id = 3;
+
+    // The price in satoshis the challenge invoice was created for.
+    int64 price_sats = 4;
+
+    // The name of the aperture service the challenge was minted for.
+    string service_name = 5;
+}
+
+message ChallengeMintedResponse {
+}
+
+message AuthorizeRequestRequest {
+    // The URL path of the request.
+    string path = 1;
+
+    // The full HTTP request serialized as text.
+    string http_request_text = 2;
+
+    // The hex-encoded L402 token ID the request authenticated with.
+    string token_id = 3;
+
+    // The name of the aperture service the request is for.
+    string service_name = 4;
+}
+
+message AuthorizeRequestResponse {
+    // Whether the request is allowed to proceed to the backend.
+    bool allowed = 1;
+
+    // When not allowed, the price in satoshis for the fresh 402 challenge
+    // aperture should mint. If zero, aperture falls back to GetPrice.
+    int64 price_sats = 2;
+
+    // An optional human-readable reason for a denied request.
+    string reason = 3;
+}
+
+message ReportUsageRequest {
+    // The hex-encoded L402 token ID the request authenticated with.
+    string token_id = 1;
+
+    // The URL path of the request.
+    string path = 2;
+
+    // The name of the aperture service the request was for.
+    string service_name = 3;
+
+    // The HTTP status code the backend responded with.
+    int32 http_status = 4;
+
+    // The Content-Type of the backend response.
+    string content_type = 5;
+
+    // Whether the response body was read to completion. False indicates the
+    // stream was truncated, for example by a client disconnect.
+    bool complete = 6;
+
+    // A capped tail of the response body. For SSE streams this contains the
+    // trailing chunks, including any final usage object.
+    bytes response_tail = 7;
+
+    // The Content-Encoding the backend responded with. Metered requests strip
+    // the client's Accept-Encoding so the observed tail is always plaintext;
+    // a non-identity encoding here signals that the observer captured
+    // compressed bytes it could not parse, which is treated as an error
+    // condition worth alerting on.
+    string content_encoding = 8;
+}
+
+message ReportUsageResponse {
+    // The amount in satoshis debited from the token's balance as a result
+    // of this usage report. Informational.
+    int64 debited_sats = 1;
+
+    // The remaining balance of the token in satoshis. Informational.
+    int64 remaining_sats = 2;
 }

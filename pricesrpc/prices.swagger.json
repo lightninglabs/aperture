@@ -16,6 +16,72 @@
     "application/json"
   ],
   "paths": {
+    "/v1/aperture/authorize": {
+      "post": {
+        "summary": "AuthorizeRequest is invoked for every authenticated request to a metered\nservice. The pricer decides whether the token still has balance left; if\nnot, aperture responds with a fresh 402 challenge at the returned price,\nprompting the client to purchase a new bundle.",
+        "operationId": "Prices_AuthorizeRequest",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pricesrpcAuthorizeRequestResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pricesrpcAuthorizeRequestRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Prices"
+        ]
+      }
+    },
+    "/v1/aperture/challenge-minted": {
+      "post": {
+        "summary": "ChallengeMinted notifies the pricer that aperture minted a fresh L402\nchallenge for a metered service. The token ID identifies the macaroon\nembedded in the challenge, and the price is the amount quoted by a\npreceding GetPrice call. The pricer uses this to associate the token,\nonce paid, with the balance it purchased.",
+        "operationId": "Prices_ChallengeMinted",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pricesrpcChallengeMintedResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pricesrpcChallengeMintedRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Prices"
+        ]
+      }
+    },
     "/v1/aperture/price": {
       "post": {
         "operationId": "Prices_GetPrice",
@@ -47,9 +113,110 @@
           "Prices"
         ]
       }
+    },
+    "/v1/aperture/usage": {
+      "post": {
+        "summary": "ReportUsage is invoked once the response for an authorized request has\ncompleted (or aborted). The pricer performs the cost analysis on the\ncaptured response excerpt (for example the trailing usage object of an\nSSE stream) and debits the token's balance.",
+        "operationId": "Prices_ReportUsage",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pricesrpcReportUsageResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pricesrpcReportUsageRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Prices"
+        ]
+      }
     }
   },
   "definitions": {
+    "pricesrpcAuthorizeRequestRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The URL path of the request."
+        },
+        "http_request_text": {
+          "type": "string",
+          "description": "The full HTTP request serialized as text."
+        },
+        "token_id": {
+          "type": "string",
+          "description": "The hex-encoded L402 token ID the request authenticated with."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The name of the aperture service the request is for."
+        }
+      }
+    },
+    "pricesrpcAuthorizeRequestResponse": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "boolean",
+          "description": "Whether the request is allowed to proceed to the backend."
+        },
+        "price_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "When not allowed, the price in satoshis for the fresh 402 challenge\naperture should mint. If zero, aperture falls back to GetPrice."
+        },
+        "reason": {
+          "type": "string",
+          "description": "An optional human-readable reason for a denied request."
+        }
+      }
+    },
+    "pricesrpcChallengeMintedRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The URL path of the request that triggered the challenge."
+        },
+        "http_request_text": {
+          "type": "string",
+          "description": "The full HTTP request serialized as text."
+        },
+        "token_id": {
+          "type": "string",
+          "description": "The hex-encoded L402 token ID of the minted macaroon."
+        },
+        "price_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "The price in satoshis the challenge invoice was created for."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The name of the aperture service the challenge was minted for."
+        }
+      }
+    },
+    "pricesrpcChallengeMintedResponse": {
+      "type": "object"
+    },
     "pricesrpcGetPriceRequest": {
       "type": "object",
       "properties": {
@@ -67,6 +234,60 @@
         "price_sats": {
           "type": "string",
           "format": "int64"
+        }
+      }
+    },
+    "pricesrpcReportUsageRequest": {
+      "type": "object",
+      "properties": {
+        "token_id": {
+          "type": "string",
+          "description": "The hex-encoded L402 token ID the request authenticated with."
+        },
+        "path": {
+          "type": "string",
+          "description": "The URL path of the request."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The name of the aperture service the request was for."
+        },
+        "http_status": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The HTTP status code the backend responded with."
+        },
+        "content_type": {
+          "type": "string",
+          "description": "The Content-Type of the backend response."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "Whether the response body was read to completion. False indicates the\nstream was truncated, for example by a client disconnect."
+        },
+        "response_tail": {
+          "type": "string",
+          "format": "byte",
+          "description": "A capped tail of the response body. For SSE streams this contains the\ntrailing chunks, including any final usage object."
+        },
+        "content_encoding": {
+          "type": "string",
+          "description": "The Content-Encoding the backend responded with. Metered requests strip\nthe client's Accept-Encoding so the observed tail is always plaintext;\na non-identity encoding here signals that the observer captured\ncompressed bytes it could not parse, which is treated as an error\ncondition worth alerting on."
+        }
+      }
+    },
+    "pricesrpcReportUsageResponse": {
+      "type": "object",
+      "properties": {
+        "debited_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "The amount in satoshis debited from the token's balance as a result\nof this usage report. Informational."
+        },
+        "remaining_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "The remaining balance of the token in satoshis. Informational."
         }
       }
     },
