@@ -40,7 +40,7 @@ require (
 	go.etcd.io/etcd/client/v3 v3.5.12
 	go.etcd.io/etcd/server/v3 v3.5.12
 	golang.org/x/crypto v0.52.0
-	golang.org/x/net v0.54.0
+	golang.org/x/net v0.55.0
 	golang.org/x/term v0.43.0
 	golang.org/x/time v0.11.0
 	google.golang.org/grpc v1.79.3
