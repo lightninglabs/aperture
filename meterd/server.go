@@ -43,7 +43,8 @@ type Server struct {
 	pricesrpc.UnimplementedPricesServer
 
 	cfg   *Config
-	store *store
+	store Store
+	rates RateSource
 
 	grpcServer *grpc.Server
 
@@ -51,20 +52,64 @@ type Server struct {
 	wg   sync.WaitGroup
 }
 
+// serverOptions holds the pluggable dependencies of a Server that an
+// embedder can override.
+type serverOptions struct {
+	store Store
+	rates RateSource
+}
+
+// ServerOption customizes a Server beyond its config. The options exist so
+// that a daemon building on meterd as a library can swap in its own storage
+// and pricing while reusing the metering logic unchanged.
+type ServerOption func(*serverOptions)
+
+// WithStore makes the server track bundles in the given store instead of the
+// default JSON file store.
+func WithStore(store Store) ServerOption {
+	return func(o *serverOptions) {
+		o.store = store
+	}
+}
+
+// WithRateSource makes the server price with the given rate source instead
+// of the static table built from the config's models map.
+func WithRateSource(rates RateSource) ServerOption {
+	return func(o *serverOptions) {
+		o.rates = rates
+	}
+}
+
 // NewServer creates a Server from the given configuration, loading any
-// persisted bundle state.
-func NewServer(cfg *Config) (*Server, error) {
-	st, err := newStoreWithConfig(storeConfig{
-		statePath:       cfg.StatePath,
-		maxUnauthorized: cfg.MaxUnauthorizedBundles,
-	})
-	if err != nil {
-		return nil, err
+// persisted bundle state. Without options, bundles live in the JSON file
+// store and prices come from the config's static models map.
+func NewServer(cfg *Config, opts ...ServerOption) (*Server, error) {
+	options := &serverOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	st := options.store
+	if st == nil {
+		var err error
+		st, err = NewJSONStore(JSONStoreConfig{
+			StatePath:       cfg.StatePath,
+			MaxUnauthorized: cfg.MaxUnauthorizedBundles,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rates := options.rates
+	if rates == nil {
+		rates = newStaticRates(cfg)
 	}
 
 	return &Server{
 		cfg:   cfg,
 		store: st,
+		rates: rates,
 		quit:  make(chan struct{}),
 	}, nil
 }
@@ -128,7 +173,7 @@ func (s *Server) Stop() {
 	s.wg.Wait()
 
 	// Drain any state still pending after the workers have stopped.
-	if err := s.store.flush(); err != nil {
+	if err := s.store.Flush(); err != nil {
 		log.Errorf("Unable to flush state on shutdown: %v", err)
 	}
 }
@@ -144,7 +189,7 @@ func (s *Server) flusher() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := s.store.flush(); err != nil {
+			if err := s.store.Flush(); err != nil {
 				log.Errorf("Unable to flush state: %v", err)
 			}
 
@@ -166,7 +211,7 @@ func (s *Server) janitor() {
 	for {
 		select {
 		case <-ticker.C:
-			if n := s.store.expireStale(ttl); n > 0 {
+			if n := s.store.ExpireStale(ttl); n > 0 {
 				log.Infof("Expired %d stale bundle(s) never "+
 					"used within %v", n, ttl)
 			}
@@ -185,25 +230,6 @@ func (s *Server) unauthorizedBundleTTL() time.Duration {
 	}
 
 	return DefaultUnauthorizedBundleTTL
-}
-
-// resolveModel maps a possibly empty or unknown model identifier to a
-// configured model and its rates, falling back to the default model.
-func (s *Server) resolveModel(model string) (string, *ModelConfig, error) {
-	if model != "" {
-		if rates, ok := s.cfg.Models[model]; ok {
-			return model, rates, nil
-		}
-	}
-
-	if s.cfg.DefaultModel != "" {
-		if rates, ok := s.cfg.Models[s.cfg.DefaultModel]; ok {
-			return s.cfg.DefaultModel, rates, nil
-		}
-	}
-
-	return "", nil, fmt.Errorf("unknown model %q and no default model "+
-		"configured", model)
 }
 
 // bundleQuoteSats computes the flat price in satoshis of a full token
@@ -226,17 +252,18 @@ func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
 func (s *Server) GetPrice(_ context.Context,
 	req *pricesrpc.GetPriceRequest) (*pricesrpc.GetPriceResponse, error) {
 
-	model, rates, err := s.resolveModel(
+	model, rates, err := s.rates.ResolveModel(
 		modelFromRequestText(req.HttpRequestText),
 	)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	price := bundleQuoteSats(s.cfg.BundleTokens, rates)
+	bundleTokens := s.rates.BundleTokens(model)
+	price := bundleQuoteSats(bundleTokens, rates)
 
 	log.Debugf("Quoted %d sats for a bundle of %d tokens of model %s "+
-		"(path %s)", price, s.cfg.BundleTokens, model, req.Path)
+		"(path %s)", price, bundleTokens, model, req.Path)
 
 	return &pricesrpc.GetPriceResponse{PriceSats: price}, nil
 }
@@ -248,15 +275,16 @@ func (s *Server) ChallengeMinted(_ context.Context,
 	req *pricesrpc.ChallengeMintedRequest) (
 	*pricesrpc.ChallengeMintedResponse, error) {
 
-	model, _, err := s.resolveModel(
+	model, _, err := s.rates.ResolveModel(
 		modelFromRequestText(req.HttpRequestText),
 	)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	booked, err := s.store.book(
-		req.TokenId, model, s.cfg.BundleTokens, req.PriceSats,
+	bundleTokens := s.rates.BundleTokens(model)
+	booked, err := s.store.Book(
+		req.TokenId, model, bundleTokens, req.PriceSats,
 	)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unable to book "+
@@ -265,7 +293,7 @@ func (s *Server) ChallengeMinted(_ context.Context,
 
 	if booked {
 		log.Infof("Booked bundle of %d tokens of model %s for %d "+
-			"sats (token %s)", s.cfg.BundleTokens, model,
+			"sats (token %s)", bundleTokens, model,
 			req.PriceSats, req.TokenId)
 	}
 
@@ -286,9 +314,9 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	// A request against a known bundle whose model differs from the one the
 	// bundle was booked with is denied, so a cheap-model bundle cannot be
 	// spent on a more expensive model. The booked model is authoritative.
-	if booked, ok := s.store.get(req.TokenId); ok {
+	if booked, ok := s.store.Get(req.TokenId); ok {
 		requested := modelFromRequestText(req.HttpRequestText)
-		resolved, _, err := s.resolveModel(requested)
+		resolved, _, err := s.rates.ResolveModel(requested)
 		if err == nil && resolved != booked.Model {
 			// Quote a bundle for the model the client actually
 			// asked for, so the fresh challenge lets them buy what
@@ -306,7 +334,7 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	// overdraw a near-empty bundle before their usage is reported.
 	estimate := s.requestEstimate(req.HttpRequestText)
 
-	remaining, found, err := s.store.authorize(req.TokenId, estimate)
+	remaining, found, err := s.store.Authorize(req.TokenId, estimate)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unable to update "+
 			"bundle state: %v", err)
@@ -326,7 +354,7 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	var model string
 	if found {
 		reason = "token bundle exhausted"
-		if b, ok := s.store.get(req.TokenId); ok {
+		if b, ok := s.store.Get(req.TokenId); ok {
 			model = b.Model
 		}
 	}
@@ -345,8 +373,10 @@ func (s *Server) denyAuthorization(tokenID, model,
 	reason string) *pricesrpc.AuthorizeRequestResponse {
 
 	var price int64
-	if _, rates, err := s.resolveModel(model); err == nil {
-		price = bundleQuoteSats(s.cfg.BundleTokens, rates)
+	if canonical, rates, err := s.rates.ResolveModel(model); err == nil {
+		price = bundleQuoteSats(
+			s.rates.BundleTokens(canonical), rates,
+		)
 	}
 
 	log.Debugf("Denied request for token %s: %s", tokenID, reason)
@@ -430,7 +460,7 @@ func (s *Server) ReportUsage(_ context.Context,
 	// instead. This is approximate, but the reservation is only a bound on
 	// concurrent overdraw, not an accounting entry, so an imperfect release
 	// merely widens or narrows that bound slightly.
-	after, ok, err := s.store.debit(
+	after, ok, err := s.store.Debit(
 		req.TokenId, debitTokens, s.cfg.EstimatedTokens,
 	)
 	if err != nil {
@@ -444,7 +474,7 @@ func (s *Server) ReportUsage(_ context.Context,
 		return &pricesrpc.ReportUsageResponse{}, nil
 	}
 
-	_, rates, err := s.resolveModel(after.Model)
+	_, rates, err := s.rates.ResolveModel(after.Model)
 	if err != nil {
 		log.Warnf("No rates for booked model %s of token %s, "+
 			"reporting zero amounts", after.Model, req.TokenId)

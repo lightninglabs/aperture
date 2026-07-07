@@ -10,7 +10,7 @@ import (
 
 // bundle tracks the prepaid token balance purchased with a single L402
 // payment.
-type bundle struct {
+type Bundle struct {
 	// Model is the configured model the bundle was booked for.
 	Model string `json:"model"`
 
@@ -37,33 +37,33 @@ type bundle struct {
 
 // storeState is the JSON serialization of the store.
 type storeState struct {
-	Bundles map[string]*bundle `json:"bundles"`
+	Bundles map[string]*Bundle `json:"bundles"`
 }
 
-// storeConfig holds the tunables that govern persistence coalescing and the
+// JSONStoreConfig holds the tunables that govern persistence coalescing and the
 // bound on un-paid bundles.
-type storeConfig struct {
+type JSONStoreConfig struct {
 	// statePath is the path to the JSON file bundle balances are persisted
 	// to. Persistence is disabled when empty.
-	statePath string
+	StatePath string
 
 	// maxUnauthorized is the maximum number of never-authorized (un-paid)
 	// bundles retained at once. When a fresh booking would exceed the cap,
 	// the oldest un-authorized bundle is evicted. A non-positive value
 	// disables the bound.
-	maxUnauthorized int
+	MaxUnauthorized int
 }
 
 // store keeps the bundle balances, keyed by the hex-encoded L402 token ID, and
 // optionally persists them to a JSON file. Persistence is coalesced: mutations
 // set a dirty flag that a periodic flush and shutdown drain to disk, rather
 // than rewriting the whole file synchronously on every change.
-type store struct {
+type JSONStore struct {
 	mtx sync.Mutex
 
-	bundles map[string]*bundle
+	bundles map[string]*Bundle
 
-	cfg storeConfig
+	cfg JSONStoreConfig
 
 	// dirty is set when in-memory state has diverged from the persisted
 	// file and a flush is pending.
@@ -72,28 +72,28 @@ type store struct {
 
 // newStore creates a store, loading existing state from the configured state
 // path when the file exists. Persistence is disabled when the path is empty.
-func newStore(statePath string) (*store, error) {
-	return newStoreWithConfig(storeConfig{statePath: statePath})
+func newStore(statePath string) (*JSONStore, error) {
+	return NewJSONStore(JSONStoreConfig{StatePath: statePath})
 }
 
-// newStoreWithConfig creates a store from the given configuration, loading any
+// NewJSONStore creates a store from the given configuration, loading any
 // persisted bundle state.
-func newStoreWithConfig(cfg storeConfig) (*store, error) {
-	s := &store{
-		bundles: make(map[string]*bundle),
+func NewJSONStore(cfg JSONStoreConfig) (*JSONStore, error) {
+	s := &JSONStore{
+		bundles: make(map[string]*Bundle),
 		cfg:     cfg,
 	}
-	if cfg.statePath == "" {
+	if cfg.StatePath == "" {
 		return s, nil
 	}
 
-	b, err := os.ReadFile(cfg.statePath)
+	b, err := os.ReadFile(cfg.StatePath)
 	switch {
 	case err == nil:
 		var state storeState
 		if err := json.Unmarshal(b, &state); err != nil {
 			return nil, fmt.Errorf("unable to parse state file "+
-				"%s: %w", cfg.statePath, err)
+				"%s: %w", cfg.StatePath, err)
 		}
 
 		if state.Bundles != nil {
@@ -105,7 +105,7 @@ func newStoreWithConfig(cfg storeConfig) (*store, error) {
 
 	default:
 		return nil, fmt.Errorf("unable to read state file %s: %w",
-			cfg.statePath, err)
+			cfg.StatePath, err)
 	}
 
 	return s, nil
@@ -114,8 +114,8 @@ func newStoreWithConfig(cfg storeConfig) (*store, error) {
 // persistLocked writes the current state to the state file and clears the
 // dirty flag. The caller must hold the mutex. It is a no-op when persistence
 // is disabled or no state is pending.
-func (s *store) persistLocked() error {
-	if s.cfg.statePath == "" {
+func (s *JSONStore) persistLocked() error {
+	if s.cfg.StatePath == "" {
 		s.dirty = false
 		return nil
 	}
@@ -127,12 +127,12 @@ func (s *store) persistLocked() error {
 
 	// Write to a temporary file and rename it into place, so a crash
 	// mid-write cannot corrupt the previous state.
-	tmpPath := s.cfg.statePath + ".tmp"
+	tmpPath := s.cfg.StatePath + ".tmp"
 	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
 		return err
 	}
 
-	if err := os.Rename(tmpPath, s.cfg.statePath); err != nil {
+	if err := os.Rename(tmpPath, s.cfg.StatePath); err != nil {
 		return err
 	}
 
@@ -141,9 +141,9 @@ func (s *store) persistLocked() error {
 	return nil
 }
 
-// flush persists the current state if it has diverged from the file since the
+// Flush persists the current state if it has diverged from the file since the
 // last flush. It is safe to call on an unchanged store.
-func (s *store) flush() error {
+func (s *JSONStore) Flush() error {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
@@ -158,8 +158,8 @@ func (s *store) flush() error {
 // maxUnauthorized of them remain, evicting the oldest first. The caller must
 // hold the mutex. It bounds the state an unauthenticated challenge-minting
 // spammer can accumulate. It returns the number of bundles evicted.
-func (s *store) evictOldestUnauthorizedLocked() int {
-	cap := s.cfg.maxUnauthorized
+func (s *JSONStore) evictOldestUnauthorizedLocked() int {
+	cap := s.cfg.MaxUnauthorized
 	if cap <= 0 {
 		return 0
 	}
@@ -204,12 +204,12 @@ func (s *store) evictOldestUnauthorizedLocked() int {
 	return evicted
 }
 
-// book records a fresh bundle for the given token ID. Booking is idempotent: a
+// Book records a fresh bundle for the given token ID. Booking is idempotent: a
 // token that already has a bundle is left untouched. The boolean return value
 // indicates whether a new bundle was created. Booking only marks the store
 // dirty rather than persisting synchronously, so a burst of un-paid challenge
 // mints cannot amplify into a full-file rewrite per request.
-func (s *store) book(tokenID, model string, tokens, priceSats int64) (bool,
+func (s *JSONStore) Book(tokenID, model string, tokens, priceSats int64) (bool,
 	error) {
 
 	s.mtx.Lock()
@@ -219,7 +219,7 @@ func (s *store) book(tokenID, model string, tokens, priceSats int64) (bool,
 		return false, nil
 	}
 
-	s.bundles[tokenID] = &bundle{
+	s.bundles[tokenID] = &Bundle{
 		Model:           model,
 		PriceSats:       priceSats,
 		RemainingTokens: tokens,
@@ -230,7 +230,7 @@ func (s *store) book(tokenID, model string, tokens, priceSats int64) (bool,
 	// challenge-mint spam cannot grow the map without limit.
 	if evicted := s.evictOldestUnauthorizedLocked(); evicted > 0 {
 		log.Debugf("Evicted %d oldest un-authorized bundle(s) over "+
-			"the cap of %d", evicted, s.cfg.maxUnauthorized)
+			"the cap of %d", evicted, s.cfg.MaxUnauthorized)
 	}
 
 	s.dirty = true
@@ -238,13 +238,13 @@ func (s *store) book(tokenID, model string, tokens, priceSats int64) (bool,
 	return true, nil
 }
 
-// authorize marks the token's bundle as used and, when the request is going to
+// Authorize marks the token's bundle as used and, when the request is going to
 // be allowed, reserves the given estimated per-request cost against its balance
 // to bound concurrent overdraw. It returns the tokens available after existing
 // reservations (remaining minus the total reserved) and whether the token is
 // known. The estimate is not applied to the returned availability, so a single
 // request against a bundle with any positive balance is still authorized.
-func (s *store) authorize(tokenID string, estimate int64) (int64, bool, error) {
+func (s *JSONStore) Authorize(tokenID string, estimate int64) (int64, bool, error) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
@@ -272,20 +272,20 @@ func (s *store) authorize(tokenID string, estimate int64) (int64, bool, error) {
 	return available, true, nil
 }
 
-// get returns a copy of the token's bundle.
-func (s *store) get(tokenID string) (bundle, bool) {
+// Get returns a copy of the token's bundle.
+func (s *JSONStore) Get(tokenID string) (Bundle, bool) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
 	b, ok := s.bundles[tokenID]
 	if !ok {
-		return bundle{}, false
+		return Bundle{}, false
 	}
 
 	return *b, true
 }
 
-// debit subtracts the actual tokens consumed from the token's balance,
+// Debit subtracts the actual tokens consumed from the token's balance,
 // clamping at zero, and releases the given reservation estimate taken at
 // authorization time. It returns a copy of the bundle after the debit and
 // whether the token is known. A real debit is flushed to disk immediately,
@@ -294,7 +294,7 @@ func (s *store) get(tokenID string) (bundle, bool) {
 // The proto does not correlate a report with the authorization that preceded
 // it, so the release is approximate: it subtracts the estimate the caller
 // passes, clamped at zero, rather than the exact amount this request reserved.
-func (s *store) debit(tokenID string, tokens, releaseEstimate int64) (bundle,
+func (s *JSONStore) Debit(tokenID string, tokens, releaseEstimate int64) (Bundle,
 	bool, error) {
 
 	s.mtx.Lock()
@@ -302,7 +302,7 @@ func (s *store) debit(tokenID string, tokens, releaseEstimate int64) (bundle,
 
 	b, ok := s.bundles[tokenID]
 	if !ok {
-		return bundle{}, false, nil
+		return Bundle{}, false, nil
 	}
 
 	// Release the reservation taken on authorization.
@@ -330,9 +330,9 @@ func (s *store) debit(tokenID string, tokens, releaseEstimate int64) (bundle,
 	return *b, true, err
 }
 
-// expireStale removes bundles that were never used by an authorized request
+// ExpireStale removes bundles that were never used by an authorized request
 // within the given TTL and returns the number of removed bundles.
-func (s *store) expireStale(ttl time.Duration) int {
+func (s *JSONStore) ExpireStale(ttl time.Duration) int {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
