@@ -227,6 +227,49 @@ func TestStoreUnauthorizedBundleCap(t *testing.T) {
 	require.LessOrEqual(t, unauthorized, 3)
 }
 
+// TestStoreEvictionAgeFloor verifies that never-authorized bundles younger
+// than the eviction age floor are immune to count-based eviction, so a
+// mint-spam burst cannot push out a just-paid bundle before its first
+// authorized request.
+func TestStoreEvictionAgeFloor(t *testing.T) {
+	t.Parallel()
+
+	s, err := NewJSONStore(JSONStoreConfig{
+		MaxUnauthorized: 2,
+		MinEvictionAge:  10 * time.Minute,
+	})
+	require.NoError(t, err)
+
+	// Four fresh un-paid bundles exceed the cap, but all are younger
+	// than the floor, so none is evicted.
+	for i := 0; i < 4; i++ {
+		_, err := s.Book(
+			fmt.Sprintf("fresh%d", i), "gpt-test", 1000, 1500,
+		)
+		require.NoError(t, err)
+	}
+	require.Len(t, s.bundles, 4)
+
+	// Age two of them past the floor. The next booking finds an excess
+	// of three over the cap, but only the two aged bundles are
+	// candidates, so exactly those are evicted.
+	old := time.Now().Add(-time.Hour)
+	s.bundles["fresh0"].CreatedAt = old
+	s.bundles["fresh1"].CreatedAt = old.Add(time.Second)
+
+	_, err = s.Book("fresh4", "gpt-test", 1000, 1500)
+	require.NoError(t, err)
+
+	_, ok := s.Get("fresh0")
+	require.False(t, ok)
+	_, ok = s.Get("fresh1")
+	require.False(t, ok)
+	_, ok = s.Get("fresh2")
+	require.True(t, ok)
+	_, ok = s.Get("fresh4")
+	require.True(t, ok)
+}
+
 // TestStoreReservation verifies that the per-request reservation bounds how far
 // concurrent authorizations can overdraw a near-empty bundle.
 func TestStoreReservation(t *testing.T) {

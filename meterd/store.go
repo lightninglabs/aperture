@@ -43,15 +43,25 @@ type storeState struct {
 // JSONStoreConfig holds the tunables that govern persistence coalescing and the
 // bound on un-paid bundles.
 type JSONStoreConfig struct {
-	// statePath is the path to the JSON file bundle balances are persisted
+	// StatePath is the path to the JSON file bundle balances are persisted
 	// to. Persistence is disabled when empty.
 	StatePath string
 
-	// maxUnauthorized is the maximum number of never-authorized (un-paid)
+	// MaxUnauthorized is the maximum number of never-authorized (un-paid)
 	// bundles retained at once. When a fresh booking would exceed the cap,
 	// the oldest un-authorized bundle is evicted. A non-positive value
 	// disables the bound.
 	MaxUnauthorized int
+
+	// MinEvictionAge is the age below which a never-authorized bundle is
+	// immune to count-based eviction. Payment happens at the proxy, so a
+	// just-paid bundle is indistinguishable from mint spam until its
+	// first authorized request; the age floor keeps a spam burst from
+	// evicting it in that window. The janitor still reaps bundles older
+	// than the TTL, so with the floor set to the TTL the worst-case
+	// retained state under spam is the mint rate times the TTL. A
+	// non-positive value disables the floor.
+	MinEvictionAge time.Duration
 }
 
 // store keeps the bundle balances, keyed by the hex-encoded L402 token ID, and
@@ -155,32 +165,55 @@ func (s *JSONStore) Flush() error {
 }
 
 // evictOldestUnauthorizedLocked removes never-authorized bundles until at most
-// maxUnauthorized of them remain, evicting the oldest first. The caller must
-// hold the mutex. It bounds the state an unauthenticated challenge-minting
-// spammer can accumulate. It returns the number of bundles evicted.
+// maxUnauthorized of them remain, evicting the oldest first. Bundles younger
+// than the configured eviction age floor are immune, so a mint-spam burst
+// cannot push out a just-paid bundle before its first authorized request. The
+// caller must hold the mutex. It returns the number of bundles evicted.
 func (s *JSONStore) evictOldestUnauthorizedLocked() int {
 	cap := s.cfg.MaxUnauthorized
 	if cap <= 0 {
 		return 0
 	}
 
-	// Collect the currently un-authorized bundles.
+	var protectCutoff time.Time
+	if s.cfg.MinEvictionAge > 0 {
+		protectCutoff = time.Now().Add(-s.cfg.MinEvictionAge)
+	}
+
+	// Count all un-authorized bundles against the cap, but only the ones
+	// past the age floor are candidates for eviction.
 	type entry struct {
 		tokenID string
 		created time.Time
 	}
-	var unauthorized []entry
+	var (
+		total        int
+		unauthorized []entry
+	)
 	for tokenID, b := range s.bundles {
-		if !b.Authorized {
-			unauthorized = append(unauthorized, entry{
-				tokenID: tokenID,
-				created: b.CreatedAt,
-			})
+		if b.Authorized {
+			continue
 		}
+		total++
+
+		if !protectCutoff.IsZero() &&
+			b.CreatedAt.After(protectCutoff) {
+
+			continue
+		}
+
+		unauthorized = append(unauthorized, entry{
+			tokenID: tokenID,
+			created: b.CreatedAt,
+		})
 	}
 
-	if len(unauthorized) <= cap {
+	excess := total - cap
+	if excess <= 0 {
 		return 0
+	}
+	if excess > len(unauthorized) {
+		excess = len(unauthorized)
 	}
 
 	// Sort oldest first, so the oldest un-paid bundles are evicted.
@@ -196,7 +229,7 @@ func (s *JSONStore) evictOldestUnauthorizedLocked() int {
 	}
 
 	var evicted int
-	for i := 0; i < len(unauthorized)-cap; i++ {
+	for i := 0; i < excess; i++ {
 		delete(s.bundles, unauthorized[i].tokenID)
 		evicted++
 	}

@@ -91,10 +91,19 @@ func NewServer(cfg *Config, opts ...ServerOption) (*Server, error) {
 
 	st := options.store
 	if st == nil {
+		// The eviction age floor matches the janitor's TTL: within it a
+		// paid-but-not-yet-used bundle is immune to count eviction, and
+		// beyond it the janitor reaps unauthorized bundles anyway.
+		minEvictionAge := cfg.UnauthorizedBundleTTL
+		if minEvictionAge <= 0 {
+			minEvictionAge = DefaultUnauthorizedBundleTTL
+		}
+
 		var err error
 		st, err = NewJSONStore(JSONStoreConfig{
 			StatePath:       cfg.StatePath,
 			MaxUnauthorized: cfg.MaxUnauthorizedBundles,
+			MinEvictionAge:  minEvictionAge,
 		})
 		if err != nil {
 			return nil, err
