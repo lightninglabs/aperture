@@ -137,6 +137,54 @@ func (m *Mint) MintL402(ctx context.Context,
 
 	// TODO(wilmer): remove invoice if any of the operations below fail?
 
+	// Include any restrictions that should be immediately applied to the
+	// L402.
+	var caveats []l402.Caveat
+	if len(services) > 0 {
+		caveats, err = m.caveatsForServices(ctx, services...)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	serviceName := ""
+	if len(services) > 0 {
+		serviceName = services[0].Name
+	}
+
+	return m.mintWithChallenge(
+		ctx, price, paymentRequest, paymentHash, serviceName, caveats,
+	)
+}
+
+// MintL402WithCaveats mints a new L402 committing to a fresh invoice for the
+// given price (in satoshis), attaching exactly the provided first-party caveats.
+// Unlike MintL402, the caveats are supplied directly by the caller rather than
+// derived from the configured ServiceLimiter. This lets callers such as the
+// discovery quote endpoint mint a credential for a client-chosen bundle while
+// reusing the same identifier, secret, and challenge machinery, so the result
+// is indistinguishable from a reactive challenge at verification time.
+func (m *Mint) MintL402WithCaveats(ctx context.Context, price int64,
+	serviceName string, caveats ...l402.Caveat) (*macaroon.Macaroon, string,
+	error) {
+
+	paymentRequest, paymentHash, err := m.cfg.Challenger.NewChallenge(price)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return m.mintWithChallenge(
+		ctx, price, paymentRequest, paymentHash, serviceName, caveats,
+	)
+}
+
+// mintWithChallenge mints an L402 around an already-obtained challenge (payment
+// request + payment hash), attaching the given caveats. It is the shared core
+// of MintL402 and MintL402WithCaveats.
+func (m *Mint) mintWithChallenge(ctx context.Context, price int64,
+	paymentRequest string, paymentHash lntypes.Hash, serviceName string,
+	caveats []l402.Caveat) (*macaroon.Macaroon, string, error) {
+
 	// We can then proceed to mint the L402 with a unique identifier that is
 	// mapped to a unique secret.
 	id, err := createUniqueIdentifier(paymentHash)
@@ -157,18 +205,6 @@ func (m *Mint) MintL402(ctx context.Context,
 		return nil, "", err
 	}
 
-	// Include any restrictions that should be immediately applied to the
-	// L402.
-	var caveats []l402.Caveat
-	if len(services) > 0 {
-		var err error
-		caveats, err = m.caveatsForServices(ctx, services...)
-		if err != nil {
-			// Attempt to revoke the secret to save space.
-			_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
-			return nil, "", err
-		}
-	}
 	if err := l402.AddFirstPartyCaveats(mac, caveats...); err != nil {
 		// Attempt to revoke the secret to save space.
 		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
@@ -186,11 +222,6 @@ func (m *Mint) MintL402(ctx context.Context,
 			log.Errorf("Unable to decode minted macaroon identifier "+
 				"for transaction logging: %v", idErr)
 		} else {
-			serviceName := ""
-			if len(services) > 0 {
-				serviceName = services[0].Name
-			}
-
 			// Compute the identifier hash to link the
 			// transaction to the secrets table.
 			macIDHash := sha256.Sum256(mac.Id())

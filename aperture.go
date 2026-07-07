@@ -31,6 +31,7 @@ import (
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/challenger"
+	"github.com/lightninglabs/aperture/discovery"
 	"github.com/lightninglabs/aperture/lnc"
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/proxy"
@@ -1751,11 +1752,38 @@ func createProxy(cfg *Config, services []*proxy.Service,
 		},
 	))
 
+	// Wire the L402 discovery endpoints (the free manifest and the quote
+	// endpoint) as priority local services so they bypass the 402 gate, the
+	// same way the admin and dashboard endpoints do. They are always on, and
+	// reuse the same minter as the reactive flow so quote credentials are
+	// indistinguishable at verification time.
+	discoveryServer := discovery.New(discovery.Config{
+		Services: func() []*proxy.Service { return services },
+		Minter:   minter,
+		Provider: discovery.Provider{Name: providerName(cfg)},
+	})
+	priorityServices := append(
+		[]proxy.LocalService{
+			discoveryServer.ManifestService(),
+			discoveryServer.QuoteService(),
+		},
+		adminPriorityServices...,
+	)
+
 	prxy, err := proxy.New(
 		authenticator, services, cfg.Blocklist,
-		adminPriorityServices, localServices...,
+		priorityServices, localServices...,
 	)
 	return prxy, proxyCleanup, err
+}
+
+// providerName derives a human-readable provider name for the discovery
+// manifest from the configuration.
+func providerName(cfg *Config) string {
+	if cfg.Authenticator != nil && cfg.Authenticator.MPPRealm != "" {
+		return cfg.Authenticator.MPPRealm
+	}
+	return cfg.ListenAddr
 }
 
 // createHashMailServer creates the gRPC server for the hash mail message
