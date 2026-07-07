@@ -132,6 +132,17 @@ func TestL402Authenticator(t *testing.T) {
 				result: true,
 			},
 			{
+				id: "valid auth header followed by unrelated value",
+				header: &http.Header{
+					l402.HeaderAuthorization: []string{
+						"L402 " + testMacBase64 + ":" +
+							testPreimage,
+						"Bearer unrelated",
+					},
+				},
+				result: true,
+			},
+			{
 				id: "valid macaroon metadata header",
 				header: &http.Header{
 					l402.HeaderMacaroonMD: []string{

@@ -60,6 +60,8 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 			if len(matches) != 4 {
 				continue
 			}
+
+			break
 		}
 
 		if len(matches) != 4 {
