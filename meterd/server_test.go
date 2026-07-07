@@ -567,29 +567,57 @@ func TestServerStartStop(t *testing.T) {
 	server.Stop()
 }
 
-// TestServerDefaultModelFallback verifies that requests with a missing or
-// unknown model are priced as the default model.
-func TestServerDefaultModelFallback(t *testing.T) {
+// TestServerModelResolution verifies that requests naming no model are
+// priced as the default model, while unknown models fail closed rather than
+// being quoted (and proxied) at another model's rate.
+func TestServerModelResolution(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	client := newTestClient(t, testConfig(""))
 
-	// An unknown model falls back to the default rates.
-	priceResp, err := client.GetPrice(ctx, &pricesrpc.GetPriceRequest{
+	// An unknown model is rejected outright.
+	_, err := client.GetPrice(ctx, &pricesrpc.GetPriceRequest{
 		Path:            "/v1/chat/completions",
 		HttpRequestText: chatRequestText("no-such-model"),
 	})
-	require.NoError(t, err)
-	require.EqualValues(t, 1500, priceResp.PriceSats)
+	require.ErrorContains(t, err, "unknown model")
 
-	// A request without any parseable body does too.
-	priceResp, err = client.GetPrice(ctx, &pricesrpc.GetPriceRequest{
+	// A request without any parseable body is priced as the default
+	// model.
+	priceResp, err := client.GetPrice(ctx, &pricesrpc.GetPriceRequest{
 		Path:            "/v1/chat/completions",
 		HttpRequestText: "GET / HTTP/1.1\r\nHost: x\r\n\r\n",
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 1500, priceResp.PriceSats)
+
+	// An authorized bundle denies a request naming a model the rate
+	// source does not know, instead of letting it ride the bundle
+	// upstream.
+	const tokenID = "f00d"
+	_, err = client.ChallengeMinted(ctx, &pricesrpc.ChallengeMintedRequest{
+		Path:            "/v1/chat/completions",
+		HttpRequestText: chatRequestText("gpt-test"),
+		TokenId:         tokenID,
+		PriceSats:       1500,
+		ServiceName:     "llm",
+	})
+	require.NoError(t, err)
+
+	authResp, err := client.AuthorizeRequest(
+		ctx, &pricesrpc.AuthorizeRequestRequest{
+			Path:            "/v1/chat/completions",
+			HttpRequestText: chatRequestText("no-such-model"),
+			TokenId:         tokenID,
+			ServiceName:     "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.False(t, authResp.Allowed)
+	require.Contains(t, authResp.Reason, "unknown request model")
+}
+
 // TestServerReservationEcho verifies that an allowed authorization carries
 // the reserved estimate and that echoing it back in the usage report
 // releases the exact reservation, so mismatched estimates leave no residue

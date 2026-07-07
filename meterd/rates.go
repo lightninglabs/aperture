@@ -8,8 +8,13 @@ import "fmt"
 // can supply a dynamic implementation instead, e.g. one refreshed from an
 // upstream provider's price list with a margin applied.
 type RateSource interface {
-	// ResolveModel maps a possibly empty or unknown model identifier to
-	// a canonical model name and its per-token rates.
+	// ResolveModel maps a model identifier to a canonical model name and
+	// its per-token rates. An empty identifier resolves to the default
+	// model. A non-empty identifier the source does not know MUST return
+	// an error rather than fall back: the server's model mismatch guard
+	// relies on unknown models failing resolution, otherwise a bundle
+	// bought for a cheap model could be spent on an upstream-hosted model
+	// the seller never priced.
 	ResolveModel(model string) (string, *ModelConfig, error)
 
 	// BundleTokens returns the number of tokens sold per bundle for the
@@ -31,8 +36,10 @@ func newStaticRates(cfg *Config) *staticRates {
 // A compile-time check that staticRates satisfies RateSource.
 var _ RateSource = (*staticRates)(nil)
 
-// ResolveModel maps a possibly empty or unknown model identifier to a
-// configured model and its rates, falling back to the default model.
+// ResolveModel maps a model identifier to a configured model and its
+// rates. Only a missing (empty) model falls back to the default model; a
+// non-empty identifier that is not in the models map fails closed, so a
+// model the seller never priced is neither quoted nor served.
 func (r *staticRates) ResolveModel(model string) (string, *ModelConfig,
 	error) {
 
@@ -40,6 +47,8 @@ func (r *staticRates) ResolveModel(model string) (string, *ModelConfig,
 		if rates, ok := r.cfg.Models[model]; ok {
 			return model, rates, nil
 		}
+
+		return "", nil, fmt.Errorf("unknown model %q", model)
 	}
 
 	if r.cfg.DefaultModel != "" {
@@ -48,8 +57,8 @@ func (r *staticRates) ResolveModel(model string) (string, *ModelConfig,
 		}
 	}
 
-	return "", nil, fmt.Errorf("unknown model %q and no default model "+
-		"configured", model)
+	return "", nil, fmt.Errorf("no model named in the request and no " +
+		"default model configured")
 }
 
 // BundleTokens returns the flat configured bundle size regardless of the

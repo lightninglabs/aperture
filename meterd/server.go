@@ -246,9 +246,10 @@ func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
 }
 
 // GetPrice quotes the price of a token bundle for the model named in the
-// JSON body of the serialized HTTP request. Requests with a missing or
-// unknown model are priced as the default model. When no model can be
-// resolved at all, an InvalidArgument error is returned.
+// JSON body of the serialized HTTP request. Requests naming no model are
+// priced as the default model; requests naming an unknown model are
+// rejected with an InvalidArgument error, since a model the seller never
+// priced must not be quoted (or proxied) at another model's rate.
 func (s *Server) GetPrice(_ context.Context,
 	req *pricesrpc.GetPriceRequest) (*pricesrpc.GetPriceResponse, error) {
 
@@ -313,20 +314,33 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 
 	// A request against a known bundle whose model differs from the one the
 	// bundle was booked with is denied, so a cheap-model bundle cannot be
-	// spent on a more expensive model. The booked model is authoritative.
+	// spent on a more expensive model. The booked model is authoritative,
+	// and an unresolvable model fails closed: a model the rate source does
+	// not know cannot be proxied upstream on another model's bundle.
 	if booked, ok := s.store.Get(req.TokenId); ok {
 		requested := modelFromRequestText(req.HttpRequestText)
-		resolved, _, err := s.rates.ResolveModel(requested)
-		if err == nil && resolved != booked.Model {
-			// Quote a bundle for the model the client actually
-			// asked for, so the fresh challenge lets them buy what
-			// they want rather than re-buying the cheap bundle.
-			return s.denyAuthorization(
-				req.TokenId, resolved,
-				fmt.Sprintf("request model %q does not match "+
-					"bundle model %q", resolved,
-					booked.Model),
-			), nil
+		if requested != "" {
+			resolved, _, err := s.rates.ResolveModel(requested)
+			switch {
+			case err != nil:
+				return s.denyAuthorization(
+					req.TokenId, requested,
+					fmt.Sprintf("unknown request model "+
+						"%q", requested),
+				), nil
+
+			case resolved != booked.Model:
+				// Quote a bundle for the model the client
+				// actually asked for, so the fresh challenge
+				// lets them buy what they want rather than
+				// re-buying the cheap bundle.
+				return s.denyAuthorization(
+					req.TokenId, resolved,
+					fmt.Sprintf("request model %q does "+
+						"not match bundle model %q",
+						resolved, booked.Model),
+				), nil
+			}
 		}
 	}
 
