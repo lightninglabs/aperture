@@ -18,6 +18,12 @@ type AuthorizeResult struct {
 
 	// Reason optionally describes why the request was denied.
 	Reason string
+
+	// ReservedEstimate is the per-request token estimate the pricer
+	// reserved against the token's balance when allowing the request.
+	// It is echoed back in the matching usage report so the pricer can
+	// release the exact reservation it took.
+	ReservedEstimate int64
 }
 
 // Usage describes the outcome of a proxied request to a metered service, as
@@ -51,6 +57,12 @@ type Usage struct {
 	// ResponseTail is a capped tail of the response body. For SSE streams
 	// this contains the trailing chunks, including any final usage object.
 	ResponseTail []byte
+
+	// ReservedEstimate is the ReservedEstimate value of the authorization
+	// that admitted this request, echoed back verbatim so the pricer can
+	// release the exact reservation it took. Zero when the authorization
+	// carried none.
+	ReservedEstimate int64
 }
 
 // MeteredPricer is an optional interface a Pricer can implement to support

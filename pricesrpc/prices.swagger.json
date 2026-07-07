@@ -185,6 +185,11 @@
         "reason": {
           "type": "string",
           "description": "An optional human-readable reason for a denied request."
+        },
+        "reserved_estimate": {
+          "type": "string",
+          "format": "int64",
+          "description": "The per-request token estimate the price server reserved against the\ntoken's balance when allowing this request. Aperture echoes it back\nin the matching ReportUsageRequest so the exact reservation can be\nreleased, rather than an approximate default."
         }
       }
     },
@@ -273,6 +278,11 @@
         "content_encoding": {
           "type": "string",
           "description": "The Content-Encoding the backend responded with. Metered requests strip\nthe client's Accept-Encoding so the observed tail is always plaintext;\na non-identity encoding here signals that the observer captured\ncompressed bytes it could not parse, which is treated as an error\ncondition worth alerting on."
+        },
+        "reserved_estimate": {
+          "type": "string",
+          "format": "int64",
+          "description": "The reserved_estimate value the AuthorizeRequest response for this\nrequest carried, echoed back verbatim. Lets the price server release\nthe exact reservation it took at authorization time. Zero when the\nauthorization predates this field."
         }
       }
     },

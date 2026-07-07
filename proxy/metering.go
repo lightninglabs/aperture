@@ -41,6 +41,11 @@ type meteringInfo struct {
 	// tailBytes is the maximum number of trailing response body bytes to
 	// capture for the usage report.
 	tailBytes int
+
+	// reservedEstimate is the token estimate the pricer reserved when it
+	// authorized this request, echoed back in the usage report so the
+	// pricer can release the exact reservation.
+	reservedEstimate int64
 }
 
 const (
@@ -260,11 +265,12 @@ func (p *Proxy) checkMeteredAccess(w http.ResponseWriter, r *http.Request,
 	// The request may proceed. Annotate it so the response modifier
 	// reports the resulting usage back to the pricer.
 	info := &meteringInfo{
-		tokenID:     tokenID,
-		serviceName: target.Name,
-		path:        r.URL.Path,
-		pricer:      mp,
-		tailBytes:   target.usageTailBytes(),
+		tokenID:          tokenID,
+		serviceName:      target.Name,
+		path:             r.URL.Path,
+		pricer:           mp,
+		tailBytes:        target.usageTailBytes(),
+		reservedEstimate: result.ReservedEstimate,
 	}
 	ctx := context.WithValue(r.Context(), meteringContextKey{}, info)
 
@@ -325,12 +331,13 @@ func attachUsageObserver(res *http.Response) {
 		tail:     newTailBuffer(info.tailBytes),
 		schedule: defaultReportSchedule,
 		usage: pricer.Usage{
-			TokenID:         info.tokenID,
-			Path:            info.path,
-			ServiceName:     info.serviceName,
-			HTTPStatus:      res.StatusCode,
-			ContentType:     res.Header.Get("Content-Type"),
-			ContentEncoding: res.Header.Get("Content-Encoding"),
+			TokenID:          info.tokenID,
+			Path:             info.path,
+			ServiceName:      info.serviceName,
+			HTTPStatus:       res.StatusCode,
+			ContentType:      res.Header.Get("Content-Type"),
+			ContentEncoding:  res.Header.Get("Content-Encoding"),
+			ReservedEstimate: info.reservedEstimate,
 		},
 	}
 }

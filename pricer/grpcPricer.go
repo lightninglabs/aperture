@@ -243,9 +243,10 @@ func (c GRPCPricer) AuthorizeRequest(ctx context.Context, r *http.Request,
 	}
 
 	return &AuthorizeResult{
-		Allowed:   resp.Allowed,
-		PriceSats: resp.PriceSats,
-		Reason:    resp.Reason,
+		Allowed:          resp.Allowed,
+		PriceSats:        resp.PriceSats,
+		Reason:           resp.Reason,
+		ReservedEstimate: resp.ReservedEstimate,
 	}, nil
 }
 
@@ -253,14 +254,15 @@ func (c GRPCPricer) AuthorizeRequest(ctx context.Context, r *http.Request,
 // can debit the token's balance. It is part of the MeteredPricer interface.
 func (c GRPCPricer) ReportUsage(ctx context.Context, usage *Usage) error {
 	_, err := c.rpcClient.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
-		TokenId:         usage.TokenID,
-		Path:            usage.Path,
-		ServiceName:     usage.ServiceName,
-		HttpStatus:      int32(usage.HTTPStatus),
-		ContentType:     usage.ContentType,
-		ContentEncoding: usage.ContentEncoding,
-		Complete:        usage.Complete,
-		ResponseTail:    usage.ResponseTail,
+		TokenId:          usage.TokenID,
+		Path:             usage.Path,
+		ServiceName:      usage.ServiceName,
+		HttpStatus:       int32(usage.HTTPStatus),
+		ContentType:      usage.ContentType,
+		ContentEncoding:  usage.ContentEncoding,
+		Complete:         usage.Complete,
+		ResponseTail:     usage.ResponseTail,
+		ReservedEstimate: usage.ReservedEstimate,
 	})
 
 	return err

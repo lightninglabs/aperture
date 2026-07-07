@@ -89,6 +89,12 @@ message AuthorizeRequestResponse {
 
     // An optional human-readable reason for a denied request.
     string reason = 3;
+
+    // The per-request token estimate the price server reserved against the
+    // token's balance when allowing this request. Aperture echoes it back
+    // in the matching ReportUsageRequest so the exact reservation can be
+    // released, rather than an approximate default.
+    int64 reserved_estimate = 4;
 }
 
 message ReportUsageRequest {
@@ -121,6 +127,12 @@ message ReportUsageRequest {
     // compressed bytes it could not parse, which is treated as an error
     // condition worth alerting on.
     string content_encoding = 8;
+
+    // The reserved_estimate value the AuthorizeRequest response for this
+    // request carried, echoed back verbatim. Lets the price server release
+    // the exact reservation it took at authorization time. Zero when the
+    // authorization predates this field.
+    int64 reserved_estimate = 9;
 }
 
 message ReportUsageResponse {
