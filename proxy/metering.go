@@ -48,18 +48,30 @@ const (
 	// Reports run detached from the request context, which is already done
 	// by the time the response body has been fully copied.
 	reportTimeout = 30 * time.Second
+)
 
-	// reportMaxAttempts is the number of times a usage report is attempted
+// reportSchedule bounds the retry behavior of a usage report: how many times
+// it is attempted and how long it initially backs off between attempts. It is
+// plumbed explicitly from usageObservingBody rather than read from mutable
+// package state, so tests can inject a fast schedule without racing the
+// detached report goroutine of a previous test.
+type reportSchedule struct {
+	// maxAttempts is the number of times a usage report is attempted
 	// before giving up. A failed report is silent revenue loss, so the
 	// report is retried with backoff to narrow the window in which a
 	// transient pricer blip drops a debit.
-	reportMaxAttempts = 4
-)
+	maxAttempts int
 
-// reportInitialBackoff is the delay before the first retry of a failed usage
-// report. It doubles on each subsequent attempt. It is a variable so tests can
-// shrink it.
-var reportInitialBackoff = 500 * time.Millisecond
+	// initialBackoff is the delay before the first retry of a failed
+	// usage report. It doubles on each subsequent attempt.
+	initialBackoff time.Duration
+}
+
+// defaultReportSchedule is the retry schedule used in production.
+var defaultReportSchedule = reportSchedule{
+	maxAttempts:    4,
+	initialBackoff: 500 * time.Millisecond,
+}
 
 // challengeMacaroonRegex extracts the base64-encoded macaroon from an L402
 // WWW-Authenticate challenge header value.
@@ -308,9 +320,10 @@ func attachUsageObserver(res *http.Response) {
 	}
 
 	res.Body = &usageObservingBody{
-		inner: res.Body,
-		info:  info,
-		tail:  newTailBuffer(info.tailBytes),
+		inner:    res.Body,
+		info:     info,
+		tail:     newTailBuffer(info.tailBytes),
+		schedule: defaultReportSchedule,
 		usage: pricer.Usage{
 			TokenID:         info.tokenID,
 			Path:            info.path,
@@ -326,10 +339,11 @@ func attachUsageObserver(res *http.Response) {
 // bytes flowing through it and reports the usage to the metered pricer
 // exactly once, when the body is exhausted or closed.
 type usageObservingBody struct {
-	inner io.ReadCloser
-	info  *meteringInfo
-	tail  *tailBuffer
-	usage pricer.Usage
+	inner    io.ReadCloser
+	info     *meteringInfo
+	tail     *tailBuffer
+	usage    pricer.Usage
+	schedule reportSchedule
 
 	reportOnce sync.Once
 }
@@ -368,7 +382,7 @@ func (b *usageObservingBody) report(complete bool) {
 		usage.Complete = complete
 		usage.ResponseTail = b.tail.Bytes()
 
-		go reportUsageWithRetry(b.info.pricer, &usage)
+		go reportUsageWithRetry(b.info.pricer, &usage, b.schedule)
 	})
 }
 
@@ -377,11 +391,13 @@ func (b *usageObservingBody) report(complete bool) {
 // the final failure is logged loudly. A durable, un-acked-report queue is the
 // real fix and is left as a follow-up; the bounded retry here only narrows the
 // window in which a transient pricer failure drops a debit.
-func reportUsageWithRetry(mp pricer.MeteredPricer, usage *pricer.Usage) {
-	backoff := reportInitialBackoff
+func reportUsageWithRetry(mp pricer.MeteredPricer, usage *pricer.Usage,
+	schedule reportSchedule) {
+
+	backoff := schedule.initialBackoff
 
 	var err error
-	for attempt := 1; attempt <= reportMaxAttempts; attempt++ {
+	for attempt := 1; attempt <= schedule.maxAttempts; attempt++ {
 		func() {
 			ctx, cancel := context.WithTimeout(
 				context.Background(), reportTimeout,
@@ -396,9 +412,9 @@ func reportUsageWithRetry(mp pricer.MeteredPricer, usage *pricer.Usage) {
 
 		log.Warnf("Usage report for token %s failed on attempt "+
 			"%d/%d: %v", usage.TokenID, attempt,
-			reportMaxAttempts, err)
+			schedule.maxAttempts, err)
 
-		if attempt < reportMaxAttempts {
+		if attempt < schedule.maxAttempts {
 			time.Sleep(backoff)
 			backoff *= 2
 		}
@@ -406,7 +422,7 @@ func reportUsageWithRetry(mp pricer.MeteredPricer, usage *pricer.Usage) {
 
 	log.Errorf("Giving up reporting usage for token %s after %d "+
 		"attempts, this debit is lost: %v", usage.TokenID,
-		reportMaxAttempts, err)
+		schedule.maxAttempts, err)
 }
 
 // tailBuffer keeps the last max bytes written to it.

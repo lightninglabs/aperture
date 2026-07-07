@@ -185,6 +185,10 @@ func TestUsageObservingBody(t *testing.T) {
 				TokenID:    "token",
 				HTTPStatus: 200,
 			},
+			schedule: reportSchedule{
+				maxAttempts:    1,
+				initialBackoff: time.Millisecond,
+			},
 		}
 	}
 
@@ -442,18 +446,20 @@ func TestCheckMeteredAccessMalformedL402(t *testing.T) {
 func TestReportUsageWithRetry(t *testing.T) {
 	t.Parallel()
 
-	// Shrink the backoff so the test does not sleep for seconds.
-	prev := reportInitialBackoff
-	reportInitialBackoff = time.Millisecond
-	defer func() {
-		reportInitialBackoff = prev
-	}()
+	// Use a fast schedule so the test does not sleep for seconds. Passing
+	// it as a parameter, rather than mutating the package-level default,
+	// keeps this test isolated from any report goroutine spawned by
+	// another test that outlives its own test function.
+	schedule := reportSchedule{
+		maxAttempts:    4,
+		initialBackoff: time.Millisecond,
+	}
 
 	// The pricer fails the first two attempts and succeeds on the third.
 	fake := &flakyPricer{failFor: 2}
 
 	usage := &pricer.Usage{TokenID: "token"}
-	reportUsageWithRetry(fake, usage)
+	reportUsageWithRetry(fake, usage, schedule)
 
 	require.Equal(t, 3, fake.calls)
 }
