@@ -186,10 +186,8 @@ func (s *JSONStore) evictOldestUnauthorizedLocked() int {
 		tokenID string
 		created time.Time
 	}
-	var (
-		total        int
-		unauthorized []entry
-	)
+	var total int
+	unauthorized := make([]entry, 0, len(s.bundles))
 	for tokenID, b := range s.bundles {
 		if b.Authorized {
 			continue
