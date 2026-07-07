@@ -344,7 +344,13 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		log.Debugf("Authorized request for token %s, %d tokens "+
 			"available", req.TokenId, remaining)
 
-		return &pricesrpc.AuthorizeRequestResponse{Allowed: true}, nil
+		// The reserved estimate rides back to aperture, which echoes
+		// it in the matching usage report so the exact reservation is
+		// released rather than an approximate default.
+		return &pricesrpc.AuthorizeRequestResponse{
+			Allowed:          true,
+			ReservedEstimate: estimate,
+		}, nil
 	}
 
 	// The token is unknown or its bundle is spent. Quote the next bundle
@@ -443,6 +449,16 @@ func (s *Server) ReportUsage(_ context.Context,
 		}
 	}
 
+	// Resolve the booked model's rates up front, since the debit is
+	// weighted by direction when the usage split is known. A bundle whose
+	// model no longer resolves falls back to the raw token count.
+	var rates *ModelConfig
+	if booked, ok := s.store.Get(req.TokenId); ok {
+		if _, r, err := s.rates.ResolveModel(booked.Model); err == nil {
+			rates = r
+		}
+	}
+
 	// The number of tokens to debit is the prompt/completion sum, or the
 	// total count when the split is absent.
 	var debitTokens int64
@@ -454,15 +470,36 @@ func (s *Server) ReportUsage(_ context.Context,
 		}
 	}
 
-	// Release the reservation taken on authorization. The report does not
-	// carry the request body, so the exact per-request estimate is not
-	// recoverable here; the configured default estimate is released
-	// instead. This is approximate, but the reservation is only a bound on
-	// concurrent overdraw, not an accounting entry, so an imperfect release
-	// merely widens or narrows that bound slightly.
-	after, ok, err := s.store.Debit(
-		req.TokenId, debitTokens, s.cfg.EstimatedTokens,
-	)
+	// The bundle was priced at the blended (input+output)/2 rate, but the
+	// buyer chooses the prompt/completion mix, and an all-output workload
+	// costs the seller the full output rate. When the split is known, the
+	// debit is weighted by direction, charging a completion token as
+	// outRate/blend bundle tokens (and a prompt token as inRate/blend), so
+	// the msat value drawn from the bundle always matches the msat value
+	// served. The division rounds up, never favoring the client.
+	if found && counts.hasSplit && rates != nil {
+		rateSum := rates.InputMsatPerToken + rates.OutputMsatPerToken
+		if rateSum > 0 {
+			weightedTimesTwo := 2 *
+				(counts.promptTokens*rates.InputMsatPerToken +
+					counts.completionTokens*
+						rates.OutputMsatPerToken)
+			debitTokens = (weightedTimesTwo + rateSum - 1) /
+				rateSum
+		}
+	}
+
+	// Release the exact reservation the authorization took when the proxy
+	// echoed it back, falling back to the configured default estimate for
+	// reports predating the echo. An exact release keeps mismatched
+	// estimates from accumulating into phantom exhaustion on a bundle with
+	// real balance left.
+	release := req.ReservedEstimate
+	if release <= 0 {
+		release = s.cfg.EstimatedTokens
+	}
+
+	after, ok, err := s.store.Debit(req.TokenId, debitTokens, release)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unable to debit "+
 			"bundle: %v", err)
@@ -474,8 +511,7 @@ func (s *Server) ReportUsage(_ context.Context,
 		return &pricesrpc.ReportUsageResponse{}, nil
 	}
 
-	_, rates, err := s.rates.ResolveModel(after.Model)
-	if err != nil {
+	if rates == nil {
 		log.Warnf("No rates for booked model %s of token %s, "+
 			"reporting zero amounts", after.Model, req.TokenId)
 

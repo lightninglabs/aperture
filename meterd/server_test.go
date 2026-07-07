@@ -2,6 +2,7 @@ package meterd
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 	"sync"
@@ -219,9 +220,10 @@ func TestServerJSONUsageReport(t *testing.T) {
 	require.NoError(t, err)
 
 	// The captured tail starts mid-document, as a bounded tail of a long
-	// body would. The usage of 100 prompt plus 200 completion tokens
-	// debits 100*1000 + 200*2000 = 500000 msat, so 500 sats, leaving 700
-	// tokens worth 1050 sats.
+	// body would. The usage of 100 prompt plus 200 completion tokens is
+	// worth 100*1000 + 200*2000 = 500000 msat, so 500 sats. The debit is
+	// weighted by direction against the blended 1500 msat bundle rate:
+	// ceil(500000/1500) = 334 tokens, leaving 666 tokens worth 999 sats.
 	tail := `ng content"}}],"usage":{"prompt_tokens":100,` +
 		`"completion_tokens":200,"total_tokens":300}}`
 
@@ -236,7 +238,7 @@ func TestServerJSONUsageReport(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 500, usageResp.DebitedSats)
-	require.EqualValues(t, 1050, usageResp.RemainingSats)
+	require.EqualValues(t, 999, usageResp.RemainingSats)
 }
 
 // TestServerUsageEdgeCases verifies the usage reports that must not debit
@@ -588,4 +590,82 @@ func TestServerDefaultModelFallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 1500, priceResp.PriceSats)
+// TestServerReservationEcho verifies that an allowed authorization carries
+// the reserved estimate and that echoing it back in the usage report
+// releases the exact reservation, so mismatched estimates leave no residue
+// on the bundle.
+func TestServerReservationEcho(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := newTestClient(t, testConfig(""))
+
+	const tokenID = "ec40"
+	body := `{"model":"gpt-test","max_tokens":400,` +
+		`"messages":[{"role":"user","content":"hi"}]}`
+	reqText := "POST /v1/chat/completions HTTP/1.1\r\n" +
+		"Host: backend.example\r\n" +
+		"Content-Type: application/json\r\n" +
+		fmt.Sprintf("Content-Length: %d\r\n", len(body)) +
+		"\r\n" + body
+
+	_, err := client.ChallengeMinted(ctx, &pricesrpc.ChallengeMintedRequest{
+		Path:            "/v1/chat/completions",
+		HttpRequestText: reqText,
+		TokenId:         tokenID,
+		PriceSats:       1500,
+		ServiceName:     "llm",
+	})
+	require.NoError(t, err)
+
+	authorize := func() *pricesrpc.AuthorizeRequestResponse {
+		resp, err := client.AuthorizeRequest(
+			ctx, &pricesrpc.AuthorizeRequestRequest{
+				Path:            "/v1/chat/completions",
+				HttpRequestText: reqText,
+				TokenId:         tokenID,
+				ServiceName:     "llm",
+			},
+		)
+		require.NoError(t, err)
+
+		return resp
+	}
+
+	// The request's max_tokens is reserved and rides back on the
+	// response.
+	first := authorize()
+	require.True(t, first.Allowed)
+	require.EqualValues(t, 400, first.ReservedEstimate)
+
+	second := authorize()
+	require.True(t, second.Allowed)
+
+	// Report both requests, echoing the estimates back. Each report
+	// debits ceil((10*1000 + 10*2000)/1500) = 20 tokens and releases its
+	// full 400-token reservation.
+	tail := `{"usage":{"prompt_tokens":10,"completion_tokens":10,` +
+		`"total_tokens":20}}`
+	for _, est := range []int64{
+		first.ReservedEstimate, second.ReservedEstimate,
+	} {
+		_, err = client.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
+			TokenId:          tokenID,
+			Path:             "/v1/chat/completions",
+			ServiceName:      "llm",
+			HttpStatus:       200,
+			ContentType:      "application/json",
+			Complete:         true,
+			ResponseTail:     []byte(tail),
+			ReservedEstimate: est,
+		})
+		require.NoError(t, err)
+	}
+
+	// With exact releases, no reservation residue eats the balance: two
+	// further requests still authorize (960 remaining against two fresh
+	// 400-token reservations). Were the releases dropped, the 800 tokens
+	// of residue would deny the second of these.
+	require.True(t, authorize().Allowed)
+	require.True(t, authorize().Allowed)
 }
