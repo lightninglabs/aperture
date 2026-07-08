@@ -55,10 +55,25 @@ $(GOACC_BIN):
 build:
 	@$(call print, "Building aperture.")
 	$(GOBUILD) $(PKG)/cmd/aperture
+	$(GOBUILD) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
+
+build-dashboard:
+	@$(call print, "Building dashboard static export.")
+	cd dashboard && npm ci && npm run build
+
+build-withdashboard: build-dashboard
+	@$(call print, "Building aperture with embedded dashboard.")
+	$(GOBUILD) -tags=dashboard $(PKG)/cmd/aperture
 
 install:
-	@$(call print, "Installing aperture.")
+	@$(call print, "Installing aperture and aperturecli.")
 	$(GOINSTALL) -tags="${tags}" $(PKG)/cmd/aperture
+	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
+
+install-dashboard: build-dashboard
+	@$(call print, "Installing aperture with embedded dashboard.")
+	$(GOINSTALL) -tags="dashboard ${tags}" $(PKG)/cmd/aperture
+	$(GOINSTALL) -ldflags "-X $(PKG)/cli.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" $(PKG)/cmd/aperturecli
 
 docker-tools:
 	@$(call print, "Building tools docker image.")
@@ -83,10 +98,16 @@ migrate-create: $(MIGRATE_BIN)
 sqlc:
 	@$(call print, "Generating sql models and queries in Go")
 	./scripts/gen_sqlc_docker.sh
+	@$(call print, "Merging SQL migrations into consolidated schema")
+	go run ./cmd/merge-sql-schemas/main.go
 
 sqlc-check: sqlc
 	@$(call print, "Verifying sql code generation.")
-	if test -n "$$(git status --porcelain '*.go')"; then echo "SQL models not properly generated!"; git status --porcelain '*.go'; exit 1; fi
+	@if [ ! -f aperturedb/sqlc/schemas/generated_schema.sql ]; then \
+		echo "Missing file: aperturedb/sqlc/schemas/generated_schema.sql"; \
+		exit 1; \
+	fi
+	@if test -n "$$(git status --porcelain '*.go')"; then echo "SQL models not properly generated!"; git status --porcelain '*.go'; exit 1; fi
 
 # =======
 # TESTING
@@ -153,4 +174,6 @@ rpc-check: rpc
 clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) ./aperture
+	$(RM) ./aperturecli
 	$(RM) coverage.txt
+	$(RM) -r dashboard/out

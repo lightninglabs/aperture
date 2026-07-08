@@ -48,7 +48,7 @@ func TestHashMailServerReturnStream(t *testing.T) {
 	setupAperture(t)
 
 	// Create a client and connect it to the server.
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		testApertureAddress, grpc.WithTransportCredentials(
 			insecure.NewCredentials(),
 		),
@@ -124,7 +124,7 @@ func TestHashMailServerLargeMessage(t *testing.T) {
 	setupAperture(t)
 
 	// Create a client and connect it to the server.
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		testApertureAddress, grpc.WithTransportCredentials(
 			insecure.NewCredentials(),
 		),
@@ -425,7 +425,7 @@ func newHashMailHarness(t *testing.T,
 
 // newClientConn creates a new client of the hashMailHarness server.
 func (h *hashMailHarness) newClientConn() *grpc.ClientConn {
-	conn, err := grpc.Dial("bufnet", grpc.WithContextDialer(
+	conn, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(
 		func(ctx context.Context, s string) (net.Conn, error) {
 			return h.lis.Dial()
 		}), grpc.WithTransportCredentials(insecure.NewCredentials()),

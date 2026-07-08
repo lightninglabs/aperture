@@ -16,6 +16,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/mwitkow/grpc-proxy/proxy"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
@@ -277,16 +278,28 @@ func (n *NodeConn) newConn(session *Session, opts ...grpc.DialOption) (*conn,
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(1024 * 1024 * 200),
 		),
-		grpc.WithBlock(),
 	}
 	dialOpts = append(dialOpts, opts...)
 
-	grpcClient, err := grpc.DialContext(
-		ctxc, session.MailboxAddr, dialOpts...,
+	grpcClient, err := grpc.NewClient(
+		session.MailboxAddr, dialOpts...,
 	)
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+
+	connectCtx, connectCancel := context.WithTimeout(
+		ctxc, DefaultConnectionTimetout,
+	)
+	defer connectCancel()
+
+	err = waitForClientReady(connectCtx, grpcClient)
+	if err != nil {
+		_ = grpcClient.Close()
+		cancel()
+		return nil, fmt.Errorf("unable to establish gRPC client "+
+			"connection: %w", err)
 	}
 
 	return &conn{
@@ -295,6 +308,31 @@ func (n *NodeConn) newConn(session *Session, opts ...grpc.DialOption) (*conn,
 		creds:      noiseConn,
 		cancel:     cancel,
 	}, nil
+}
+
+// waitForClientReady exits idle mode and waits for a ClientConn to become
+// ready.
+func waitForClientReady(ctx context.Context, conn *grpc.ClientConn) error {
+	for {
+		state := conn.GetState()
+
+		switch state {
+		case connectivity.Ready:
+			return nil
+
+		case connectivity.Idle:
+			conn.Connect()
+
+		case connectivity.Shutdown:
+			return fmt.Errorf("client connection closed")
+		}
+
+		if conn.WaitForStateChange(ctx, state) {
+			continue
+		}
+
+		return ctx.Err()
+	}
 }
 
 // extractMacaroon is a helper function that extracts a macaroon from raw bytes.

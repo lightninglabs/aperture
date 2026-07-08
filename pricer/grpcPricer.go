@@ -59,7 +59,7 @@ func NewGRPCPricer(cfg *Config) (*GRPCPricer, error) {
 		opt = grpc.WithTransportCredentials(tlsCredentials)
 	}
 
-	c.rpcConn, err = grpc.Dial(cfg.GRPCAddress, opt)
+	c.rpcConn, err = grpc.NewClient(cfg.GRPCAddress, opt)
 	if err != nil {
 		return nil, err
 	}

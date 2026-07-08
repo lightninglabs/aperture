@@ -29,6 +29,12 @@ servername: aperture.example.com
 # connections.
 insecure: false
 
+# If TLS is terminated by a load balancer/ingress in front of aperture, make
+# sure the load balancer's ALPN policy includes "h2". On AWS NLB, the default
+# ALPN policy "None" does not negotiate ALPN and gRPC clients may fail with
+# "missing selected ALPN property". With TCP passthrough, aperture negotiates
+# ALPN directly.
+
 # Whether we should verify the invoice status strictly or not. If set to true,
 # then this requires all invoices to be read from disk at start up.
 strictverify: false
@@ -49,6 +55,17 @@ readtimeout: 15s
 
 # The maximum amount of time to wait for a response to be fully written.
 writetimeout: 30s
+
+# Interval at which WebSocket-level pings are sent to connected clients. This
+# keeps LNC connections alive through intermediary proxies and load balancers
+# that may drop idle WebSocket connections. Set to 0 to disable.
+# Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+wspinginterval: 30s
+
+# Duration to wait for a WebSocket pong response after sending a ping. If no
+# pong is received within this duration, the connection is considered dead.
+# Must be strictly less than wspinginterval.
+wspongwait: 15s
 
 # Settings for the lnd node used to generate payment requests. All of these
 # options are required.
@@ -87,6 +104,33 @@ authenticator:
 
   # Set to true to skip verification of the mailbox server's tls cert.
   devserver: false
+
+  # Enable the Payment HTTP Authentication Scheme (MPP) alongside L402.
+  # When enabled, 402 responses include both L402 and Payment challenges.
+  # enablempp: true
+
+  # Realm string used in MPP challenge headers. Defaults to the server's
+  # listen address.
+  # mpprealm: "api.example.com"
+
+  # Enable MPP session intent for prepaid sessions with deposit, bearer,
+  # top-up, and close operations. Requires enablempp to be true.
+  # enablesessions: true
+
+  # Number of service units per session deposit. Determines the deposit
+  # invoice amount as (service price * multiplier). Default: 20.
+  # sessiondepositmultiplier: 20
+
+  # Session idle timeout in seconds. Default: 300 (5 minutes).
+  # sessionidletimeout: 300
+
+# Admin API configuration. Provides gRPC/REST endpoints for managing services,
+# transactions, and tokens at runtime. Disabled by default.
+# admin:
+#   enabled: true
+#   macaroonpath: "/path/to/aperture/data/admin.macaroon"
+#   corsorigin:
+#     - "https://dashboard.example.com"
 
 # List of IPs to block from accessing the proxy.
 blocklist:
@@ -160,6 +204,20 @@ services:
     # The HTTP protocol that should be used to connect to the service. Valid
     # options include: http, https.
     protocol: https
+
+    # Payment auth scheme for this service. Valid values: "l402" (default),
+    # "mpp" (Payment HTTP Auth only), or "l402+mpp" (both schemes).
+    # authscheme: "l402"
+
+    # Header fields to always pass to the service. Replace the placeholder
+    # value with a real credential; do not commit secrets to version control.
+    # headers:
+    #   Authorization: "Bearer <your-api-key>"
+
+    # Rewrite options allow prepending an absolute path prefix to every
+    # request before it is forwarded to the backend.
+    # rewrite:
+    #   prefix: "/path/to/api"
 
     # If required, a path to the service's TLS certificate to successfully
     # establish a secure connection.

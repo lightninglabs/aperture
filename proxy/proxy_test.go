@@ -136,7 +136,7 @@ func TestProxyHTTPBlocklist(t *testing.T) {
 
 	// Block the IP that will be used in the request.
 	blockedIP := "127.0.0.1"
-	p, err := proxy.New(mockAuth, services, []string{blockedIP})
+	p, err := proxy.New(mockAuth, services, []string{blockedIP}, nil)
 	require.NoError(t, err)
 
 	// Start the proxy server.
@@ -202,7 +202,7 @@ func runHTTPTest(t *testing.T, tc *testCase, method string) {
 	}}
 
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, []string{})
+	p, err := proxy.New(mockAuth, services, []string{}, nil)
 	require.NoError(t, err)
 
 	// Start server that gives requests to the proxy.
@@ -397,7 +397,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 
 	// Create the proxy server and start serving on TLS.
 	mockAuth := auth.NewMockAuthenticator()
-	p, err := proxy.New(mockAuth, services, []string{})
+	p, err := proxy.New(mockAuth, services, []string{}, nil)
 	require.NoError(t, err)
 	server := &http.Server{
 		Addr:      testProxyAddr,
@@ -422,7 +422,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	defer backendService.Stop()
 
 	// Dial to the proxy now, without any authentication.
-	conn, err := grpc.Dial(testProxyAddr, opts...)
+	conn, err := grpc.NewClient(testProxyAddr, opts...)
 	require.NoError(t, err)
 	client := proxytest.NewGreeterClient(conn)
 
@@ -458,7 +458,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 	// Make sure that if we query an URL that is on the whitelist, we don't
 	// get the 402 response.
 	if len(tc.authWhitelist) > 0 {
-		conn, err = grpc.Dial(testProxyAddr, opts...)
+		conn, err = grpc.NewClient(testProxyAddr, opts...)
 		require.NoError(t, err)
 		client = proxytest.NewGreeterClient(conn)
 
@@ -481,7 +481,7 @@ func runGRPCTest(t *testing.T, tc *testCase) {
 		grpc.WithTransportCredentials(creds),
 		grpc.WithPerRPCCredentials(cred),
 	}
-	conn, err = grpc.Dial(testProxyAddr, opts...)
+	conn, err = grpc.NewClient(testProxyAddr, opts...)
 	require.NoError(t, err)
 	client = proxytest.NewGreeterClient(conn)
 

@@ -1,6 +1,7 @@
 package l402
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -94,6 +95,26 @@ func EncodeIdentifier(w io.Writer, id *Identifier) error {
 	default:
 		return fmt.Errorf("%w: %v", ErrUnknownVersion, id.Version)
 	}
+}
+
+// EncodeIdentifierBytes encodes an L402 identifier from a payment hash and
+// token ID, returning the raw bytes. This is useful for reconstructing the
+// macaroon identifier from its component parts.
+func EncodeIdentifierBytes(paymentHash lntypes.Hash,
+	tokenID TokenID) []byte {
+
+	id := &Identifier{
+		Version:     LatestVersion,
+		PaymentHash: paymentHash,
+		TokenID:     tokenID,
+	}
+
+	var buf bytes.Buffer
+	// EncodeIdentifier for version 0 only writes to the buffer, which
+	// cannot fail.
+	_ = EncodeIdentifier(&buf, id)
+
+	return buf.Bytes()
 }
 
 // DecodeIdentifier decodes an L402's identifier according to its version.

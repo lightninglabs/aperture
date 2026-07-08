@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 
-	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/v2"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/freebie"
 	"github.com/lightninglabs/aperture/pricer"
@@ -30,6 +31,13 @@ const (
 	// to create an invoice through lnd.
 	maxServicePrice = btcutil.SatoshiPerBitcoin * 100000
 )
+
+// RewriteConfig defines what should be rewritten in a proxied client request.
+type RewriteConfig struct {
+	// Prefix is an absolute path that is prepended to the request path
+	// before forwarding to the backend service.
+	Prefix string `long:"prefix" description:"Absolute path prefix to prepend to the request path"`
+}
 
 // Service generically specifies configuration data for backend services to the
 // Aperture proxy.
@@ -52,6 +60,12 @@ type Service struct {
 	// for X free requests per IP address before authentication is required
 	// or "off" for no authentication.
 	Auth auth.Level `long:"auth" description:"required authentication"`
+
+	// AuthScheme specifies which payment authentication scheme(s) to use
+	// for this service. Valid values are "l402" (default), "mpp", or
+	// "l402+mpp". An empty value defaults to "l402" for backwards
+	// compatibility with existing deployments.
+	AuthScheme string `long:"authscheme" description:"Payment auth scheme: l402, mpp, or l402+mpp"`
 
 	// HostRegexp is a regular expression that is tested against the 'Host'
 	// HTTP header field to find out if this service should be used.
@@ -116,6 +130,9 @@ type Service struct {
 	// the request, it is rejected.
 	RateLimits []*RateLimitConfig `long:"ratelimits" description:"List of rate limiting rules for this service"`
 
+	// Rewrite defines what should be rewritten in the client request.
+	Rewrite RewriteConfig `long:"rewrite" description:"Values to rewrite in the client request"`
+
 	// compiledHostRegexp is the compiled host regex.
 	compiledHostRegexp *regexp.Regexp
 
@@ -132,6 +149,31 @@ type Service struct {
 	freebieDB   freebie.DB
 	pricer      pricer.Pricer
 	rateLimiter *RateLimiter
+}
+
+// prepareRewrite validates and normalizes the rewrite configuration.
+func (s *Service) prepareRewrite() error {
+	if s.Rewrite.Prefix == "" {
+		return nil
+	}
+
+	u, err := url.Parse(s.Rewrite.Prefix)
+	if err != nil {
+		return fmt.Errorf("invalid prefix format: %v", err)
+	}
+	if u.Host != "" || u.Scheme != "" || u.Path == "" || u.Path[0] != '/' ||
+		u.RawQuery != "" || u.Fragment != "" {
+
+		return fmt.Errorf("invalid prefix format: expected absolute "+
+			"path, got %q", u)
+	}
+
+	// Store the prefix as-is since it's already validated as an absolute
+	// path. The rewrite function will use it directly without redundant
+	// re-encoding via EscapedPath().
+	s.Rewrite.Prefix = u.Path
+
+	return nil
 }
 
 // ResourceName returns the string to be used to identify which resource a
@@ -222,6 +264,11 @@ func prepareServices(services []*Service) error {
 				return fmt.Errorf("unsupported file prefix "+
 					"format %s", value)
 			}
+		}
+
+		err := service.prepareRewrite()
+		if err != nil {
+			return err
 		}
 
 		// Compile the host regex.

@@ -137,3 +137,17 @@ func (l *mockServiceLimiter) ServiceTimeouts(ctx context.Context,
 	}
 	return res, nil
 }
+
+type mockTransactionStore struct {
+	called bool
+	err    error
+}
+
+var _ TransactionStore = (*mockTransactionStore)(nil)
+
+func (m *mockTransactionStore) RecordTransaction(_ context.Context,
+	_ []byte, _ []byte, _ string, _ int64, _ []byte) error {
+
+	m.called = true
+	return m.err
+}

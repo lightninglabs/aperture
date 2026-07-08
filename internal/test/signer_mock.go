@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcd/wire/v2"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
@@ -107,4 +107,16 @@ func (s *mockSigner) MuSig2Cleanup(ctx context.Context,
 	sessionID [32]byte) error {
 
 	return nil
+}
+
+func (s *mockSigner) MuSig2RegisterCombinedNonce(ctx context.Context,
+	sessionID [32]byte, combinedNonce [66]byte) error {
+
+	return nil
+}
+
+func (s *mockSigner) MuSig2GetCombinedNonce(ctx context.Context,
+	sessionID [32]byte) ([66]byte, error) {
+
+	return [66]byte{}, nil
 }

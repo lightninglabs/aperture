@@ -1,0 +1,632 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "admin.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "Admin"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/api/admin/health": {
+      "get": {
+        "operationId": "Admin_GetHealth",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcGetHealthResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/info": {
+      "get": {
+        "operationId": "Admin_GetInfo",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcGetInfoResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/services": {
+      "get": {
+        "operationId": "Admin_ListServices",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcListServicesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "Admin"
+        ]
+      },
+      "post": {
+        "operationId": "Admin_CreateService",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcService"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/adminrpcCreateServiceRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/services/{name}": {
+      "delete": {
+        "operationId": "Admin_DeleteService",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcDeleteServiceResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      },
+      "put": {
+        "operationId": "Admin_UpdateService",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcService"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "protocol": {
+                  "type": "string"
+                },
+                "host_regexp": {
+                  "type": "string"
+                },
+                "path_regexp": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "string",
+                  "format": "int64"
+                },
+                "auth": {
+                  "type": "string"
+                },
+                "auth_scheme": {
+                  "$ref": "#/definitions/adminrpcAuthScheme",
+                  "description": "auth_scheme specifies which payment auth scheme(s) to use. When not\nset, the existing auth_scheme is preserved (not reset to L402)."
+                }
+              }
+            }
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/stats": {
+      "get": {
+        "operationId": "Admin_GetStats",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcGetStatsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/tokens": {
+      "get": {
+        "operationId": "Admin_ListTokens",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcListTokensResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/tokens/{token_id}": {
+      "delete": {
+        "operationId": "Admin_RevokeToken",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcRevokeTokenResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/transactions": {
+      "get": {
+        "operationId": "Admin_ListTransactions",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/adminrpcListTransactionsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "Admin"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "adminrpcAuthScheme": {
+      "type": "string",
+      "enum": [
+        "AUTH_SCHEME_L402",
+        "AUTH_SCHEME_MPP",
+        "AUTH_SCHEME_L402_MPP"
+      ],
+      "default": "AUTH_SCHEME_L402",
+      "description": "AuthScheme specifies which payment authentication scheme(s) a service uses.\nL402 is the default for backwards compatibility with existing deployments.\n\n - AUTH_SCHEME_L402: AUTH_SCHEME_L402 is the default L402 (macaroon + preimage) scheme.\n - AUTH_SCHEME_MPP: AUTH_SCHEME_MPP is the Payment HTTP Authentication Scheme (charge\nintent only, no sessions).\n - AUTH_SCHEME_L402_MPP: AUTH_SCHEME_L402_MPP enables both L402 and MPP simultaneously. The\nproxy issues challenges for both schemes and accepts either."
+    },
+    "adminrpcCreateServiceRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "host_regexp": {
+          "type": "string"
+        },
+        "path_regexp": {
+          "type": "string"
+        },
+        "price": {
+          "type": "string",
+          "format": "int64"
+        },
+        "auth": {
+          "type": "string"
+        },
+        "auth_scheme": {
+          "$ref": "#/definitions/adminrpcAuthScheme",
+          "description": "auth_scheme specifies which payment auth scheme(s) to use. Defaults to\nAUTH_SCHEME_L402 if unset."
+        }
+      }
+    },
+    "adminrpcDeleteServiceResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "adminrpcGetHealthResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "adminrpcGetInfoResponse": {
+      "type": "object",
+      "properties": {
+        "network": {
+          "type": "string"
+        },
+        "listen_addr": {
+          "type": "string"
+        },
+        "insecure": {
+          "type": "boolean"
+        },
+        "mpp_enabled": {
+          "type": "boolean",
+          "description": "mpp_enabled indicates whether the MPP (Payment HTTP Auth Scheme) is\nenabled globally."
+        },
+        "sessions_enabled": {
+          "type": "boolean",
+          "description": "sessions_enabled indicates whether MPP session intents are enabled."
+        },
+        "mpp_realm": {
+          "type": "string",
+          "description": "mpp_realm is the realm string used in MPP challenge headers."
+        }
+      }
+    },
+    "adminrpcGetStatsResponse": {
+      "type": "object",
+      "properties": {
+        "total_revenue_sats": {
+          "type": "string",
+          "format": "int64"
+        },
+        "transaction_count": {
+          "type": "string",
+          "format": "int64"
+        },
+        "service_breakdown": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/adminrpcServiceRevenue"
+          }
+        }
+      }
+    },
+    "adminrpcListServicesResponse": {
+      "type": "object",
+      "properties": {
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/adminrpcService"
+          }
+        }
+      }
+    },
+    "adminrpcListTokensResponse": {
+      "type": "object",
+      "properties": {
+        "tokens": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/adminrpcTransaction"
+          }
+        },
+        "total_count": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "adminrpcListTransactionsResponse": {
+      "type": "object",
+      "properties": {
+        "transactions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/adminrpcTransaction"
+          }
+        },
+        "total_count": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "adminrpcRevokeTokenResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "adminrpcService": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "host_regexp": {
+          "type": "string"
+        },
+        "path_regexp": {
+          "type": "string"
+        },
+        "price": {
+          "type": "string",
+          "format": "int64"
+        },
+        "auth": {
+          "type": "string"
+        },
+        "auth_scheme": {
+          "$ref": "#/definitions/adminrpcAuthScheme",
+          "description": "auth_scheme specifies which payment auth scheme(s) are used for this\nservice. Defaults to AUTH_SCHEME_L402 for backwards compatibility."
+        }
+      }
+    },
+    "adminrpcServiceRevenue": {
+      "type": "object",
+      "properties": {
+        "service_name": {
+          "type": "string"
+        },
+        "total_revenue_sats": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "adminrpcTransaction": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "token_id": {
+          "type": "string"
+        },
+        "payment_hash": {
+          "type": "string"
+        },
+        "service_name": {
+          "type": "string"
+        },
+        "price_sats": {
+          "type": "string",
+          "format": "int64"
+        },
+        "state": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "settled_at": {
+          "type": "string"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    }
+  }
+}

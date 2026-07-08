@@ -3,6 +3,7 @@ package mint
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +277,27 @@ func TestExpiredServicesL402(t *testing.T) {
 	// reached.
 	err = mint.VerifyL402(ctx, &authorizedParams)
 	require.Contains(t, err.Error(), "not authorized")
+}
+
+func TestMintL402IgnoresTransactionStoreErrors(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	txStore := &mockTransactionStore{
+		err: errors.New("transaction store unavailable"),
+	}
+	mint := New(&Config{
+		Secrets:          newMockSecretStore(),
+		Challenger:       newMockChallenger(),
+		ServiceLimiter:   newMockServiceLimiter(),
+		Now:              time.Now,
+		TransactionStore: txStore,
+	})
+
+	mac, _, err := mint.MintL402(ctx, testService)
+	require.NoError(t, err)
+	require.NotNil(t, mac)
+	require.True(t, txStore.called)
 }
 
 type mockTime struct {

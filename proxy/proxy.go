@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -8,15 +9,22 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
+	"github.com/lightninglabs/aperture/mpp"
 	"google.golang.org/grpc/codes"
 )
+
+// receiptContextKey is the context key used to pass Payment-Receipt headers
+// from the authentication check to the response modifier.
+type receiptContextKey struct{}
 
 const (
 	// formatPattern is the pattern in which the request log will be
@@ -71,18 +79,58 @@ func (l *localService) IsHandling(r *http.Request) bool {
 // a challenge to the client or forwards the request to another server and
 // proxies the response back to the client.
 type Proxy struct {
-	proxyBackend  *httputil.ReverseProxy
+	// servicesMtx protects services and proxyBackend from concurrent
+	// access during dynamic updates via UpdateServices.
+	servicesMtx  sync.RWMutex
+	proxyBackend *httputil.ReverseProxy
+
+	// priorityLocalServices are checked before proxy service matching.
+	// Use this for local endpoints that must not be intercepted by
+	// broad proxy path patterns.
+	priorityLocalServices []LocalService
+
+	// localServices are checked after proxy service matching fails.
+	// The static file server is typically the catch-all here.
 	localServices []LocalService
+
 	authenticator auth.Authenticator
 	services      []*Service
 	blocklist     map[string]struct{}
+}
+
+// rewriteRequestPath rewrites the request path according to service config.
+// It prepends the configured prefix to the request path, preserving any
+// percent-encoded characters in the original request via url.URL.JoinPath.
+//
+// NOTE: This does not rewrite Location headers in backend responses. If the
+// backend returns redirects containing the prefixed path, clients will see the
+// internal prefixed path. This is a known limitation.
+func (s *Service) rewriteRequestPath(req *http.Request) {
+	prefix := s.Rewrite.Prefix
+	if prefix == "" {
+		return
+	}
+
+	// Build a URL from the prefix so we can use URL.JoinPath, which
+	// correctly handles RawPath and percent-encoded characters (e.g.,
+	// %2F) that the backend may rely on for routing.
+	prefixURL := &url.URL{Path: prefix}
+
+	// Use EscapedPath() to preserve percent-encoded characters from the
+	// original request. URL.JoinPath will propagate these into the
+	// result's RawPath automatically.
+	result := prefixURL.JoinPath(req.URL.EscapedPath())
+
+	req.URL.Path = result.Path
+	req.URL.RawPath = result.RawPath
 }
 
 // New returns a new Proxy instance that proxies between the services specified,
 // using the auth to validate each request's headers and get new challenge
 // headers if necessary.
 func New(auth auth.Authenticator, services []*Service,
-	blocklist []string, localServices ...LocalService) (*Proxy, error) {
+	blocklist []string, priorityLocalServices []LocalService,
+	localServices ...LocalService) (*Proxy, error) {
 
 	blMap := make(map[string]struct{})
 	for _, ip := range blocklist {
@@ -95,10 +143,11 @@ func New(auth auth.Authenticator, services []*Service,
 	}
 
 	proxy := &Proxy{
-		localServices: localServices,
-		authenticator: auth,
-		services:      services,
-		blocklist:     blMap,
+		priorityLocalServices: priorityLocalServices,
+		localServices:         localServices,
+		authenticator:         auth,
+		services:              services,
+		blocklist:             blMap,
 	}
 	err := proxy.UpdateServices(services)
 	if err != nil {
@@ -141,6 +190,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc) {
 		w.Header().Set(hdrContentType, hdrTypeGrpc)
 	}
+
+	// Priority local services are checked before proxy service matching
+	// so that endpoints like the admin API are not intercepted by broad
+	// proxy path patterns (e.g. "^/api/.*$").
+	for _, ls := range p.priorityLocalServices {
+		if ls.IsHandling(r) {
+			prefixLog.Debugf("Dispatching request %s to "+
+				"priority local service.", r.URL.Path)
+			ls.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	// Take a read lock to get a consistent snapshot of services and the
+	// proxy backend. This is held for the duration of request handling
+	// so that UpdateServices does not swap them mid-flight.
+	p.servicesMtx.RLock()
+	defer p.servicesMtx.RUnlock()
 
 	// Requests that can't be matched to a service backend will be
 	// dispatched to the static file server. If the file exists in the
@@ -201,8 +268,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// required for the given resource. The call to Accept is
 		// called in each case body rather than outside the switch so
 		// as to avoid calling this possibly expensive call for static
-		// resources.
-		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		// resources. If the service specifies an auth scheme, only
+		// authenticators matching that scheme are tried.
+		acceptAuth := p.acceptForService(
+			&r.Header, resourceName, target,
+		)
 		if !acceptAuth {
 			if skipInvoiceCreation {
 				addCorsHeaders(w.Header())
@@ -237,6 +307,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Inject receipt headers into the request context for the
+		// response modifier to pick up.
+		r = p.injectReceiptContext(r, resourceName)
+
 		// User is authenticated, apply rate limit with L402 token ID.
 		if !checkRateLimit(true) {
 			return
@@ -245,7 +319,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		acceptAuth := p.authenticator.Accept(&r.Header, resourceName)
+		acceptAuth := p.acceptForService(
+			&r.Header, resourceName, target,
+		)
 		if !acceptAuth {
 			ok, err := target.freebieDB.CanPass(r, remoteIP)
 			if err != nil {
@@ -299,10 +375,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !checkRateLimit(false) {
 				return
 			}
-		} else if !checkRateLimit(true) {
-			// Authenticated user on freebie path, rate limit by
-			// L402 token.
-			return
+		} else {
+			// Authenticated user on freebie path. Inject receipt
+			// headers and apply rate limit by L402 token.
+			r = p.injectReceiptContext(r, resourceName)
+
+			if !checkRateLimit(true) {
+				return
+			}
 		}
 
 	default:
@@ -315,6 +395,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
 	p.proxyBackend.ServeHTTP(w, r)
+}
+
+// acceptForService checks authentication, respecting the service's per-service
+// AuthScheme setting. If the authenticator is a MultiAuthenticator and the
+// service has an AuthScheme set, only matching sub-authenticators are tried.
+func (p *Proxy) acceptForService(header *http.Header, resourceName string,
+	target *Service) bool {
+
+	multi, ok := p.authenticator.(*auth.MultiAuthenticator)
+	if ok && target.AuthScheme != "" {
+		return multi.AcceptForScheme(
+			header, resourceName, target.AuthScheme,
+		)
+	}
+
+	return p.authenticator.Accept(header, resourceName)
 }
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
@@ -336,11 +432,36 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 		},
 	}
 
+	p.servicesMtx.Lock()
+	defer p.servicesMtx.Unlock()
+
+	p.services = services
+
 	p.proxyBackend = &httputil.ReverseProxy{
 		Director:  p.director,
 		Transport: &trailerFixingTransport{next: transport},
 		ModifyResponse: func(res *http.Response) error {
 			addCorsHeaders(res.Header)
+
+			// Inject Payment-Receipt headers if present in the
+			// request context. Per the MPP spec, responses with
+			// Payment-Receipt must include Cache-Control: private
+			// to prevent shared caches from storing receipts.
+			if res.Request != nil {
+				if receiptHdr, ok := res.Request.Context().Value(
+					receiptContextKey{},
+				).(http.Header); ok {
+					for k, vals := range receiptHdr {
+						for _, v := range vals {
+							res.Header.Add(k, v)
+						}
+					}
+					res.Header.Set(
+						"Cache-Control", "private",
+					)
+				}
+			}
+
 			return nil
 		},
 
@@ -354,6 +475,9 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 
 // Close cleans up the Proxy by closing any remaining open connections.
 func (p *Proxy) Close() error {
+	p.servicesMtx.RLock()
+	defer p.servicesMtx.RUnlock()
+
 	var returnErr error
 	for _, s := range p.services {
 		if err := s.pricer.Close(); err != nil {
@@ -364,6 +488,25 @@ func (p *Proxy) Close() error {
 	}
 
 	return returnErr
+}
+
+// injectReceiptContext checks if the authenticator implements ReceiptProvider
+// and stores receipt headers in the request context for the response modifier.
+func (p *Proxy) injectReceiptContext(r *http.Request,
+	resourceName string) *http.Request {
+
+	rp, ok := p.authenticator.(auth.ReceiptProvider)
+	if !ok {
+		return r
+	}
+
+	receiptHdr := rp.ReceiptHeader(&r.Header, resourceName)
+	if receiptHdr == nil {
+		return r
+	}
+
+	ctx := context.WithValue(r.Context(), receiptContextKey{}, receiptHdr)
+	return r.WithContext(ctx)
 }
 
 // director is a method that rewrites an incoming request to be forwarded to a
@@ -377,8 +520,12 @@ func (p *Proxy) director(req *http.Request) {
 		req.URL.Host = target.Address
 		req.URL.Scheme = target.Protocol
 
-		// Make sure we always forward the authorization in the correct/
-		// default format so the backend knows what to do with it.
+		target.rewriteRequestPath(req)
+
+		// Make sure we always forward the authorization in the
+		// correct/default format so the backend knows what to do
+		// with it. For MPP Payment credentials, the header is
+		// already in the correct format and doesn't need rewriting.
 		mac, preimage, err := l402.FromHeader(&req.Header)
 		if err == nil {
 			// It could be that there is no auth information because
@@ -465,10 +612,12 @@ func addCorsHeaders(header http.Header) {
 
 	header.Add("Access-Control-Allow-Origin", "*")
 	header.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	header.Add("Access-Control-Expose-Headers", "WWW-Authenticate")
+	header.Add("Access-Control-Expose-Headers",
+		"WWW-Authenticate, Payment-Receipt")
 	header.Add(
 		"Access-Control-Allow-Headers",
-		"Authorization, Grpc-Metadata-macaroon, WWW-Authenticate",
+		"Authorization, Grpc-Metadata-macaroon, "+
+			"WWW-Authenticate, Payment-Receipt",
 	)
 }
 
@@ -491,6 +640,10 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 
 	addCorsHeaders(header)
 
+	// Set Cache-Control: no-store per the Payment HTTP Authentication
+	// Scheme spec to prevent caching of challenge responses.
+	header.Set("Cache-Control", "no-store")
+
 	for name, value := range header {
 		w.Header().Set(name, value[0])
 		for i := 1; i < len(value); i++ {
@@ -498,7 +651,26 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	sendDirectResponse(w, r, http.StatusPaymentRequired, "payment required")
+	// Check if a Payment scheme challenge is present. If so, use RFC
+	// 9457 Problem Details JSON in the response body per the MPP spec.
+	hasMPP := false
+	for _, v := range header.Values("WWW-Authenticate") {
+		if strings.HasPrefix(v, mpp.AuthScheme+" ") {
+			hasMPP = true
+			break
+		}
+	}
+
+	if hasMPP {
+		w.Header().Set("Content-Type", mpp.ProblemContentType)
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write(mpp.PaymentRequiredProblem()) //nolint:errcheck
+	} else {
+		sendDirectResponse(
+			w, r, http.StatusPaymentRequired,
+			"payment required",
+		)
+	}
 }
 
 // sendDirectResponse sends a response directly to the client without proxying

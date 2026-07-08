@@ -1,0 +1,27 @@
+type: google.api.Service
+config_version: 3
+
+http:
+  rules:
+    - selector: adminrpc.Admin.GetInfo
+      get: "/api/admin/info"
+    - selector: adminrpc.Admin.GetHealth
+      get: "/api/admin/health"
+    - selector: adminrpc.Admin.ListServices
+      get: "/api/admin/services"
+    - selector: adminrpc.Admin.CreateService
+      post: "/api/admin/services"
+      body: "*"
+    - selector: adminrpc.Admin.UpdateService
+      put: "/api/admin/services/{name}"
+      body: "*"
+    - selector: adminrpc.Admin.DeleteService
+      delete: "/api/admin/services/{name}"
+    - selector: adminrpc.Admin.ListTransactions
+      get: "/api/admin/transactions"
+    - selector: adminrpc.Admin.ListTokens
+      get: "/api/admin/tokens"
+    - selector: adminrpc.Admin.RevokeToken
+      delete: "/api/admin/tokens/{token_id}"
+    - selector: adminrpc.Admin.GetStats
+      get: "/api/admin/stats"

@@ -15,7 +15,7 @@ import (
 type staticServiceLimiter struct {
 	capabilities map[l402.Service]l402.Caveat
 	constraints  map[l402.Service][]l402.Caveat
-	timeouts     map[l402.Service]l402.Caveat
+	timeouts     map[l402.Service]int64
 }
 
 // A compile-time constraint to ensure staticServiceLimiter implements
@@ -29,7 +29,7 @@ func newStaticServiceLimiter(
 
 	capabilities := make(map[l402.Service]l402.Caveat)
 	constraints := make(map[l402.Service][]l402.Caveat)
-	timeouts := make(map[l402.Service]l402.Caveat)
+	timeouts := make(map[l402.Service]int64)
 
 	for _, proxyService := range proxyServices {
 		s := l402.Service{
@@ -39,11 +39,7 @@ func newStaticServiceLimiter(
 		}
 
 		if proxyService.Timeout > 0 {
-			timeouts[s] = l402.NewTimeoutCaveat(
-				proxyService.Name,
-				proxyService.Timeout,
-				time.Now,
-			)
+			timeouts[s] = proxyService.Timeout
 		}
 
 		capabilities[s] = l402.NewCapabilitiesCaveat(
@@ -103,11 +99,13 @@ func (l *staticServiceLimiter) ServiceTimeouts(ctx context.Context,
 
 	res := make([]l402.Caveat, 0, len(services))
 	for _, service := range services {
-		timeout, ok := l.timeouts[service]
+		numSeconds, ok := l.timeouts[service]
 		if !ok {
 			continue
 		}
-		res = append(res, timeout)
+		res = append(res, l402.NewTimeoutCaveat(
+			service.Name, numSeconds, time.Now,
+		))
 	}
 
 	return res, nil

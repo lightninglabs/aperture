@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/v2"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightningnetwork/lnd/build"
@@ -35,6 +35,17 @@ const (
 	defaultIdleTimeout  = time.Minute * 2
 	defaultReadTimeout  = time.Second * 15
 	defaultWriteTimeout = time.Second * 30
+
+	// defaultWsPingInterval is the default interval at which we send
+	// WebSocket-level pings to connected clients. This keeps the
+	// connection alive through intermediary proxies and load balancers
+	// that may drop idle connections.
+	defaultWsPingInterval = 30 * time.Second
+
+	// defaultWsPongWait is the default duration we wait for a pong
+	// response after sending a WebSocket ping before considering the
+	// connection dead.
+	defaultWsPongWait = 15 * time.Second
 )
 
 type EtcdConfig struct {
@@ -66,12 +77,39 @@ type AuthConfig struct {
 	// DevServer set to true to skip verification of the mailbox server's
 	// tls cert.
 	DevServer bool `long:"devserver" description:"set to true to skip verification of the server's tls cert."`
+
+	// EnableMPP enables the Payment HTTP Authentication Scheme (MPP)
+	// alongside the existing L402 scheme.
+	EnableMPP bool `long:"enablempp" description:"Enable the Payment HTTP Authentication Scheme (MPP)"`
+
+	// MPPRealm is the realm string used in MPP challenges. Defaults to
+	// the server's listen address if empty.
+	MPPRealm string `long:"mpprealm" description:"Realm string for MPP challenges"`
+
+	// EnableSessions enables the MPP session intent, which provides
+	// prepaid sessions with deposit, bearer, top-up, and close
+	// operations.
+	EnableSessions bool `long:"enablesessions" description:"Enable MPP session intent (requires payment sending capability)"`
+
+	// SessionDepositMultiplier is the number of service units per deposit.
+	// Defaults to 20 if not set.
+	SessionDepositMultiplier int `long:"sessiondepositmultiplier" description:"Number of service units per session deposit" default:"20"`
+
+	// SessionIdleTimeout is the idle timeout for sessions in seconds.
+	// Defaults to 300 (5 minutes) if not set.
+	SessionIdleTimeout int `long:"sessionidletimeout" description:"Session idle timeout in seconds" default:"300"`
 }
 
 func (a *AuthConfig) validate() error {
 	// If we're disabled, we don't mind what these values are.
 	if a.Disable {
 		return nil
+	}
+
+	// Sessions require MPP to be enabled.
+	if a.EnableSessions && !a.EnableMPP {
+		return errors.New("enablesessions requires enablempp " +
+			"to be set")
 	}
 
 	switch {
@@ -143,6 +181,20 @@ type TorConfig struct {
 	V3          bool   `long:"v3" description:"Whether we should listen for client requests through a v3 onion service."`
 }
 
+// AdminConfig holds the configuration for the admin gRPC/REST API.
+type AdminConfig struct {
+	// Enabled determines whether the admin API is active.
+	Enabled bool `long:"enabled" description:"Enable the admin API."`
+
+	// MacaroonPath is the path where the admin macaroon will be written.
+	// Defaults to admin.macaroon in the aperture data directory.
+	MacaroonPath string `long:"macaroonpath" description:"Path to write the admin macaroon."`
+
+	// CORSOrigins controls which origins are allowed to call the admin REST
+	// API. If empty, CORS is disabled and browsers can only use same-origin.
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+}
+
 type Config struct {
 	// ListenAddr is the listening address that we should use to allow Aperture
 	// to listen for requests.
@@ -197,6 +249,9 @@ type Config struct {
 	// server to scrape metrics from.
 	Prometheus *PrometheusConfig `group:"prometheus" namespace:"prometheus" description:"Configuration setting up an endpoint that a Prometheus server can scrape."`
 
+	// Admin is the configuration for the admin REST API.
+	Admin *AdminConfig `group:"admin" namespace:"admin" description:"Configuration for the admin REST API."`
+
 	// DebugLevel is a string defining the log level for the service either
 	// for all subsystems the same or individual level by subsystem.
 	DebugLevel string `long:"debuglevel" description:"Debug level for the Aperture application and its subsystems."`
@@ -233,6 +288,18 @@ type Config struct {
 	// Logging controls various aspects of aperture logging.
 	Logging *build.LogConfig `group:"logging" namespace:"logging"`
 
+	// WsPingInterval is the interval at which WebSocket-level pings are
+	// sent to connected clients. This keeps the underlying WebSocket
+	// connection alive through intermediary proxies and load balancers.
+	// Set to 0 to disable.
+	WsPingInterval time.Duration `long:"wspinginterval" description:"Interval for WebSocket-level ping messages to keep connections alive through proxies."`
+
+	// WsPongWait is the duration to wait for a pong response after
+	// sending a WebSocket-level ping. If no pong is received within this
+	// duration, the WebSocket connection is considered dead. Must be
+	// strictly less than WsPingInterval when pings are enabled.
+	WsPongWait time.Duration `long:"wspongwait" description:"Duration to wait for a WebSocket pong response before closing the connection."`
+
 	// Blocklist is a list of IPs to deny access to.
 	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
 }
@@ -250,6 +317,18 @@ func (c *Config) validate() error {
 
 	if c.InvoiceBatchSize <= 0 {
 		return fmt.Errorf("invoice batch size must be greater than 0")
+	}
+
+	if c.WsPingInterval < 0 {
+		return fmt.Errorf("wspinginterval must not be negative")
+	}
+	if c.WsPongWait < 0 {
+		return fmt.Errorf("wspongwait must not be negative")
+	}
+	if c.WsPingInterval > 0 && c.WsPongWait >= c.WsPingInterval {
+		return fmt.Errorf("wspongwait (%v) must be less than "+
+			"wspinginterval (%v)", c.WsPongWait,
+			c.WsPingInterval)
 	}
 
 	return nil
@@ -274,9 +353,12 @@ func NewConfig() *Config {
 		Tor:              &TorConfig{},
 		HashMail:         &HashMailConfig{},
 		Prometheus:       &PrometheusConfig{},
+		Admin:            &AdminConfig{},
 		IdleTimeout:      defaultIdleTimeout,
 		ReadTimeout:      defaultReadTimeout,
 		WriteTimeout:     defaultWriteTimeout,
+		WsPingInterval:   defaultWsPingInterval,
+		WsPongWait:       defaultWsPongWait,
 		InvoiceBatchSize: defaultInvoiceBatchSize,
 		Logging:          build.DefaultLogConfig(),
 		Blocklist:        []string{},
