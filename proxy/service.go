@@ -20,6 +20,13 @@ var (
 	filePrefix       = "!file"
 	filePrefixHex    = filePrefix + "+hex"
 	filePrefixBase64 = filePrefix + "+base64"
+
+	// headerEnvRefRegexp matches ${NAME} environment references in header
+	// values. Only the braced form is recognized, so literal dollar signs
+	// in header values keep working.
+	headerEnvRefRegexp = regexp.MustCompile(
+		`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`,
+	)
 )
 
 const (
@@ -84,6 +91,10 @@ type Service struct {
 	// of that file is sent to the backend with each call (hex encoded).
 	// If the value starts with the prefix "!file+base64:", the content of
 	// the file is sent encoded as base64.
+	// References of the form ${NAME} are replaced with the value of the
+	// environment variable NAME at startup, so secrets like upstream API
+	// keys can stay out of the config file (e.g. "Bearer ${UPSTREAM_KEY}").
+	// A reference to an unset or empty variable fails startup.
 	Headers map[string]string `long:"headers" description:"Header fields to always pass to the service"`
 
 	// Timeout is an optional value that indicates in how many seconds the
@@ -230,8 +241,15 @@ func prepareServices(services []*Service) error {
 		}
 
 		// Replace placeholders/directives in the header fields with the
-		// actual desired values.
+		// actual desired values. Environment references are expanded
+		// first, so a file directive's path may itself carry one.
 		for key, value := range service.Headers {
+			value, err := expandHeaderEnv(value)
+			if err != nil {
+				return err
+			}
+			service.Headers[key] = value
+
 			if !strings.HasPrefix(value, filePrefix) {
 				continue
 			}
@@ -416,4 +434,32 @@ func prepareServices(services []*Service) error {
 		service.pricer = pricer.NewDefaultPricer(service.Price)
 	}
 	return nil
+}
+
+// expandHeaderEnv replaces ${NAME} environment references in a header value
+// with the variable's value. A reference to an unset or empty variable is an
+// error rather than an empty substitution, so a missing secret fails startup
+// instead of silently sending a malformed header upstream.
+func expandHeaderEnv(value string) (string, error) {
+	var expandErr error
+	expanded := headerEnvRefRegexp.ReplaceAllStringFunc(
+		value, func(ref string) string {
+			// Strip the ${ and } delimiters around the name.
+			name := ref[2 : len(ref)-1]
+
+			envValue, ok := os.LookupEnv(name)
+			if !ok || envValue == "" {
+				expandErr = fmt.Errorf("environment variable "+
+					"%s referenced in a service header is "+
+					"not set", name)
+			}
+
+			return envValue
+		},
+	)
+	if expandErr != nil {
+		return "", expandErr
+	}
+
+	return expanded, nil
 }
