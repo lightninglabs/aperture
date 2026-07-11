@@ -551,10 +551,14 @@ func (p *Proxy) director(req *http.Request) {
 			}
 		}
 
-		// Now overwrite header fields of the client request
-		// with the fields from the configuration file.
+		// Now overwrite header fields of the client request with the
+		// fields from the configuration file. This must replace rather
+		// than append: the client's own Authorization (the L402 header
+		// itself) would otherwise ride ahead of a configured upstream
+		// credential, and backends that read only the first value
+		// would reject the request.
 		for name, value := range target.Headers {
-			req.Header.Add(name, value)
+			req.Header.Set(name, value)
 		}
 	}
 }

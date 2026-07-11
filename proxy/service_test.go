@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,35 @@ func TestPrepareServicesHeaderEnv(t *testing.T) {
 		t, prepareServices([]*Service{missing}),
 		"APERTURE_TEST_UNSET",
 	)
+}
+
+// TestDirectorOverwritesClientHeaders makes sure a configured service header
+// replaces the client's value outright rather than being appended after it. A
+// client's own Authorization (the L402 header itself) must not shadow the
+// configured upstream credential.
+func TestDirectorOverwritesClientHeaders(t *testing.T) {
+	service := &Service{
+		Name:       "test",
+		Address:    "upstream.example.com",
+		Protocol:   "https",
+		HostRegexp: ".*",
+		Headers: map[string]string{
+			"Authorization": "Bearer upstream-key",
+		},
+	}
+	require.NoError(t, prepareServices([]*Service{service}))
+
+	p := &Proxy{services: []*Service{service}}
+
+	req := httptest.NewRequest("POST", "http://gateway/v1/foo", nil)
+	req.Header.Set("Authorization", "L402 macaroon:preimage")
+
+	p.director(req)
+
+	require.Equal(
+		t, []string{"Bearer upstream-key"},
+		req.Header.Values("Authorization"),
+	)
+	require.Equal(t, "upstream.example.com", req.Host)
+	require.Equal(t, "https", req.URL.Scheme)
 }
