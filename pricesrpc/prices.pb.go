@@ -117,6 +117,452 @@ func (x *GetPriceResponse) GetPriceSats() int64 {
 	return 0
 }
 
+type ChallengeMintedRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The URL path of the request that triggered the challenge.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// The full HTTP request serialized as text.
+	HttpRequestText string `protobuf:"bytes,2,opt,name=http_request_text,json=httpRequestText,proto3" json:"http_request_text,omitempty"`
+	// The hex-encoded L402 token ID of the minted macaroon.
+	TokenId string `protobuf:"bytes,3,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	// The price in satoshis the challenge invoice was created for.
+	PriceSats int64 `protobuf:"varint,4,opt,name=price_sats,json=priceSats,proto3" json:"price_sats,omitempty"`
+	// The name of the aperture service the challenge was minted for.
+	ServiceName   string `protobuf:"bytes,5,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChallengeMintedRequest) Reset() {
+	*x = ChallengeMintedRequest{}
+	mi := &file_prices_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChallengeMintedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChallengeMintedRequest) ProtoMessage() {}
+
+func (x *ChallengeMintedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChallengeMintedRequest.ProtoReflect.Descriptor instead.
+func (*ChallengeMintedRequest) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ChallengeMintedRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ChallengeMintedRequest) GetHttpRequestText() string {
+	if x != nil {
+		return x.HttpRequestText
+	}
+	return ""
+}
+
+func (x *ChallengeMintedRequest) GetTokenId() string {
+	if x != nil {
+		return x.TokenId
+	}
+	return ""
+}
+
+func (x *ChallengeMintedRequest) GetPriceSats() int64 {
+	if x != nil {
+		return x.PriceSats
+	}
+	return 0
+}
+
+func (x *ChallengeMintedRequest) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+type ChallengeMintedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChallengeMintedResponse) Reset() {
+	*x = ChallengeMintedResponse{}
+	mi := &file_prices_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChallengeMintedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChallengeMintedResponse) ProtoMessage() {}
+
+func (x *ChallengeMintedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChallengeMintedResponse.ProtoReflect.Descriptor instead.
+func (*ChallengeMintedResponse) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{3}
+}
+
+type AuthorizeRequestRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The URL path of the request.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// The full HTTP request serialized as text.
+	HttpRequestText string `protobuf:"bytes,2,opt,name=http_request_text,json=httpRequestText,proto3" json:"http_request_text,omitempty"`
+	// The hex-encoded L402 token ID the request authenticated with.
+	TokenId string `protobuf:"bytes,3,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	// The name of the aperture service the request is for.
+	ServiceName   string `protobuf:"bytes,4,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthorizeRequestRequest) Reset() {
+	*x = AuthorizeRequestRequest{}
+	mi := &file_prices_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorizeRequestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorizeRequestRequest) ProtoMessage() {}
+
+func (x *AuthorizeRequestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorizeRequestRequest.ProtoReflect.Descriptor instead.
+func (*AuthorizeRequestRequest) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *AuthorizeRequestRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *AuthorizeRequestRequest) GetHttpRequestText() string {
+	if x != nil {
+		return x.HttpRequestText
+	}
+	return ""
+}
+
+func (x *AuthorizeRequestRequest) GetTokenId() string {
+	if x != nil {
+		return x.TokenId
+	}
+	return ""
+}
+
+func (x *AuthorizeRequestRequest) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+type AuthorizeRequestResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Whether the request is allowed to proceed to the backend.
+	Allowed bool `protobuf:"varint,1,opt,name=allowed,proto3" json:"allowed,omitempty"`
+	// When not allowed, the price in satoshis for the fresh 402 challenge
+	// aperture should mint. If zero, aperture falls back to GetPrice.
+	PriceSats int64 `protobuf:"varint,2,opt,name=price_sats,json=priceSats,proto3" json:"price_sats,omitempty"`
+	// An optional human-readable reason for a denied request.
+	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	// The per-request token estimate the price server reserved against the
+	// token's balance when allowing this request. Aperture echoes it back
+	// in the matching ReportUsageRequest so the exact reservation can be
+	// released, rather than an approximate default.
+	ReservedEstimate int64 `protobuf:"varint,4,opt,name=reserved_estimate,json=reservedEstimate,proto3" json:"reserved_estimate,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AuthorizeRequestResponse) Reset() {
+	*x = AuthorizeRequestResponse{}
+	mi := &file_prices_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorizeRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorizeRequestResponse) ProtoMessage() {}
+
+func (x *AuthorizeRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorizeRequestResponse.ProtoReflect.Descriptor instead.
+func (*AuthorizeRequestResponse) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AuthorizeRequestResponse) GetAllowed() bool {
+	if x != nil {
+		return x.Allowed
+	}
+	return false
+}
+
+func (x *AuthorizeRequestResponse) GetPriceSats() int64 {
+	if x != nil {
+		return x.PriceSats
+	}
+	return 0
+}
+
+func (x *AuthorizeRequestResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AuthorizeRequestResponse) GetReservedEstimate() int64 {
+	if x != nil {
+		return x.ReservedEstimate
+	}
+	return 0
+}
+
+type ReportUsageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The hex-encoded L402 token ID the request authenticated with.
+	TokenId string `protobuf:"bytes,1,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	// The URL path of the request.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// The name of the aperture service the request was for.
+	ServiceName string `protobuf:"bytes,3,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	// The HTTP status code the backend responded with.
+	HttpStatus int32 `protobuf:"varint,4,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
+	// The Content-Type of the backend response.
+	ContentType string `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	// Whether the response body was read to completion. False indicates the
+	// stream was truncated, for example by a client disconnect.
+	Complete bool `protobuf:"varint,6,opt,name=complete,proto3" json:"complete,omitempty"`
+	// A capped tail of the response body. For SSE streams this contains the
+	// trailing chunks, including any final usage object.
+	ResponseTail []byte `protobuf:"bytes,7,opt,name=response_tail,json=responseTail,proto3" json:"response_tail,omitempty"`
+	// The Content-Encoding the backend responded with. Metered requests strip
+	// the client's Accept-Encoding so the observed tail is always plaintext;
+	// a non-identity encoding here signals that the observer captured
+	// compressed bytes it could not parse, which is treated as an error
+	// condition worth alerting on.
+	ContentEncoding string `protobuf:"bytes,8,opt,name=content_encoding,json=contentEncoding,proto3" json:"content_encoding,omitempty"`
+	// The reserved_estimate value the AuthorizeRequest response for this
+	// request carried, echoed back verbatim. Lets the price server release
+	// the exact reservation it took at authorization time. Zero when the
+	// authorization predates this field.
+	ReservedEstimate int64 `protobuf:"varint,9,opt,name=reserved_estimate,json=reservedEstimate,proto3" json:"reserved_estimate,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ReportUsageRequest) Reset() {
+	*x = ReportUsageRequest{}
+	mi := &file_prices_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportUsageRequest) ProtoMessage() {}
+
+func (x *ReportUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportUsageRequest.ProtoReflect.Descriptor instead.
+func (*ReportUsageRequest) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ReportUsageRequest) GetTokenId() string {
+	if x != nil {
+		return x.TokenId
+	}
+	return ""
+}
+
+func (x *ReportUsageRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ReportUsageRequest) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+func (x *ReportUsageRequest) GetHttpStatus() int32 {
+	if x != nil {
+		return x.HttpStatus
+	}
+	return 0
+}
+
+func (x *ReportUsageRequest) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *ReportUsageRequest) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *ReportUsageRequest) GetResponseTail() []byte {
+	if x != nil {
+		return x.ResponseTail
+	}
+	return nil
+}
+
+func (x *ReportUsageRequest) GetContentEncoding() string {
+	if x != nil {
+		return x.ContentEncoding
+	}
+	return ""
+}
+
+func (x *ReportUsageRequest) GetReservedEstimate() int64 {
+	if x != nil {
+		return x.ReservedEstimate
+	}
+	return 0
+}
+
+type ReportUsageResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The amount in satoshis debited from the token's balance as a result
+	// of this usage report. Informational.
+	DebitedSats int64 `protobuf:"varint,1,opt,name=debited_sats,json=debitedSats,proto3" json:"debited_sats,omitempty"`
+	// The remaining balance of the token in satoshis. Informational.
+	RemainingSats int64 `protobuf:"varint,2,opt,name=remaining_sats,json=remainingSats,proto3" json:"remaining_sats,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportUsageResponse) Reset() {
+	*x = ReportUsageResponse{}
+	mi := &file_prices_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportUsageResponse) ProtoMessage() {}
+
+func (x *ReportUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportUsageResponse.ProtoReflect.Descriptor instead.
+func (*ReportUsageResponse) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ReportUsageResponse) GetDebitedSats() int64 {
+	if x != nil {
+		return x.DebitedSats
+	}
+	return 0
+}
+
+func (x *ReportUsageResponse) GetRemainingSats() int64 {
+	if x != nil {
+		return x.RemainingSats
+	}
+	return 0
+}
+
 var File_prices_proto protoreflect.FileDescriptor
 
 const file_prices_proto_rawDesc = "" +
@@ -127,9 +573,45 @@ const file_prices_proto_rawDesc = "" +
 	"\x11http_request_text\x18\x02 \x01(\tR\x0fhttpRequestText\"1\n" +
 	"\x10GetPriceResponse\x12\x1d\n" +
 	"\n" +
-	"price_sats\x18\x01 \x01(\x03R\tpriceSats2M\n" +
+	"price_sats\x18\x01 \x01(\x03R\tpriceSats\"\xb5\x01\n" +
+	"\x16ChallengeMintedRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12*\n" +
+	"\x11http_request_text\x18\x02 \x01(\tR\x0fhttpRequestText\x12\x19\n" +
+	"\btoken_id\x18\x03 \x01(\tR\atokenId\x12\x1d\n" +
+	"\n" +
+	"price_sats\x18\x04 \x01(\x03R\tpriceSats\x12!\n" +
+	"\fservice_name\x18\x05 \x01(\tR\vserviceName\"\x19\n" +
+	"\x17ChallengeMintedResponse\"\x97\x01\n" +
+	"\x17AuthorizeRequestRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12*\n" +
+	"\x11http_request_text\x18\x02 \x01(\tR\x0fhttpRequestText\x12\x19\n" +
+	"\btoken_id\x18\x03 \x01(\tR\atokenId\x12!\n" +
+	"\fservice_name\x18\x04 \x01(\tR\vserviceName\"\x98\x01\n" +
+	"\x18AuthorizeRequestResponse\x12\x18\n" +
+	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x1d\n" +
+	"\n" +
+	"price_sats\x18\x02 \x01(\x03R\tpriceSats\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12+\n" +
+	"\x11reserved_estimate\x18\x04 \x01(\x03R\x10reservedEstimate\"\xc3\x02\n" +
+	"\x12ReportUsageRequest\x12\x19\n" +
+	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12!\n" +
+	"\fservice_name\x18\x03 \x01(\tR\vserviceName\x12\x1f\n" +
+	"\vhttp_status\x18\x04 \x01(\x05R\n" +
+	"httpStatus\x12!\n" +
+	"\fcontent_type\x18\x05 \x01(\tR\vcontentType\x12\x1a\n" +
+	"\bcomplete\x18\x06 \x01(\bR\bcomplete\x12#\n" +
+	"\rresponse_tail\x18\a \x01(\fR\fresponseTail\x12)\n" +
+	"\x10content_encoding\x18\b \x01(\tR\x0fcontentEncoding\x12+\n" +
+	"\x11reserved_estimate\x18\t \x01(\x03R\x10reservedEstimate\"_\n" +
+	"\x13ReportUsageResponse\x12!\n" +
+	"\fdebited_sats\x18\x01 \x01(\x03R\vdebitedSats\x12%\n" +
+	"\x0eremaining_sats\x18\x02 \x01(\x03R\rremainingSats2\xd2\x02\n" +
 	"\x06Prices\x12C\n" +
-	"\bGetPrice\x12\x1a.pricesrpc.GetPriceRequest\x1a\x1b.pricesrpc.GetPriceResponseB-Z+github.com/lightninglabs/aperture/pricesrpcb\x06proto3"
+	"\bGetPrice\x12\x1a.pricesrpc.GetPriceRequest\x1a\x1b.pricesrpc.GetPriceResponse\x12X\n" +
+	"\x0fChallengeMinted\x12!.pricesrpc.ChallengeMintedRequest\x1a\".pricesrpc.ChallengeMintedResponse\x12[\n" +
+	"\x10AuthorizeRequest\x12\".pricesrpc.AuthorizeRequestRequest\x1a#.pricesrpc.AuthorizeRequestResponse\x12L\n" +
+	"\vReportUsage\x12\x1d.pricesrpc.ReportUsageRequest\x1a\x1e.pricesrpc.ReportUsageResponseB-Z+github.com/lightninglabs/aperture/pricesrpcb\x06proto3"
 
 var (
 	file_prices_proto_rawDescOnce sync.Once
@@ -143,16 +625,28 @@ func file_prices_proto_rawDescGZIP() []byte {
 	return file_prices_proto_rawDescData
 }
 
-var file_prices_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_prices_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_prices_proto_goTypes = []any{
-	(*GetPriceRequest)(nil),  // 0: pricesrpc.GetPriceRequest
-	(*GetPriceResponse)(nil), // 1: pricesrpc.GetPriceResponse
+	(*GetPriceRequest)(nil),          // 0: pricesrpc.GetPriceRequest
+	(*GetPriceResponse)(nil),         // 1: pricesrpc.GetPriceResponse
+	(*ChallengeMintedRequest)(nil),   // 2: pricesrpc.ChallengeMintedRequest
+	(*ChallengeMintedResponse)(nil),  // 3: pricesrpc.ChallengeMintedResponse
+	(*AuthorizeRequestRequest)(nil),  // 4: pricesrpc.AuthorizeRequestRequest
+	(*AuthorizeRequestResponse)(nil), // 5: pricesrpc.AuthorizeRequestResponse
+	(*ReportUsageRequest)(nil),       // 6: pricesrpc.ReportUsageRequest
+	(*ReportUsageResponse)(nil),      // 7: pricesrpc.ReportUsageResponse
 }
 var file_prices_proto_depIdxs = []int32{
 	0, // 0: pricesrpc.Prices.GetPrice:input_type -> pricesrpc.GetPriceRequest
-	1, // 1: pricesrpc.Prices.GetPrice:output_type -> pricesrpc.GetPriceResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: pricesrpc.Prices.ChallengeMinted:input_type -> pricesrpc.ChallengeMintedRequest
+	4, // 2: pricesrpc.Prices.AuthorizeRequest:input_type -> pricesrpc.AuthorizeRequestRequest
+	6, // 3: pricesrpc.Prices.ReportUsage:input_type -> pricesrpc.ReportUsageRequest
+	1, // 4: pricesrpc.Prices.GetPrice:output_type -> pricesrpc.GetPriceResponse
+	3, // 5: pricesrpc.Prices.ChallengeMinted:output_type -> pricesrpc.ChallengeMintedResponse
+	5, // 6: pricesrpc.Prices.AuthorizeRequest:output_type -> pricesrpc.AuthorizeRequestResponse
+	7, // 7: pricesrpc.Prices.ReportUsage:output_type -> pricesrpc.ReportUsageResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -169,7 +663,7 @@ func file_prices_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_prices_proto_rawDesc), len(file_prices_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
