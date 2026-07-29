@@ -303,18 +303,33 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r, resourceName, price)
+			p.handlePaymentRequired(w, r, target, resourceName, price)
+			return
+		}
+
+		// User is authenticated, apply rate limit with L402 token ID.
+		// This runs before the metered check on purpose: that check
+		// reserves an estimate against the token's balance, and the
+		// reservation is only released by the usage report the response
+		// observer sends. A request turned away here never reaches the
+		// backend, so it would produce no report and leak its
+		// reservation, shrinking the buyer's usable balance for nothing.
+		if !checkRateLimit(true) {
+			return
+		}
+
+		// For metered services, consult the pricer on every
+		// authenticated request so prepaid balances are drawn down and
+		// exhausted tokens are challenged afresh.
+		var proceed bool
+		r, proceed = p.checkMeteredAccess(w, r, target, resourceName)
+		if !proceed {
 			return
 		}
 
 		// Inject receipt headers into the request context for the
 		// response modifier to pick up.
 		r = p.injectReceiptContext(r, resourceName)
-
-		// User is authenticated, apply rate limit with L402 token ID.
-		if !checkRateLimit(true) {
-			return
-		}
 
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
@@ -356,7 +371,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				p.handlePaymentRequired(
-					w, r, resourceName, target.Price,
+					w, r, target, resourceName, price,
 				)
 				return
 			}
@@ -462,7 +477,33 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 				}
 			}
 
+			// For metered requests, observe the response body so
+			// the resulting usage is reported to the pricer once
+			// the response completes.
+			attachUsageObserver(res)
+
 			return nil
+		},
+
+		// A backend that never produced a response skips
+		// ModifyResponse, and with it the usage observer that returns
+		// the reservation taken at authorization time. Release it here
+		// so a backend outage or a client that hangs up early cannot
+		// quietly eat into the buyer's balance.
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request,
+			err error) {
+
+			log.Errorf("Error proxying request to backend: %v", err)
+
+			if info, ok := r.Context().Value(
+				meteringContextKey{},
+			).(*meteringInfo); ok {
+				releaseReservation(
+					info, http.StatusBadGateway,
+				)
+			}
+
+			w.WriteHeader(http.StatusBadGateway)
 		},
 
 		// A negative value means to flush immediately after each write
@@ -537,10 +578,14 @@ func (p *Proxy) director(req *http.Request) {
 			}
 		}
 
-		// Now overwrite header fields of the client request
-		// with the fields from the configuration file.
+		// Now overwrite header fields of the client request with the
+		// fields from the configuration file. This must replace rather
+		// than append: the client's own Authorization (the L402 header
+		// itself) would otherwise ride ahead of a configured upstream
+		// credential, and backends that read only the first value
+		// would reject the request.
 		for name, value := range target.Headers {
-			req.Header.Add(name, value)
+			req.Header.Set(name, value)
 		}
 	}
 }
@@ -624,13 +669,28 @@ func addCorsHeaders(header http.Header) {
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
-	serviceName string, servicePrice int64) {
+	target *Service, serviceName string, servicePrice int64) {
 
 	header, err := p.authenticator.FreshChallengeHeader(
 		serviceName, servicePrice,
 	)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)
+		sendDirectResponse(
+			w, r, http.StatusInternalServerError,
+			"challenge failure",
+		)
+		return
+	}
+
+	// For metered services, the pricer must learn about the minted token
+	// before the challenge goes out: once the client pays, the pricer is
+	// the one honoring the purchased balance. If it cannot be notified,
+	// the challenge must not be sent, as the client would pay for a
+	// bundle the pricer will not honor.
+	if err := notifyChallengeMinted(r, target, header, servicePrice); err != nil {
+		log.Errorf("Error notifying pricer of minted challenge: %v",
+			err)
 		sendDirectResponse(
 			w, r, http.StatusInternalServerError,
 			"challenge failure",

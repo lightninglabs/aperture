@@ -19,6 +19,22 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PricesClient interface {
 	GetPrice(ctx context.Context, in *GetPriceRequest, opts ...grpc.CallOption) (*GetPriceResponse, error)
+	// ChallengeMinted notifies the pricer that aperture minted a fresh L402
+	// challenge for a metered service. The token ID identifies the macaroon
+	// embedded in the challenge, and the price is the amount quoted by a
+	// preceding GetPrice call. The pricer uses this to associate the token,
+	// once paid, with the balance it purchased.
+	ChallengeMinted(ctx context.Context, in *ChallengeMintedRequest, opts ...grpc.CallOption) (*ChallengeMintedResponse, error)
+	// AuthorizeRequest is invoked for every authenticated request to a metered
+	// service. The pricer decides whether the token still has balance left; if
+	// not, aperture responds with a fresh 402 challenge at the returned price,
+	// prompting the client to purchase a new bundle.
+	AuthorizeRequest(ctx context.Context, in *AuthorizeRequestRequest, opts ...grpc.CallOption) (*AuthorizeRequestResponse, error)
+	// ReportUsage is invoked once the response for an authorized request has
+	// completed (or aborted). The pricer performs the cost analysis on the
+	// captured response excerpt (for example the trailing usage object of an
+	// SSE stream) and debits the token's balance.
+	ReportUsage(ctx context.Context, in *ReportUsageRequest, opts ...grpc.CallOption) (*ReportUsageResponse, error)
 }
 
 type pricesClient struct {
@@ -38,11 +54,54 @@ func (c *pricesClient) GetPrice(ctx context.Context, in *GetPriceRequest, opts .
 	return out, nil
 }
 
+func (c *pricesClient) ChallengeMinted(ctx context.Context, in *ChallengeMintedRequest, opts ...grpc.CallOption) (*ChallengeMintedResponse, error) {
+	out := new(ChallengeMintedResponse)
+	err := c.cc.Invoke(ctx, "/pricesrpc.Prices/ChallengeMinted", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pricesClient) AuthorizeRequest(ctx context.Context, in *AuthorizeRequestRequest, opts ...grpc.CallOption) (*AuthorizeRequestResponse, error) {
+	out := new(AuthorizeRequestResponse)
+	err := c.cc.Invoke(ctx, "/pricesrpc.Prices/AuthorizeRequest", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pricesClient) ReportUsage(ctx context.Context, in *ReportUsageRequest, opts ...grpc.CallOption) (*ReportUsageResponse, error) {
+	out := new(ReportUsageResponse)
+	err := c.cc.Invoke(ctx, "/pricesrpc.Prices/ReportUsage", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PricesServer is the server API for Prices service.
 // All implementations must embed UnimplementedPricesServer
 // for forward compatibility
 type PricesServer interface {
 	GetPrice(context.Context, *GetPriceRequest) (*GetPriceResponse, error)
+	// ChallengeMinted notifies the pricer that aperture minted a fresh L402
+	// challenge for a metered service. The token ID identifies the macaroon
+	// embedded in the challenge, and the price is the amount quoted by a
+	// preceding GetPrice call. The pricer uses this to associate the token,
+	// once paid, with the balance it purchased.
+	ChallengeMinted(context.Context, *ChallengeMintedRequest) (*ChallengeMintedResponse, error)
+	// AuthorizeRequest is invoked for every authenticated request to a metered
+	// service. The pricer decides whether the token still has balance left; if
+	// not, aperture responds with a fresh 402 challenge at the returned price,
+	// prompting the client to purchase a new bundle.
+	AuthorizeRequest(context.Context, *AuthorizeRequestRequest) (*AuthorizeRequestResponse, error)
+	// ReportUsage is invoked once the response for an authorized request has
+	// completed (or aborted). The pricer performs the cost analysis on the
+	// captured response excerpt (for example the trailing usage object of an
+	// SSE stream) and debits the token's balance.
+	ReportUsage(context.Context, *ReportUsageRequest) (*ReportUsageResponse, error)
 	mustEmbedUnimplementedPricesServer()
 }
 
@@ -52,6 +111,15 @@ type UnimplementedPricesServer struct {
 
 func (UnimplementedPricesServer) GetPrice(context.Context, *GetPriceRequest) (*GetPriceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPrice not implemented")
+}
+func (UnimplementedPricesServer) ChallengeMinted(context.Context, *ChallengeMintedRequest) (*ChallengeMintedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChallengeMinted not implemented")
+}
+func (UnimplementedPricesServer) AuthorizeRequest(context.Context, *AuthorizeRequestRequest) (*AuthorizeRequestResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AuthorizeRequest not implemented")
+}
+func (UnimplementedPricesServer) ReportUsage(context.Context, *ReportUsageRequest) (*ReportUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportUsage not implemented")
 }
 func (UnimplementedPricesServer) mustEmbedUnimplementedPricesServer() {}
 
@@ -84,6 +152,60 @@ func _Prices_GetPrice_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Prices_ChallengeMinted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChallengeMintedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PricesServer).ChallengeMinted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/pricesrpc.Prices/ChallengeMinted",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PricesServer).ChallengeMinted(ctx, req.(*ChallengeMintedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Prices_AuthorizeRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthorizeRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PricesServer).AuthorizeRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/pricesrpc.Prices/AuthorizeRequest",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PricesServer).AuthorizeRequest(ctx, req.(*AuthorizeRequestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Prices_ReportUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PricesServer).ReportUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/pricesrpc.Prices/ReportUsage",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PricesServer).ReportUsage(ctx, req.(*ReportUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Prices_ServiceDesc is the grpc.ServiceDesc for Prices service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -94,6 +216,18 @@ var Prices_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPrice",
 			Handler:    _Prices_GetPrice_Handler,
+		},
+		{
+			MethodName: "ChallengeMinted",
+			Handler:    _Prices_ChallengeMinted_Handler,
+		},
+		{
+			MethodName: "AuthorizeRequest",
+			Handler:    _Prices_AuthorizeRequest_Handler,
+		},
+		{
+			MethodName: "ReportUsage",
+			Handler:    _Prices_ReportUsage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

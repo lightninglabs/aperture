@@ -6,3 +6,12 @@ http:
     - selector: pricesrpc.Prices.GetPrice
       post: "/v1/aperture/price"
       body: "*"
+    - selector: pricesrpc.Prices.ChallengeMinted
+      post: "/v1/aperture/challenge-minted"
+      body: "*"
+    - selector: pricesrpc.Prices.AuthorizeRequest
+      post: "/v1/aperture/authorize"
+      body: "*"
+    - selector: pricesrpc.Prices.ReportUsage
+      post: "/v1/aperture/usage"
+      body: "*"
