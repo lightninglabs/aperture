@@ -372,6 +372,28 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 					"challenger: %w", err)
 			}
 
+		case authCfg.WavelengthGateway != "":
+			log.Infof("Using wavelength's authenticator config, "+
+				"minting invoices from %v",
+				authCfg.WavelengthGateway)
+
+			client, err := challenger.NewWavelengthInvoiceClient(
+				authCfg.WavelengthGateway, a.cfg.StrictVerify,
+			)
+			if err != nil {
+				return fmt.Errorf("unable to create "+
+					"wavelength invoice client: %w", err)
+			}
+
+			a.challenger, err = challenger.NewLndChallenger(
+				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
+				context.Background, errChan, a.cfg.StrictVerify,
+				challengerOpts...,
+			)
+			if err != nil {
+				return err
+			}
+
 		case authCfg.LndHost != "":
 			log.Infof("Using lnd's authenticator config")
 
