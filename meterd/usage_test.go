@@ -219,6 +219,16 @@ func chatRequestText(model string) string {
 		"\r\n" + body
 }
 
+// chatRequestTextRaw serializes a chat request around a caller-supplied JSON
+// body, for cases where the body has to be malformed or unusual.
+func chatRequestTextRaw(body string) string {
+	return "POST /v1/chat/completions HTTP/1.1\r\n" +
+		"Host: backend.example\r\n" +
+		"Content-Type: application/json\r\n" +
+		fmt.Sprintf("Content-Length: %d\r\n", len(body)) +
+		"\r\n" + body
+}
+
 // TestModelFromRequestText checks the extraction of the model identifier
 // from serialized HTTP requests.
 func TestModelFromRequestText(t *testing.T) {
@@ -289,6 +299,28 @@ func TestModelFromRequestText(t *testing.T) {
 			"Content-Length: 999999\r\n\r\n" +
 			`{"meta":{"model":"decoy","a":[1,2]},` +
 			`"model":"real-model","messages":[{"role":"user"`,
+		want:   "real-model",
+		wantOK: true,
+	}, {
+		// A repeated model key is ambiguous: Go, Python and JS all
+		// resolve it to the last occurrence, so taking the first would
+		// authorize against a cheap bundle and then be served the
+		// expensive model. Refuse to pick.
+		name: "duplicate model keys in the prefix",
+		text: "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n" +
+			"Content-Length: 999999\r\n\r\n" +
+			`{"model":"cheap-model","model":"expensive-model",` +
+			`"messages":[{"role":"user","content":"aaaaaaaa`,
+		want:   "",
+		wantOK: false,
+	}, {
+		// The whole-document path must agree: an untruncated body with
+		// a repeated key resolves last-wins through Unmarshal, which
+		// is the behavior the backend will see.
+		name: "duplicate model keys in a complete body",
+		text: chatRequestTextRaw(
+			`{"model":"cheap-model","model":"real-model"}`,
+		),
 		want:   "real-model",
 		wantOK: true,
 	}, {

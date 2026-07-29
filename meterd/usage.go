@@ -303,7 +303,21 @@ func modelFromRequestText(text string) (string, bool) {
 }
 
 // modelFromJSONPrefix reads the top-level "model" key out of a possibly
-// truncated JSON object, returning false when the key cannot be reached.
+// truncated JSON object, returning false when the key cannot be reached or
+// when the prefix is ambiguous about which model was asked for.
+//
+// The scan does not stop at the first "model" key. Go, Python and JavaScript
+// all resolve a repeated JSON key to the last occurrence, so the backend will
+// serve the last one, and stopping early would let a body like
+// {"model":"cheap","model":"expensive","messages":[...]} authorize against a
+// cheap bundle and then be served as the expensive model. A repeat is not
+// something any real client emits, so rather than guess we treat it as
+// indeterminate and let the caller fail closed.
+//
+// One residual case cannot be closed here: a duplicate that sits behind the
+// serialization cap is invisible to anything reading only a prefix. Aperture
+// holds the whole body, so pinning the model upstream is the durable fix; it
+// is out of scope for this change.
 func modelFromJSONPrefix(body []byte) (string, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 
@@ -315,18 +329,25 @@ func modelFromJSONPrefix(body []byte) (string, bool) {
 		return "", false
 	}
 
+	var (
+		model string
+		found bool
+	)
+
 	for {
 		keyTok, err := dec.Token()
 		if err != nil {
-			// Truncated before the model key was reached.
-			return "", false
+			// Truncated. A model read before the cut is the best
+			// answer available; without one there is nothing to
+			// report.
+			return model, found
 		}
 
 		// A closing brace means the object was complete and simply
 		// carried no model, which json.Unmarshal would already have
 		// told us; treat it as indeterminate rather than as a default.
 		if delim, ok := keyTok.(json.Delim); ok && delim == '}' {
-			return "", false
+			return model, found
 		}
 
 		key, ok := keyTok.(string)
@@ -335,16 +356,29 @@ func modelFromJSONPrefix(body []byte) (string, bool) {
 		}
 
 		if key == "model" {
+			// A second model key in the same object is ambiguous
+			// by construction; refuse to pick one.
+			if found {
+				return "", false
+			}
+
 			valTok, err := dec.Token()
 			if err != nil {
 				return "", false
 			}
-			model, ok := valTok.(string)
-			return model, ok
+			model, ok = valTok.(string)
+			if !ok {
+				return "", false
+			}
+			found = true
+
+			// Keep scanning: a duplicate later in the prefix still
+			// has to be caught.
+			continue
 		}
 
 		if err := skipJSONValue(dec); err != nil {
-			return "", false
+			return model, found
 		}
 	}
 }
