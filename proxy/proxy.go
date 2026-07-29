@@ -307,6 +307,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// User is authenticated, apply rate limit with L402 token ID.
+		// This runs before the metered check on purpose: that check
+		// reserves an estimate against the token's balance, and the
+		// reservation is only released by the usage report the response
+		// observer sends. A request turned away here never reaches the
+		// backend, so it would produce no report and leak its
+		// reservation, shrinking the buyer's usable balance for nothing.
+		if !checkRateLimit(true) {
+			return
+		}
+
 		// For metered services, consult the pricer on every
 		// authenticated request so prepaid balances are drawn down and
 		// exhausted tokens are challenged afresh.
@@ -319,11 +330,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Inject receipt headers into the request context for the
 		// response modifier to pick up.
 		r = p.injectReceiptContext(r, resourceName)
-
-		// User is authenticated, apply rate limit with L402 token ID.
-		if !checkRateLimit(true) {
-			return
-		}
 
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
@@ -477,6 +483,27 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 			attachUsageObserver(res)
 
 			return nil
+		},
+
+		// A backend that never produced a response skips
+		// ModifyResponse, and with it the usage observer that returns
+		// the reservation taken at authorization time. Release it here
+		// so a backend outage or a client that hangs up early cannot
+		// quietly eat into the buyer's balance.
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request,
+			err error) {
+
+			log.Errorf("Error proxying request to backend: %v", err)
+
+			if info, ok := r.Context().Value(
+				meteringContextKey{},
+			).(*meteringInfo); ok {
+				releaseReservation(
+					info, http.StatusBadGateway,
+				)
+			}
+
+			w.WriteHeader(http.StatusBadGateway)
 		},
 
 		// A negative value means to flush immediately after each write

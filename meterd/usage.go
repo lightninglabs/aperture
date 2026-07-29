@@ -271,22 +271,113 @@ func matchJSONObject(data []byte) ([]byte, bool) {
 }
 
 // modelFromRequestText extracts the model identifier from the JSON body of a
-// serialized HTTP request, as produced by httputil.DumpRequest. An empty
-// string is returned when no model can be extracted.
-func modelFromRequestText(text string) string {
+// serialized HTTP request, as produced by httputil.DumpRequest.
+//
+// The second return reports whether the answer can be trusted. Aperture caps
+// how much of the body it serializes into the pricer RPCs, and a long-context
+// prompt runs well past that cap, so a body that fails to parse is usually one
+// that was cut mid-document rather than one that named no model. Those two
+// cases must not be conflated: "no model named" resolves to the default model,
+// so treating a truncated body that way would quote an expensive model at the
+// default's rate and skip the bundle-model mismatch guard entirely. Callers
+// fail closed when this returns false.
+func modelFromRequestText(text string) (string, bool) {
 	body := requestBody(text)
 	if len(body) == 0 {
-		return ""
+		// No body is a determinate "this request named no model".
+		return "", true
 	}
 
+	// A body that survived the cap intact parses whole.
 	var payload struct {
 		Model string `json:"model"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return ""
+	if err := json.Unmarshal(body, &payload); err == nil {
+		return payload.Model, true
 	}
 
-	return payload.Model
+	// Otherwise scan the prefix we did get. OpenAI-compatible clients put
+	// "model" ahead of the messages array, so it is nearly always inside
+	// the cap even when the array is not.
+	return modelFromJSONPrefix(body)
+}
+
+// modelFromJSONPrefix reads the top-level "model" key out of a possibly
+// truncated JSON object, returning false when the key cannot be reached.
+func modelFromJSONPrefix(body []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+
+	tok, err := dec.Token()
+	if err != nil {
+		return "", false
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return "", false
+	}
+
+	for {
+		keyTok, err := dec.Token()
+		if err != nil {
+			// Truncated before the model key was reached.
+			return "", false
+		}
+
+		// A closing brace means the object was complete and simply
+		// carried no model, which json.Unmarshal would already have
+		// told us; treat it as indeterminate rather than as a default.
+		if delim, ok := keyTok.(json.Delim); ok && delim == '}' {
+			return "", false
+		}
+
+		key, ok := keyTok.(string)
+		if !ok {
+			return "", false
+		}
+
+		if key == "model" {
+			valTok, err := dec.Token()
+			if err != nil {
+				return "", false
+			}
+			model, ok := valTok.(string)
+			return model, ok
+		}
+
+		if err := skipJSONValue(dec); err != nil {
+			return "", false
+		}
+	}
+}
+
+// skipJSONValue consumes the next value from the decoder, descending through
+// nested objects and arrays.
+func skipJSONValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+
+	// A scalar is one token; only containers need unwinding.
+	if _, ok := tok.(json.Delim); !ok {
+		return nil
+	}
+
+	for depth := 1; depth > 0; {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if delim, ok := tok.(json.Delim); ok {
+			switch delim {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+	}
+
+	return nil
 }
 
 // maxTokensFromRequestText extracts the max_tokens hint from the JSON body of

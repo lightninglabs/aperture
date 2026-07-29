@@ -228,43 +228,88 @@ func TestModelFromRequestText(t *testing.T) {
 		name string
 		text string
 		want string
+
+		// wantOK is whether the extraction is determinate. False means
+		// the caller must fail closed rather than fall back to the
+		// default model.
+		wantOK bool
 	}{{
-		name: "well-formed request",
-		text: chatRequestText("gpt-test"),
-		want: "gpt-test",
+		name:   "well-formed request",
+		text:   chatRequestText("gpt-test"),
+		want:   "gpt-test",
+		wantOK: true,
 	}, {
-		name: "no body",
-		text: "GET /v1/models HTTP/1.1\r\nHost: x\r\n\r\n",
-		want: "",
+		name:   "no body",
+		text:   "GET /v1/models HTTP/1.1\r\nHost: x\r\n\r\n",
+		want:   "",
+		wantOK: true,
 	}, {
 		name: "body without model",
 		text: "POST / HTTP/1.1\r\nHost: x\r\n" +
 			"Content-Length: 13\r\n\r\n" +
 			`{"stream": 1}`,
-		want: "",
+		want:   "",
+		wantOK: true,
 	}, {
 		// A request that fails the full HTTP parse still yields its
 		// body through the blank line fallback.
-		name: "malformed request line with JSON body",
-		text: "NOT-HTTP\n\n" + `{"model":"claude-test"}`,
-		want: "claude-test",
+		name:   "malformed request line with JSON body",
+		text:   "NOT-HTTP\n\n" + `{"model":"claude-test"}`,
+		want:   "claude-test",
+		wantOK: true,
 	}, {
-		name: "garbage",
-		text: "complete nonsense",
-		want: "",
+		// Aperture serializes only a leading slice of the body, so a
+		// long-context prompt arrives cut mid-document. The model sits
+		// ahead of the messages array in every OpenAI-compatible
+		// client, so it is still readable and must be read: resolving
+		// this to the default model would price an expensive model at
+		// the cheap one's rate.
+		name: "truncated body with model ahead of the cut",
+		text: "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n" +
+			"Content-Length: 999999\r\n\r\n" +
+			`{"model":"expensive-model","messages":[{"role":` +
+			`"user","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+		want:   "expensive-model",
+		wantOK: true,
 	}, {
-		name: "empty",
-		text: "",
-		want: "",
+		// The model can also sit behind the cut, and then there is no
+		// honest answer. Reporting "no model named" would be read as
+		// the default model, so this has to be indeterminate.
+		name: "truncated body with model behind the cut",
+		text: "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n" +
+			"Content-Length: 999999\r\n\r\n" +
+			`{"messages":[{"role":"user","content":"aaaaaaaa`,
+		want:   "",
+		wantOK: false,
+	}, {
+		// Nested containers before the model must be skipped whole,
+		// not mistaken for the top-level key.
+		name: "model after a nested object",
+		text: "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n" +
+			"Content-Length: 999999\r\n\r\n" +
+			`{"meta":{"model":"decoy","a":[1,2]},` +
+			`"model":"real-model","messages":[{"role":"user"`,
+		want:   "real-model",
+		wantOK: true,
+	}, {
+		name:   "garbage",
+		text:   "complete nonsense",
+		want:   "",
+		wantOK: true,
+	}, {
+		name:   "empty",
+		text:   "",
+		want:   "",
+		wantOK: true,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			require.Equal(
-				t, tc.want, modelFromRequestText(tc.text),
-			)
+			model, ok := modelFromRequestText(tc.text)
+			require.Equal(t, tc.want, model)
+			require.Equal(t, tc.wantOK, ok)
 		})
 	}
 }

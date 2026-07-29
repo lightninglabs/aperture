@@ -319,9 +319,12 @@ func attachUsageObserver(res *http.Response) {
 		return
 	}
 
-	// Hijacked protocol upgrades bypass the regular body copy, so there
-	// is no meaningful usage to observe.
+	// Hijacked protocol upgrades bypass the regular body copy, so there is
+	// no meaningful usage to observe. The reservation still has to come
+	// back, though, so report an empty, incomplete usage rather than
+	// dropping it.
 	if res.StatusCode == http.StatusSwitchingProtocols {
+		releaseReservation(info, res.StatusCode)
 		return
 	}
 
@@ -340,6 +343,37 @@ func attachUsageObserver(res *http.Response) {
 			ReservedEstimate: info.reservedEstimate,
 		},
 	}
+}
+
+// releaseReservation reports an empty, incomplete usage for a metered request
+// that will never produce a response body to observe.
+//
+// AuthorizeRequest reserves a token estimate against the buyer's balance, and
+// the only thing that gives it back is the usage report carrying the echoed
+// reservation. Any path that authorizes a request and then abandons it, a
+// transport failure, a client that disconnects before response headers, a
+// protocol upgrade, would otherwise strand that reservation: the pricer holds
+// no timer, so the tokens stay reserved until it restarts. Enough of those and
+// a bundle with balance left reads as exhausted and the buyer re-buys one.
+//
+// The report carries no body, so the pricer debits nothing and releases the
+// reservation in full, which is the right outcome for a request the backend
+// never served.
+func releaseReservation(info *meteringInfo, httpStatus int) {
+	if info == nil || info.pricer == nil || info.reservedEstimate == 0 {
+		return
+	}
+
+	usage := &pricer.Usage{
+		TokenID:          info.tokenID,
+		Path:             info.path,
+		ServiceName:      info.serviceName,
+		HTTPStatus:       httpStatus,
+		Complete:         false,
+		ReservedEstimate: info.reservedEstimate,
+	}
+
+	go reportUsageWithRetry(info.pricer, usage, defaultReportSchedule)
 }
 
 // usageObservingBody wraps a response body, captures a bounded tail of the

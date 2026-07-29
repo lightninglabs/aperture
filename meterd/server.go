@@ -262,9 +262,13 @@ func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
 func (s *Server) GetPrice(_ context.Context,
 	req *pricesrpc.GetPriceRequest) (*pricesrpc.GetPriceResponse, error) {
 
-	model, rates, err := s.rates.ResolveModel(
-		modelFromRequestText(req.HttpRequestText),
-	)
+	requested, determinate := modelFromRequestText(req.HttpRequestText)
+	if !determinate {
+		return nil, status.Error(codes.InvalidArgument, "unable to "+
+			"determine the request model")
+	}
+
+	model, rates, err := s.rates.ResolveModel(requested)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -285,9 +289,13 @@ func (s *Server) ChallengeMinted(_ context.Context,
 	req *pricesrpc.ChallengeMintedRequest) (
 	*pricesrpc.ChallengeMintedResponse, error) {
 
-	model, _, err := s.rates.ResolveModel(
-		modelFromRequestText(req.HttpRequestText),
-	)
+	requested, determinate := modelFromRequestText(req.HttpRequestText)
+	if !determinate {
+		return nil, status.Error(codes.InvalidArgument, "unable to "+
+			"determine the request model")
+	}
+
+	model, _, err := s.rates.ResolveModel(requested)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -327,7 +335,22 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	// and an unresolvable model fails closed: a model the rate source does
 	// not know cannot be proxied upstream on another model's bundle.
 	if booked, ok := s.store.Get(req.TokenId); ok {
-		requested := modelFromRequestText(req.HttpRequestText)
+		requested, determinate := modelFromRequestText(
+			req.HttpRequestText,
+		)
+
+		// A request whose model we could not read must not ride an
+		// existing bundle: the guard below is the only thing keeping a
+		// cheap bundle from paying for an expensive model, and it is
+		// skipped entirely when the model is unknown. Erroring rather
+		// than denying is deliberate, since a denial would mint a
+		// fresh challenge and the buyer would pay for a bundle whose
+		// ChallengeMinted is about to fail the same way.
+		if !determinate {
+			return nil, status.Error(codes.InvalidArgument,
+				"unable to determine the request model")
+		}
+
 		if requested != "" {
 			resolved, _, err := s.rates.ResolveModel(requested)
 			switch {
@@ -388,7 +411,10 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		}
 	}
 	if model == "" {
-		model = modelFromRequestText(req.HttpRequestText)
+		// Best effort only: this picks the model to quote the next
+		// bundle at, and an unreadable one just leaves the price at
+		// zero so aperture falls back to GetPrice.
+		model, _ = modelFromRequestText(req.HttpRequestText)
 	}
 
 	return s.denyAuthorization(req.TokenId, model, reason), nil

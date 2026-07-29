@@ -589,3 +589,108 @@ func TestAttachUsageObserver(t *testing.T) {
 		t.Fatal("no usage report received")
 	}
 }
+
+// TestReleaseReservationOnAbandonedRequest checks that a metered request the
+// backend never served still returns the estimate reserved at authorization
+// time. The reservation is only released by a usage report, and the pricer
+// holds no timer, so a leak here silently shrinks the buyer's usable balance
+// until an unspent bundle reads as exhausted.
+func TestReleaseReservationOnAbandonedRequest(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeMeteredPricer{
+		usageReports: make(chan *pricer.Usage, 1),
+	}
+	info := &meteringInfo{
+		tokenID:          "token",
+		serviceName:      "inference",
+		path:             "/v1/x",
+		pricer:           fake,
+		tailBytes:        64,
+		reservedEstimate: 4096,
+	}
+
+	releaseReservation(info, http.StatusBadGateway)
+
+	select {
+	case usage := <-fake.usageReports:
+		// The echoed reservation is what lets the pricer release the
+		// exact amount it took, and an incomplete report with no body
+		// debits nothing, which is right for a request never served.
+		require.Equal(t, int64(4096), usage.ReservedEstimate)
+		require.Equal(t, "token", usage.TokenID)
+		require.False(t, usage.Complete)
+		require.Empty(t, usage.ResponseTail)
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("no usage report; the reservation leaked")
+	}
+}
+
+// TestReleaseReservationSkipsUnreservedRequests checks that a request which
+// reserved nothing produces no report, so an unmetered path cannot spam the
+// pricer.
+func TestReleaseReservationSkipsUnreservedRequests(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeMeteredPricer{
+		usageReports: make(chan *pricer.Usage, 1),
+	}
+	info := &meteringInfo{
+		tokenID: "token",
+		pricer:  fake,
+	}
+
+	releaseReservation(info, http.StatusBadGateway)
+
+	select {
+	case usage := <-fake.usageReports:
+		t.Fatalf("unexpected usage report: %+v", usage)
+
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestAttachUsageObserverReleasesOnProtocolUpgrade checks that a hijacked
+// upgrade, which bypasses the body copy the observer rides on, still hands
+// the reservation back.
+func TestAttachUsageObserverReleasesOnProtocolUpgrade(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeMeteredPricer{
+		usageReports: make(chan *pricer.Usage, 1),
+	}
+	info := &meteringInfo{
+		tokenID:          "token",
+		serviceName:      "inference",
+		path:             "/v1/x",
+		pricer:           fake,
+		tailBytes:        64,
+		reservedEstimate: 512,
+	}
+	req := httptest.NewRequest("GET", "/v1/x", nil)
+	req = req.WithContext(context.WithValue(
+		req.Context(), meteringContextKey{}, info,
+	))
+
+	res := &http.Response{
+		StatusCode: http.StatusSwitchingProtocols,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+		Header:     http.Header{},
+	}
+	attachUsageObserver(res)
+
+	// The body stays unwrapped, so the release has to come from elsewhere.
+	_, isWrapped := res.Body.(*usageObservingBody)
+	require.False(t, isWrapped)
+
+	select {
+	case usage := <-fake.usageReports:
+		require.Equal(t, int64(512), usage.ReservedEstimate)
+		require.False(t, usage.Complete)
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("no usage report; the reservation leaked")
+	}
+}
