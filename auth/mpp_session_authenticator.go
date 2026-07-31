@@ -77,7 +77,7 @@ type MPPSessionAuthenticator struct {
 type closeResult struct {
 	sessionID    string
 	refundSats   int64
-	refundStatus string // "succeeded", "failed", or "skipped"
+	refundStatus string
 }
 
 // Size returns the size of the close result for the LRU cache. Each entry
@@ -589,17 +589,42 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 		return false
 	}
 
+	// A session closed with nothing left needs no refund and gets no
+	// attempt, which the spec spells "skipped". Caching it up front also
+	// means the common case never reads the in-flight status below.
+	if refundSats == 0 {
+		_, _ = a.closeResults.Put(payload.SessionID, &closeResult{
+			sessionID:    payload.SessionID,
+			refundSats:   0,
+			refundStatus: mpp.RefundStatusSkipped,
+		})
+
+		log.Infof("MPP Session: Closed session %s with nothing to "+
+			"refund", payload.SessionID)
+
+		return true
+	}
+
 	// Cache an initial close result for ReceiptHeader immediately so the
-	// HTTP response can proceed. The refund runs asynchronously.
+	// HTTP response can proceed. The refund runs asynchronously, so this is
+	// the status a receipt written before the payment resolves carries.
+	//
+	// It is deliberately the pessimistic one. The spec admits only three
+	// values, none of which means "still trying", and of those only
+	// "failed" is safe to be wrong about: a receipt that claimed success
+	// for a payment still in flight would tell the buyer their money is
+	// back when it may never arrive. The buyer keeps the return invoice
+	// either way, so a refund that lands after the receipt costs them
+	// nothing, while a receipt that lies costs them the ability to notice.
 	_, _ = a.closeResults.Put(payload.SessionID, &closeResult{
 		sessionID:    payload.SessionID,
 		refundSats:   refundSats,
-		refundStatus: "pending",
+		refundStatus: mpp.RefundStatusFailed,
 	})
 
 	// Fire the refund asynchronously so the close response isn't blocked
 	// by LN payment routing (which can take many seconds).
-	if refundSats > 0 && a.paymentSender != nil {
+	if a.paymentSender != nil {
 		go func() {
 			// Use a dedicated context with a generous timeout
 			// for payment routing, independent of the HTTP
@@ -614,13 +639,13 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 				refundSats,
 			)
 
-			status := "succeeded"
+			status := mpp.RefundStatusSucceeded
 			if err != nil {
 				log.Errorf("MPP Session: Refund failed "+
 					"for session %s (%d sats): %v",
 					payload.SessionID, refundSats,
 					err)
-				status = "failed"
+				status = mpp.RefundStatusFailed
 			} else {
 				log.Infof("MPP Session: Refunded %d "+
 					"sats to session %s",
@@ -636,19 +661,13 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 				},
 			)
 		}()
-	} else if refundSats > 0 {
-		// PaymentSender not configured, can't refund.
+	} else {
+		// PaymentSender not configured, can't refund. The cached
+		// status is already "failed", which is the truthful answer: the
+		// buyer's balance is held by the server with no way out.
 		log.Warnf("MPP Session: No payment sender configured, "+
 			"cannot refund %d sats for session %s",
 			refundSats, payload.SessionID)
-
-		_, _ = a.closeResults.Put(
-			payload.SessionID, &closeResult{
-				sessionID:    payload.SessionID,
-				refundSats:   refundSats,
-				refundStatus: "failed",
-			},
-		)
 	}
 
 	log.Infof("MPP Session: Closed session %s (refund=%d sats)",

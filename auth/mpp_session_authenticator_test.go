@@ -167,6 +167,10 @@ type mockPaymentSender struct {
 	mu       sync.Mutex
 	payments []sentPayment
 	err      error
+
+	// block, when set, holds the send open until it is closed, so a test
+	// can read a receipt while the refund is still routing.
+	block chan struct{}
 }
 
 type sentPayment struct {
@@ -176,6 +180,10 @@ type sentPayment struct {
 
 func (m *mockPaymentSender) SendPayment(_ context.Context, invoice string,
 	amtSats int64) (string, error) {
+
+	if m.block != nil {
+		<-m.block
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

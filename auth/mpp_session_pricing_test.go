@@ -3,9 +3,12 @@ package auth
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/stretchr/testify/require"
@@ -280,4 +283,145 @@ func TestSettleSessionRequestUnknownSession(t *testing.T) {
 	require.NoError(t, auth.SettleSessionRequest(
 		context.Background(), "no-such-session", 10, 10,
 	))
+}
+
+// closeSessionForRefund opens a session, spends part of it, and closes it,
+// returning the receipt header the close produced.
+func closeSessionForRefund(t *testing.T, auth *MPPSessionAuthenticator,
+	hmacSecret []byte, deposit, spend int64) http.Header {
+
+	t.Helper()
+
+	preimage, paymentHash := testPreimageAndHash(t)
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+	challenge, sessionID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, deposit,
+	)
+
+	open := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+	require.True(t, auth.Accept(&open, "test-service"))
+
+	if spend > 0 {
+		require.NoError(t, auth.sessionStore.DeductSessionBalance(
+			context.Background(), sessionID, spend,
+		))
+	}
+
+	closeCred := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:    mpp.SessionActionClose,
+		SessionID: sessionID,
+		Preimage:  hex.EncodeToString(preimage[:]),
+	})
+	require.True(t, auth.Accept(&closeCred, "test-service"))
+
+	return closeCred
+}
+
+// receiptRefund decodes the refund amount and status out of a session receipt.
+func receiptRefund(t *testing.T, auth *MPPSessionAuthenticator,
+	closeCred http.Header) (int64, string) {
+
+	t.Helper()
+
+	header := auth.ReceiptHeader(&closeCred, "test-service")
+	require.NotNil(t, header)
+
+	raw, err := mpp.Base64URLDecode(header.Get(mpp.HeaderPaymentReceipt))
+	require.NoError(t, err)
+
+	var receipt mpp.SessionReceipt
+	require.NoError(t, json.Unmarshal(raw, &receipt))
+
+	return receipt.RefundSats, receipt.RefundStatus
+}
+
+// TestSessionRefundStatusSkipped asserts that a session closed with nothing
+// left reports "skipped": no refund was owed, so none was attempted. Before
+// this it reported an out-of-spec "pending" that no client could interpret.
+func TestSessionRefundStatusSkipped(t *testing.T) {
+	auth, _, sender, hmacSecret := newTestSessionAuth(t)
+
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 300)
+
+	refund, status := receiptRefund(t, auth, closeCred)
+	require.EqualValues(t, 0, refund)
+	require.Equal(t, mpp.RefundStatusSkipped, status)
+
+	// Nothing may be sent for a session with no remainder.
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Empty(t, sender.payments)
+}
+
+// TestSessionRefundStatusSucceeded asserts a refund that goes through reports
+// "succeeded" once the payment has settled.
+func TestSessionRefundStatusSucceeded(t *testing.T) {
+	auth, _, sender, hmacSecret := newTestSessionAuth(t)
+
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 100)
+
+	require.Eventually(t, func() bool {
+		_, status := receiptRefund(t, auth, closeCred)
+
+		return status == mpp.RefundStatusSucceeded
+	}, 5*time.Second, 10*time.Millisecond)
+
+	refund, _ := receiptRefund(t, auth, closeCred)
+	require.EqualValues(t, 200, refund)
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Len(t, sender.payments, 1)
+	require.EqualValues(t, 200, sender.payments[0].amtSats)
+}
+
+// TestSessionRefundStatusFailed asserts a refund the wallet refuses reports
+// "failed", and that the amount still owed is carried on the receipt so the
+// buyer knows what is being held.
+//
+// The amountless return invoice a Wavelength-backed seller cannot pay is
+// exactly this path, which is why the sender surfaces it as a distinct error
+// rather than as a silent send of the wrong amount.
+func TestSessionRefundStatusFailed(t *testing.T) {
+	auth, _, sender, hmacSecret := newTestSessionAuth(t)
+	sender.err = errors.New("wavelength cannot pay an amountless invoice")
+
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 100)
+
+	require.Eventually(t, func() bool {
+		refund, status := receiptRefund(t, auth, closeCred)
+
+		return status == mpp.RefundStatusFailed && refund == 200
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+// TestSessionRefundInFlightIsNotClaimedSuccessful asserts that a receipt
+// written while the refund is still routing does not claim success.
+//
+// The spec admits only succeeded, failed and skipped, none of which means
+// "still trying", and of those only "failed" is safe to be wrong about. A
+// receipt claiming success for a payment that never lands tells the buyer their
+// money is back when it is not, and the buyer holds the return invoice either
+// way, so a refund settling after the receipt costs them nothing.
+func TestSessionRefundInFlightIsNotClaimedSuccessful(t *testing.T) {
+	auth, _, sender, hmacSecret := newTestSessionAuth(t)
+
+	// Hold the payment open so the receipt is read mid-flight.
+	release := make(chan struct{})
+	sender.block = release
+	t.Cleanup(func() {
+		close(release)
+	})
+
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 100)
+
+	refund, status := receiptRefund(t, auth, closeCred)
+	require.EqualValues(t, 200, refund)
+	require.Equal(t, mpp.RefundStatusFailed, status)
+	require.NotEqual(t, mpp.RefundStatusSucceeded, status)
 }
