@@ -188,7 +188,8 @@ type mockSettlerAuth struct {
 
 var _ SessionSettler = (*mockSettlerAuth)(nil)
 
-func (m *mockSettlerAuth) BearerSessionID(_ *http.Header) (string, int64, bool) {
+func (m *mockSettlerAuth) BearerSessionID(_ context.Context,
+	_ *http.Header) (string, int64, bool) {
 	if !m.knows {
 		return "", 0, false
 	}
@@ -260,7 +261,9 @@ func TestMultiAuthenticatorSessionFanOut(t *testing.T) {
 	multi := NewMultiAuthenticator(plain, stranger, owner)
 
 	header := make(http.Header)
-	sessionID, charged, ok := multi.BearerSessionID(&header)
+	sessionID, charged, ok := multi.BearerSessionID(
+		context.Background(), &header,
+	)
 	require.True(t, ok)
 	require.Equal(t, "session-abc", sessionID)
 	require.EqualValues(t, 7, charged)
@@ -285,7 +288,7 @@ func TestMultiAuthenticatorNoSettlers(t *testing.T) {
 	multi := NewMultiAuthenticator(&mockAuthenticator{})
 
 	header := make(http.Header)
-	_, _, ok := multi.BearerSessionID(&header)
+	_, _, ok := multi.BearerSessionID(context.Background(), &header)
 	require.False(t, ok)
 
 	require.Error(t, multi.SettleSessionRequest(

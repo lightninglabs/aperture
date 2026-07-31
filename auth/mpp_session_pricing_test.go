@@ -130,12 +130,22 @@ func TestSessionChallengeDepositOverride(t *testing.T) {
 func TestBearerSessionID(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
 	auth, _, _, hmacSecret := newTestSessionAuth(t)
 	preimage, paymentHash := testPreimageAndHash(t)
+
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
 
 	challenge, sessionID := buildSessionChallenge(
 		t, hmacSecret, paymentHash, 300,
 	)
+
+	open := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+	require.True(t, auth.Accept(&open, "test-service"))
 
 	bearer := buildSessionCredential(t, challenge, &mpp.SessionPayload{
 		Action:    mpp.SessionActionBearer,
@@ -143,7 +153,7 @@ func TestBearerSessionID(t *testing.T) {
 		Preimage:  hex.EncodeToString(preimage[:]),
 	})
 
-	gotID, charged, ok := auth.BearerSessionID(&bearer)
+	gotID, charged, ok := auth.BearerSessionID(ctx, &bearer)
 	require.True(t, ok)
 	require.Equal(t, sessionID, gotID)
 
@@ -152,12 +162,7 @@ func TestBearerSessionID(t *testing.T) {
 	require.Equal(t, int64(2), charged)
 
 	// An open credential is not a draw-down and must not be settled.
-	open := buildSessionCredential(t, challenge, &mpp.SessionPayload{
-		Action:        mpp.SessionActionOpen,
-		Preimage:      hex.EncodeToString(preimage[:]),
-		ReturnInvoice: testReturnInvoice(t, paymentHash),
-	})
-	_, _, ok = auth.BearerSessionID(&open)
+	_, _, ok = auth.BearerSessionID(ctx, &open)
 	require.False(t, ok)
 
 	// Neither is a close.
@@ -166,12 +171,80 @@ func TestBearerSessionID(t *testing.T) {
 		SessionID: sessionID,
 		Preimage:  hex.EncodeToString(preimage[:]),
 	})
-	_, _, ok = auth.BearerSessionID(&closeCred)
+	_, _, ok = auth.BearerSessionID(ctx, &closeCred)
 	require.False(t, ok)
 
 	// And neither is a header carrying no MPP credential at all.
 	empty := make(http.Header)
-	_, _, ok = auth.BearerSessionID(&empty)
+	_, _, ok = auth.BearerSessionID(ctx, &empty)
+	require.False(t, ok)
+}
+
+// TestBearerSessionIDRefusesUnprovenCredentials asserts that the settlement
+// seam verifies the credential itself rather than assuming authentication
+// already vouched for it.
+//
+// A request can carry credentials for several schemes at once and only one of
+// them has to be the one that passed. Without these checks, a caller holding
+// any valid credential could attach a session credential naming a stranger's
+// session and have this request's cost settled against that stranger's balance.
+func TestBearerSessionIDRefusesUnprovenCredentials(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+
+	victimPreimage, victimHash := testPreimageAndHash(t)
+	auth.checker.(*mockInvoiceChecker).settledHashes[victimHash] = true
+
+	challenge, victimSession := buildSessionChallenge(
+		t, hmacSecret, victimHash, 300,
+	)
+	open := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(victimPreimage[:]),
+		ReturnInvoice: testReturnInvoice(t, victimHash),
+	})
+	require.True(t, auth.Accept(&open, "test-service"))
+
+	// An attacker holding a server-minted challenge but not the victim's
+	// deposit preimage cannot name the victim's session.
+	var wrongPreimage [32]byte
+	wrongPreimage[0] = 0xff
+
+	forged := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:    mpp.SessionActionBearer,
+		SessionID: victimSession,
+		Preimage:  hex.EncodeToString(wrongPreimage[:]),
+	})
+	_, _, ok := auth.BearerSessionID(ctx, &forged)
+	require.False(t, ok)
+
+	// Neither can a credential whose challenge this server never minted,
+	// which is what carries the amount already deducted.
+	_, otherHmac := testPreimageAndHash(t)
+	unsigned, _ := buildSessionChallenge(
+		t, []byte("a-different-servers-secret-key!"), otherHmac, 300,
+	)
+	unsigned.ID = challenge.ID
+	unsignedCred := buildSessionCredential(t, unsigned, &mpp.SessionPayload{
+		Action:    mpp.SessionActionBearer,
+		SessionID: victimSession,
+		Preimage:  hex.EncodeToString(victimPreimage[:]),
+	})
+	_, _, ok = auth.BearerSessionID(ctx, &unsignedCred)
+	require.False(t, ok)
+
+	// And a closed session settles nothing further.
+	_, err := store.CloseSessionAndGetBalance(ctx, victimSession)
+	require.NoError(t, err)
+
+	legit := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:    mpp.SessionActionBearer,
+		SessionID: victimSession,
+		Preimage:  hex.EncodeToString(victimPreimage[:]),
+	})
+	_, _, ok = auth.BearerSessionID(ctx, &legit)
 	require.False(t, ok)
 }
 

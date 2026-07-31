@@ -204,8 +204,8 @@ func (m *MultiAuthenticator) ReceiptHeader(header *http.Header,
 // first answer.
 //
 // NOTE: This is part of the SessionSettler interface.
-func (m *MultiAuthenticator) BearerSessionID(header *http.Header) (string,
-	int64, bool) {
+func (m *MultiAuthenticator) BearerSessionID(ctx context.Context,
+	header *http.Header) (string, int64, bool) {
 
 	for _, auth := range m.authenticators {
 		settler, ok := auth.(SessionSettler)
@@ -213,7 +213,7 @@ func (m *MultiAuthenticator) BearerSessionID(header *http.Header) (string,
 			continue
 		}
 
-		sessionID, charged, ok := settler.BearerSessionID(header)
+		sessionID, charged, ok := settler.BearerSessionID(ctx, header)
 		if ok {
 			return sessionID, charged, true
 		}

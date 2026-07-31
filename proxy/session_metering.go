@@ -141,7 +141,9 @@ func (p *Proxy) checkSessionMetering(r *http.Request,
 		return r
 	}
 
-	sessionID, chargedSats, ok := settler.BearerSessionID(&r.Header)
+	sessionID, chargedSats, ok := settler.BearerSessionID(
+		r.Context(), &r.Header,
+	)
 	if !ok {
 		return r
 	}

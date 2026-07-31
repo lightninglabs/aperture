@@ -113,8 +113,8 @@ func (f *fakeSessionSettler) FreshChallengeHeader(_ string,
 	return make(http.Header), nil
 }
 
-func (f *fakeSessionSettler) BearerSessionID(_ *http.Header) (string, int64,
-	bool) {
+func (f *fakeSessionSettler) BearerSessionID(_ context.Context,
+	_ *http.Header) (string, int64, bool) {
 
 	if !f.present {
 		return "", 0, false

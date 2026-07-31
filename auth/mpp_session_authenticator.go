@@ -854,14 +854,18 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 // against, along with the per-unit amount its challenge quoted, which is what
 // handleBearer has already deducted from the balance.
 //
-// The credential is only parsed here, never trusted on its own: the amount is
-// read out of the challenge the server itself minted and HMAC-bound, and the
-// session was authenticated by Accept before the proxy ever asks. A caller that
-// has not run Accept first must not treat this as authentication.
+// The credential is verified here rather than assumed good, even though Accept
+// has already run. A request can carry credentials for several schemes at once
+// and only one of them needs to have been the one that authenticated it, so a
+// caller holding a valid L402 token could otherwise attach an unverified
+// session credential naming somebody else's session and have this request's
+// cost settled against that stranger's balance. Re-running the checks costs one
+// HMAC and one session read, which is cheap next to being able to spend another
+// buyer's deposit.
 //
 // NOTE: This is part of the SessionSettler interface.
-func (a *MPPSessionAuthenticator) BearerSessionID(header *http.Header) (string,
-	int64, bool) {
+func (a *MPPSessionAuthenticator) BearerSessionID(ctx context.Context,
+	header *http.Header) (string, int64, bool) {
 
 	cred, err := mpp.ParseCredential(header)
 	if err != nil {
@@ -874,12 +878,21 @@ func (a *MPPSessionAuthenticator) BearerSessionID(header *http.Header) (string,
 		return "", 0, false
 	}
 
+	// The challenge has to be one this server minted, since the amount that
+	// was deducted is read out of it.
+	params := cred.Challenge.ToChallengeParams()
+	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
+		return "", 0, false
+	}
+
 	var payload mpp.SessionPayload
 	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
 		return "", 0, false
 	}
 
-	if payload.Action != mpp.SessionActionBearer || payload.SessionID == "" {
+	if payload.Action != mpp.SessionActionBearer ||
+		payload.SessionID == "" || payload.Preimage == "" {
+
 		return "", 0, false
 	}
 
@@ -890,6 +903,20 @@ func (a *MPPSessionAuthenticator) BearerSessionID(header *http.Header) (string,
 
 	charged, err := strconv.ParseInt(sessReq.Amount, 10, 64)
 	if err != nil || charged < 0 {
+		return "", 0, false
+	}
+
+	// The session ID rides in the payload, which the challenge HMAC does
+	// not cover, so possession of the deposit preimage is what ties this
+	// credential to that session. It is the same proof handleBearer
+	// demands.
+	session, err := a.sessionStore.GetSession(ctx, payload.SessionID)
+	if err != nil || session.Status != sessionStatusOpen {
+		return "", 0, false
+	}
+
+	preimage, err := lntypes.MakePreimageFromStr(payload.Preimage)
+	if err != nil || !preimage.Matches(session.PaymentHash) {
 		return "", 0, false
 	}
 

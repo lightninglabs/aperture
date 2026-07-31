@@ -153,9 +153,15 @@ type SessionSettler interface {
 	// BearerSessionID returns the session a bearer credential in the header
 	// draws against, along with the amount that credential's challenge
 	// quoted and that the authenticator has already deducted. It reports
-	// false for a header that is not an MPP session bearer credential.
-	BearerSessionID(header *http.Header) (sessionID string,
-		chargedSats int64, ok bool)
+	// false for a header that is not a bearer credential the implementation
+	// itself would accept.
+	//
+	// The implementation must re-verify the credential rather than trust
+	// that authentication already passed. A request can carry credentials
+	// for several schemes at once, and only one of them needs to have been
+	// the one that authenticated it.
+	BearerSessionID(ctx context.Context, header *http.Header) (
+		sessionID string, chargedSats int64, ok bool)
 
 	// SettleSessionRequest reconciles a request that was charged
 	// chargedSats against the actualSats it turned out to cost.
