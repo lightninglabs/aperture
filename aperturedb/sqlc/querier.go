@@ -28,10 +28,12 @@ type Querier interface {
 	GetL402TransactionByIdentifierHash(ctx context.Context, identifierHash []byte) (L402Transaction, error)
 	GetL402TransactionsByPaymentHash(ctx context.Context, paymentHash []byte) ([]L402Transaction, error)
 	GetMPPSessionByID(ctx context.Context, sessionID string) (MppSession, error)
+	GetMPPSessionCreditOwner(ctx context.Context, paymentHash []byte) (string, error)
 	GetSecretByHash(ctx context.Context, hash []byte) ([]byte, error)
 	GetSession(ctx context.Context, passphraseEntropy []byte) (LncSession, error)
 	InsertL402Transaction(ctx context.Context, arg InsertL402TransactionParams) (int32, error)
 	InsertMPPSession(ctx context.Context, arg InsertMPPSessionParams) (int32, error)
+	InsertMPPSessionCredit(ctx context.Context, arg InsertMPPSessionCreditParams) (sql.Result, error)
 	InsertSecret(ctx context.Context, arg InsertSecretParams) (int32, error)
 	InsertSession(ctx context.Context, arg InsertSessionParams) error
 	ListL402Transactions(ctx context.Context, arg ListL402TransactionsParams) ([]L402Transaction, error)

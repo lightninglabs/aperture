@@ -44,3 +44,15 @@ SET spent_sats = CASE
     updated_at = $2
 WHERE session_id = $3 AND status = 'open'
 RETURNING CAST(spent_sats AS BIGINT);
+
+-- name: InsertMPPSessionCredit :execresult
+INSERT INTO mpp_session_credits (
+    payment_hash, session_id, amount_sats, created_at
+) VALUES (
+    $1, $2, $3, $4
+) ON CONFLICT (payment_hash) DO NOTHING;
+
+-- name: GetMPPSessionCreditOwner :one
+SELECT session_id
+FROM mpp_session_credits
+WHERE payment_hash = $1;

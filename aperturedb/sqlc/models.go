@@ -46,6 +46,14 @@ type MppSession struct {
 	UpdatedAt     time.Time
 }
 
+type MppSessionCredit struct {
+	ID          int32
+	PaymentHash []byte
+	SessionID   string
+	AmountSats  int64
+	CreatedAt   time.Time
+}
+
 type Onion struct {
 	PrivateKey []byte
 	CreatedAt  time.Time

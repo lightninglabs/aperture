@@ -68,6 +68,19 @@ func (q *Queries) GetMPPSessionByID(ctx context.Context, sessionID string) (MppS
 	return i, err
 }
 
+const getMPPSessionCreditOwner = `-- name: GetMPPSessionCreditOwner :one
+SELECT session_id
+FROM mpp_session_credits
+WHERE payment_hash = $1
+`
+
+func (q *Queries) GetMPPSessionCreditOwner(ctx context.Context, paymentHash []byte) (string, error) {
+	row := q.db.QueryRowContext(ctx, getMPPSessionCreditOwner, paymentHash)
+	var session_id string
+	err := row.Scan(&session_id)
+	return session_id, err
+}
+
 const insertMPPSession = `-- name: InsertMPPSession :one
 INSERT INTO mpp_sessions (
     session_id, payment_hash, deposit_sats, spent_sats,
@@ -102,6 +115,30 @@ func (q *Queries) InsertMPPSession(ctx context.Context, arg InsertMPPSessionPara
 	var id int32
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertMPPSessionCredit = `-- name: InsertMPPSessionCredit :execresult
+INSERT INTO mpp_session_credits (
+    payment_hash, session_id, amount_sats, created_at
+) VALUES (
+    $1, $2, $3, $4
+) ON CONFLICT (payment_hash) DO NOTHING
+`
+
+type InsertMPPSessionCreditParams struct {
+	PaymentHash []byte
+	SessionID   string
+	AmountSats  int64
+	CreatedAt   time.Time
+}
+
+func (q *Queries) InsertMPPSessionCredit(ctx context.Context, arg InsertMPPSessionCreditParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, insertMPPSessionCredit,
+		arg.PaymentHash,
+		arg.SessionID,
+		arg.AmountSats,
+		arg.CreatedAt,
+	)
 }
 
 const settleMPPSessionSpent = `-- name: SettleMPPSessionSpent :one

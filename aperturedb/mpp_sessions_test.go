@@ -2,6 +2,7 @@ package aperturedb
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -70,6 +71,33 @@ func openSession(t *testing.T, store *MPPSessionsStore, ctx context.Context,
 	return session
 }
 
+// freshHash returns a payment hash no other credit has used, standing in for
+// the hash of a top-up invoice the buyer has just paid.
+func freshHash(t require.TestingT) lntypes.Hash {
+	var hash lntypes.Hash
+	_, err := rand.Read(hash[:])
+	require.NoError(t, err)
+
+	return hash
+}
+
+// creditTopUp pays a distinct top-up into the session and asserts the store
+// treated it as a first-time credit. It returns the hash so a test can replay
+// it.
+func creditTopUp(t *testing.T, store *MPPSessionsStore, ctx context.Context,
+	sessionID string, amount int64) lntypes.Hash {
+
+	t.Helper()
+
+	hash := freshHash(t)
+
+	outcome, err := store.CreditSession(ctx, sessionID, hash, amount)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditApplied, outcome)
+
+	return hash
+}
+
 // TestMPPSessionLifecycle walks a session through the four actions the MPP
 // session intent defines and checks the balance arithmetic at every step.
 func TestMPPSessionLifecycle(t *testing.T) {
@@ -94,7 +122,7 @@ func TestMPPSessionLifecycle(t *testing.T) {
 	require.NoError(t, store.DeductSessionBalance(ctx, session.SessionID, 200))
 
 	// A top-up adds to the deposit rather than crediting the spend.
-	require.NoError(t, store.UpdateSessionBalance(ctx, session.SessionID, 500))
+	creditTopUp(t, store, ctx, session.SessionID, 500)
 
 	got, err = store.GetSession(ctx, session.SessionID)
 	require.NoError(t, err)
@@ -154,9 +182,10 @@ func TestMPPSessionRejectsNonPositiveAmounts(t *testing.T) {
 		require.Error(t, store.DeductSessionBalance(
 			ctx, session.SessionID, amount,
 		))
-		require.Error(t, store.UpdateSessionBalance(
-			ctx, session.SessionID, amount,
-		))
+		_, err := store.CreditSession(
+			ctx, session.SessionID, freshHash(t), amount,
+		)
+		require.Error(t, err)
 	}
 
 	got, err := store.GetSession(ctx, session.SessionID)
@@ -182,8 +211,10 @@ func TestMPPSessionClosedIsTerminal(t *testing.T) {
 	require.Equal(t, int64(1000), refund)
 
 	require.Error(t, store.DeductSessionBalance(ctx, session.SessionID, 1))
-	require.Error(t, store.UpdateSessionBalance(ctx, session.SessionID, 1))
 	require.Error(t, store.CloseSession(ctx, session.SessionID))
+
+	_, err = store.CreditSession(ctx, session.SessionID, freshHash(t), 1)
+	require.Error(t, err)
 
 	// Closing twice must not report a second refund to pay out.
 	_, err = store.CloseSessionAndGetBalance(ctx, session.SessionID)
@@ -204,8 +235,10 @@ func TestMPPSessionUnknownSession(t *testing.T) {
 	require.Error(t, err)
 
 	require.Error(t, store.DeductSessionBalance(ctx, unknown, 1))
-	require.Error(t, store.UpdateSessionBalance(ctx, unknown, 1))
 	require.Error(t, store.CloseSession(ctx, unknown))
+
+	_, err = store.CreditSession(ctx, unknown, freshHash(t), 1)
+	require.Error(t, err)
 
 	_, err = store.CloseSessionAndGetBalance(ctx, unknown)
 	require.Error(t, err)
@@ -353,7 +386,7 @@ func TestMPPSessionSurvivesRestart(t *testing.T) {
 	session := openSession(t, store, ctx, 0x07, 5000)
 
 	require.NoError(t, store.DeductSessionBalance(ctx, session.SessionID, 1200))
-	require.NoError(t, store.UpdateSessionBalance(ctx, session.SessionID, 300))
+	creditTopUp(t, store, ctx, session.SessionID, 300)
 
 	// The proxy goes away.
 	require.NoError(t, first.Close())
@@ -443,6 +476,7 @@ func TestMPPSessionBalanceInvariants(t *testing.T) {
 
 		session := &auth.Session{
 			SessionID:     fmt.Sprintf("property-%d", iteration),
+			PaymentHash:   freshHash(rt),
 			DepositSats:   initial,
 			ReturnInvoice: "lnbcrt1refund",
 			Status:        "open",
@@ -465,10 +499,15 @@ func TestMPPSessionBalanceInvariants(t *testing.T) {
 
 		for _, op := range ops {
 			if op.deposit {
-				err := store.UpdateSessionBalance(
-					ctx, session.SessionID, op.amount,
+				// Every top-up here is a payment of its own,
+				// so each gets a hash of its own. Replays are
+				// the subject of their own property below.
+				outcome, err := store.CreditSession(
+					ctx, session.SessionID, freshHash(rt),
+					op.amount,
 				)
 				require.NoError(rt, err)
+				require.Equal(rt, auth.CreditApplied, outcome)
 				wantDeposit += op.amount
 
 				continue
@@ -668,4 +707,331 @@ func TestMPPSessionConcurrentSettlements(t *testing.T) {
 	refund, err := store.CloseSessionAndGetBalance(ctx, session.SessionID)
 	require.NoError(t, err)
 	require.Equal(t, int64(deposit), got.SpentSats+refund)
+}
+
+// TestMPPSessionCreditIsOnceOnly asserts that one payment funds a session once
+// and only once. A settled invoice stays settled and a preimage keeps hashing
+// to its payment hash forever, so every check a top-up credential can be made
+// to pass passes again on the tenth presentation as readily as on the first.
+// The store is the only place that remembers, and if it does not, a buyer pays
+// one invoice and mints balance out of it for as long as they care to keep
+// resending.
+func TestMPPSessionCreditIsOnceOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	session := openSession(t, store, ctx, 0x30, 1000)
+
+	hash := creditTopUp(t, store, ctx, session.SessionID, 500)
+
+	// Replaying the very same payment adds nothing, however many times it
+	// is presented.
+	for i := 0; i < 10; i++ {
+		outcome, err := store.CreditSession(
+			ctx, session.SessionID, hash, 500,
+		)
+		require.NoError(t, err)
+		require.Equal(t, auth.CreditReplayed, outcome)
+	}
+
+	got, err := store.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1500), got.DepositSats)
+
+	// A different payment still lands, so the guard refuses replays rather
+	// than refusing top-ups.
+	creditTopUp(t, store, ctx, session.SessionID, 250)
+
+	got, err = store.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1750), got.DepositSats)
+}
+
+// TestMPPSessionConcurrentCreditReplays asserts the once-only property holds
+// under a genuine race. This is the case a check-then-act implementation loses:
+// every replay reads the hash as unspent, every one of them decides it is the
+// first, and the balance grows once per goroutine. Only a claim and a credit
+// made atomic can let exactly one through.
+func TestMPPSessionConcurrentCreditReplays(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	const (
+		replays   = 32
+		topUpSats = 700
+	)
+
+	session := openSession(t, store, ctx, 0x31, 1000)
+	hash := freshHash(t)
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		applied int
+
+		// start holds every goroutine at the line until they can be
+		// released together, so the replays genuinely overlap rather
+		// than trickling through one after another.
+		start = make(chan struct{})
+	)
+
+	for i := 0; i < replays; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			<-start
+
+			outcome, err := store.CreditSession(
+				ctx, session.SessionID, hash, topUpSats,
+			)
+			require.NoError(t, err)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if outcome == auth.CreditApplied {
+				applied++
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, 1, applied)
+
+	got, err := store.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000+topUpSats), got.DepositSats)
+}
+
+// TestMPPSessionCreditHashBindsToItsSession asserts that a payment credited to
+// one session cannot be credited to another. Scoping the record per session
+// instead would leave the weaker property: a buyer could open a second session
+// and re-present a top-up they had already spent, since nothing about the
+// credential names a session in a way the challenge HMAC covers.
+func TestMPPSessionCreditHashBindsToItsSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	first := openSession(t, store, ctx, 0x32, 1000)
+	second := openSession(t, store, ctx, 0x33, 1000)
+
+	hash := creditTopUp(t, store, ctx, first.SessionID, 400)
+
+	outcome, err := store.CreditSession(ctx, second.SessionID, hash, 400)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditForeign, outcome)
+
+	// The foreign attempt moved nothing in either direction.
+	got, err := store.GetSession(ctx, first.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1400), got.DepositSats)
+
+	got, err = store.GetSession(ctx, second.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), got.DepositSats)
+}
+
+// TestMPPSessionDepositHashIsCredited asserts that the deposit which opened a
+// session counts as a credit of that payment. Without this the buyer can open a
+// session and then hand the very same settled payment back as a top-up: the
+// action a credential names rides in its payload, which the challenge HMAC does
+// not cover, so one deposit challenge serves as both.
+func TestMPPSessionDepositHashIsCredited(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	session := openSession(t, store, ctx, 0x34, 1000)
+
+	outcome, err := store.CreditSession(
+		ctx, session.SessionID, session.PaymentHash, 1000,
+	)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditReplayed, outcome)
+
+	// Nor can that deposit be pointed at a second session.
+	other := openSession(t, store, ctx, 0x35, 500)
+
+	outcome, err = store.CreditSession(
+		ctx, other.SessionID, session.PaymentHash, 1000,
+	)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditForeign, outcome)
+
+	got, err := store.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), got.DepositSats)
+
+	got, err = store.GetSession(ctx, other.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(500), got.DepositSats)
+}
+
+// TestMPPSessionCreditRefusedDoesNotBurnHash asserts that a credit which fails
+// for a reason other than replay leaves the payment hash unclaimed. The claim
+// and the balance change share a transaction precisely so that a top-up landing
+// on a session that has just closed can still be credited to a session that is
+// open, rather than the buyer's payment being consumed by an attempt that
+// credited nothing.
+func TestMPPSessionCreditRefusedDoesNotBurnHash(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	closed := openSession(t, store, ctx, 0x36, 1000)
+	_, err := store.CloseSessionAndGetBalance(ctx, closed.SessionID)
+	require.NoError(t, err)
+
+	hash := freshHash(t)
+
+	_, err = store.CreditSession(ctx, closed.SessionID, hash, 300)
+	require.Error(t, err)
+
+	// The same payment still funds an open session.
+	open := openSession(t, store, ctx, 0x37, 100)
+
+	outcome, err := store.CreditSession(ctx, open.SessionID, hash, 300)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditApplied, outcome)
+
+	got, err := store.GetSession(ctx, open.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(400), got.DepositSats)
+}
+
+// TestMPPSessionCreditSurvivesRestart asserts that the record of which payments
+// have been credited is durable. Held in memory it would be worth nothing: a
+// buyer who wanted their top-up counted twice would only have to wait for the
+// proxy to restart, and a proxy restarts for reasons the buyer can often
+// provoke.
+func TestMPPSessionCreditSurvivesRestart(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	dbFile := filepath.Join(t.TempDir(), "credits.db")
+
+	first, err := NewSqliteStore(&SqliteConfig{DatabaseFileName: dbFile})
+	require.NoError(t, err)
+
+	store := newMPPSessionsStoreWithDB(first.BaseDB)
+	session := openSession(t, store, ctx, 0x38, 1000)
+	hash := creditTopUp(t, store, ctx, session.SessionID, 600)
+
+	// The proxy goes away and comes back against the same file.
+	require.NoError(t, first.Close())
+
+	second, err := NewSqliteStore(&SqliteConfig{DatabaseFileName: dbFile})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, second.Close())
+	})
+
+	restarted := newMPPSessionsStoreWithDB(second.BaseDB)
+
+	outcome, err := restarted.CreditSession(
+		ctx, session.SessionID, hash, 600,
+	)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditReplayed, outcome)
+
+	// The deposit hash is remembered across the restart as well.
+	outcome, err = restarted.CreditSession(
+		ctx, session.SessionID, session.PaymentHash, 1000,
+	)
+	require.NoError(t, err)
+	require.Equal(t, auth.CreditReplayed, outcome)
+
+	got, err := restarted.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1600), got.DepositSats)
+}
+
+// TestMPPSessionCreditConservation is the arithmetic statement of the whole
+// fix: however top-ups and replays of them are interleaved, the deposit a
+// session ends up holding is the sum of the distinct payments made into it, and
+// nothing else. Replays are drawn from the same pool as first presentations, so
+// the property covers the orderings a handwritten test would not think to try.
+func TestMPPSessionCreditConservation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	store := newMPPSessionsStore(t)
+
+	var iteration int
+
+	rapid.Check(t, func(rt *rapid.T) {
+		iteration++
+
+		initial := rapid.Int64Range(0, 100_000).Draw(rt, "initial")
+
+		session := &auth.Session{
+			SessionID:     fmt.Sprintf("conservation-%d", iteration),
+			PaymentHash:   freshHash(rt),
+			DepositSats:   initial,
+			ReturnInvoice: "lnbcrt1refund",
+			Status:        "open",
+		}
+		require.NoError(rt, store.CreateSession(ctx, session))
+
+		// The pool stands for the invoices the buyer has actually paid.
+		numPayments := rapid.IntRange(1, 8).Draw(rt, "numPayments")
+
+		hashes := make([]lntypes.Hash, numPayments)
+		amounts := make([]int64, numPayments)
+		for i := range hashes {
+			hashes[i] = freshHash(rt)
+			amounts[i] = rapid.Int64Range(1, 20_000).Draw(
+				rt, fmt.Sprintf("amount-%d", i),
+			)
+		}
+
+		// Each presentation names one of those payments. Naming the
+		// same one twice is a replay.
+		presentations := rapid.SliceOfN(
+			rapid.IntRange(0, numPayments-1), 0, 40,
+		).Draw(rt, "presentations")
+
+		credited := make(map[int]bool)
+
+		for _, idx := range presentations {
+			outcome, err := store.CreditSession(
+				ctx, session.SessionID, hashes[idx],
+				amounts[idx],
+			)
+			require.NoError(rt, err)
+
+			if credited[idx] {
+				require.Equal(rt, auth.CreditReplayed, outcome)
+
+				continue
+			}
+
+			require.Equal(rt, auth.CreditApplied, outcome)
+			credited[idx] = true
+		}
+
+		// The deposit is the opening balance plus each distinct payment
+		// counted once, no matter how often it was presented.
+		want := initial
+		for idx := range credited {
+			want += amounts[idx]
+		}
+
+		got, err := store.GetSession(ctx, session.SessionID)
+		require.NoError(rt, err)
+		require.Equal(rt, want, got.DepositSats)
+	})
 }

@@ -63,19 +63,72 @@ type ReceiptProvider interface {
 	ReceiptHeader(*http.Header, string) http.Header
 }
 
+// CreditOutcome says what a credit attempt did to a session's deposit. A
+// settled Lightning invoice stays settled forever, so a preimage proves only
+// that the payment happened at some point, never that it has not already been
+// spent. The store is the only thing that knows the difference, and this is how
+// it reports it.
+type CreditOutcome uint8
+
+const (
+	// CreditApplied means the payment hash had never funded anything, so
+	// the deposit grew by the full amount.
+	CreditApplied CreditOutcome = iota
+
+	// CreditReplayed means the payment hash had already funded this very
+	// session, so nothing was added. This is what an honest client looks
+	// like when its top-up response was lost and it resent the request:
+	// the balance it is asking for is already there, and the right answer
+	// is to let it proceed rather than charge it a second time.
+	CreditReplayed
+
+	// CreditForeign means the payment hash had already funded a different
+	// session. Nothing was added, and no honest client does this: it is a
+	// credential paid for one session being pointed at another.
+	CreditForeign
+)
+
+// String returns a human readable name for the outcome.
+func (c CreditOutcome) String() string {
+	switch c {
+	case CreditApplied:
+		return "applied"
+
+	case CreditReplayed:
+		return "replayed"
+
+	case CreditForeign:
+		return "foreign"
+
+	default:
+		return "unknown"
+	}
+}
+
 // SessionStore persists MPP session state for the session intent. Sessions
 // track prepaid balances that are decremented as services are consumed.
 type SessionStore interface {
-	// CreateSession creates a new session with the given initial state.
+	// CreateSession creates a new session with the given initial state,
+	// claiming the deposit payment hash for it in the same atomic step.
+	// The session is refused if that hash has already funded a session,
+	// which is what stops one deposit payment from opening a session and
+	// then being presented again as a top-up somewhere else.
 	CreateSession(ctx context.Context, session *Session) error
 
 	// GetSession returns the session with the given session ID.
 	GetSession(ctx context.Context, sessionID string) (*Session, error)
 
-	// UpdateSessionBalance atomically adds the given amount to the
-	// session's deposit balance.
-	UpdateSessionBalance(ctx context.Context, sessionID string,
-		addSats int64) error
+	// CreditSession adds the given amount to the session's deposit if and
+	// only if the given payment hash has never been credited before, and
+	// reports which of those two happened. The claim on the payment hash
+	// and the balance increment are one atomic step, so concurrent replays
+	// of the same credential credit exactly once between them.
+	//
+	// This is deliberately the only way to grow a balance. A separate "has
+	// this hash been seen" query would leave the once-only property resting
+	// on every caller remembering to ask.
+	CreditSession(ctx context.Context, sessionID string,
+		paymentHash lntypes.Hash, addSats int64) (CreditOutcome, error)
 
 	// DeductSessionBalance atomically adds the given amount to the
 	// session's spent counter. Returns an error if the deduction would

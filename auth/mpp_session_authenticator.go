@@ -305,7 +305,11 @@ func (a *MPPSessionAuthenticator) handleOpen(ctx context.Context,
 		}
 	}
 
-	// Create the session.
+	// Create the session. The store claims the deposit payment hash as part
+	// of the same write, which is what keeps this deposit from being
+	// re-presented later as a top-up: the session ID colliding on a
+	// repeated open is not on its own enough, since the action a credential
+	// names lives in the payload the challenge HMAC does not cover.
 	sessionID := hex.EncodeToString(paymentHash[:])
 	session := &Session{
 		SessionID:     sessionID,
@@ -508,17 +512,59 @@ func (a *MPPSessionAuthenticator) handleTopUp(ctx context.Context,
 		}
 	}
 
-	// Atomically add to session balance.
-	if err := a.sessionStore.UpdateSessionBalance(
-		ctx, payload.SessionID, topUpSats,
-	); err != nil {
-		log.Errorf("MPP Session: Failed to update balance: %v", err)
+	// Credit the balance, but only if this payment has not been credited
+	// already. Everything checked so far is a property of the payment
+	// rather than of this request: the preimage hashes to the payment hash
+	// forever, the challenge HMAC is stateless by design, and a settled
+	// invoice stays settled. None of it can tell a first presentation of a
+	// credential from its thousandth, so the store is where the once-only
+	// property has to live, in the same transaction as the balance change.
+	outcome, err := a.sessionStore.CreditSession(
+		ctx, payload.SessionID, topUpHash, topUpSats,
+	)
+	if err != nil {
+		log.Errorf("MPP Session: Failed to credit topUp: %v", err)
 		return false
 	}
 
-	log.Infof("MPP Session: TopUp %d sats to session %s",
-		topUpSats, payload.SessionID)
-	return true
+	switch outcome {
+	case CreditApplied:
+		log.Infof("MPP Session: TopUp %d sats to session %s",
+			topUpSats, payload.SessionID)
+
+		return true
+
+	case CreditReplayed:
+		// This payment already funded this session. An honest client
+		// whose top-up response was lost resends the identical
+		// credential, and the balance it is asking for is already
+		// there, so the request proceeds: refusing it would push the
+		// client towards paying a second invoice for a top-up it has
+		// had all along. It is also what a deliberate replay looks
+		// like, which costs the seller nothing, because no satoshis
+		// move either way.
+		log.Infof("MPP Session: TopUp payment %v was already credited "+
+			"to session %s, treating as a retry and crediting "+
+			"nothing further", topUpHash, payload.SessionID)
+
+		return true
+
+	case CreditForeign:
+		// The payment behind this credential funded some other
+		// session. No honest client does that, so it is refused rather
+		// than waved through.
+		log.Warnf("MPP Session: Refusing topUp of session %s: payment "+
+			"%v has already been credited to a different session",
+			payload.SessionID, topUpHash)
+
+		return false
+
+	default:
+		log.Errorf("MPP Session: Unknown credit outcome %d for "+
+			"session %s", outcome, payload.SessionID)
+
+		return false
+	}
 }
 
 // handleClose verifies a close action credential and initiates the refund.
