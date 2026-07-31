@@ -582,8 +582,8 @@
     },
     {
       "name": "session open credential with a source",
-      "credentialJson": "{\"challenge\":{\"id\":\"x7Tg2pLqR9mKvNwY3hBcZa\",\"realm\":\"api.example.com\",\"method\":\"lightning\",\"intent\":\"session\",\"request\":\"eyJhbW91bnQiOiIzIn0\",\"description\":\"Q\\u0026A endpoint\",\"opaque\":\"eyJvcmRlcklkIjoiMTIzIn0\",\"digest\":\"sha-256=:X48E9q:\"},\"source\":\"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK\",\"payload\":{\"action\":\"open\",\"preimage\":\"aabb\",\"returnInvoice\":\"lnbc1p\"}}",
-      "header": "Payment eyJjaGFsbGVuZ2UiOnsiaWQiOiJ4N1RnMnBMcVI5bUt2TndZM2hCY1phIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJtZXRob2QiOiJsaWdodG5pbmciLCJpbnRlbnQiOiJzZXNzaW9uIiwicmVxdWVzdCI6ImV5SmhiVzkxYm5RaU9pSXpJbjAiLCJkZXNjcmlwdGlvbiI6IlFcdTAwMjZBIGVuZHBvaW50Iiwib3BhcXVlIjoiZXlKdmNtUmxja2xrSWpvaU1USXpJbjAiLCJkaWdlc3QiOiJzaGEtMjU2PTpYNDhFOXE6In0sInNvdXJjZSI6ImRpZDprZXk6ejZNa2hhWGdCWkR2b3REa0w1MjU3ZmFpenRpR2lDMlF0S0xHcGJubkVHdGEyZG9LIiwicGF5bG9hZCI6eyJhY3Rpb24iOiJvcGVuIiwicHJlaW1hZ2UiOiJhYWJiIiwicmV0dXJuSW52b2ljZSI6ImxuYmMxcCJ9fQ"
+      "credentialJson": "{\"challenge\":{\"id\":\"x7Tg2pLqR9mKvNwY3hBcZa\",\"realm\":\"api.example.com\",\"method\":\"lightning\",\"intent\":\"session\",\"request\":\"eyJhbW91bnQiOiIzIn0\",\"description\":\"Q&A endpoint\",\"opaque\":\"eyJvcmRlcklkIjoiMTIzIn0\",\"digest\":\"sha-256=:X48E9q:\"},\"source\":\"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK\",\"payload\":{\"action\":\"open\",\"preimage\":\"aabb\",\"returnInvoice\":\"lnbc1p\"}}",
+      "header": "Payment eyJjaGFsbGVuZ2UiOnsiaWQiOiJ4N1RnMnBMcVI5bUt2TndZM2hCY1phIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJtZXRob2QiOiJsaWdodG5pbmciLCJpbnRlbnQiOiJzZXNzaW9uIiwicmVxdWVzdCI6ImV5SmhiVzkxYm5RaU9pSXpJbjAiLCJkZXNjcmlwdGlvbiI6IlEmQSBlbmRwb2ludCIsIm9wYXF1ZSI6ImV5SnZjbVJsY2tsa0lqb2lNVEl6SW4wIiwiZGlnZXN0Ijoic2hhLTI1Nj06WDQ4RTlxOiJ9LCJzb3VyY2UiOiJkaWQ6a2V5Ono2TWtoYVhnQlpEdm90RGtMNTI1N2ZhaXp0aUdpQzJRdEtMR3Bibm5FR3RhMmRvSyIsInBheWxvYWQiOnsiYWN0aW9uIjoib3BlbiIsInByZWltYWdlIjoiYWFiYiIsInJldHVybkludm9pY2UiOiJsbmJjMXAifX0"
     },
     {
       "name": "session bearer credential",

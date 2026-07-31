@@ -1058,7 +1058,7 @@ func credentialVectors() ([]CredentialVector, error) {
 
 	out := make([]CredentialVector, 0, len(accepted)+len(rejected)+1)
 	for _, c := range accepted {
-		credJSON, err := json.Marshal(c.cred)
+		credJSON, err := mpp.MarshalPlainJSON(c.cred)
 		if err != nil {
 			return nil, fmt.Errorf("credential vector %q: %w",
 				c.name, err)
@@ -1232,7 +1232,7 @@ func receiptVectors() ([]ReceiptVector, error) {
 
 	out := make([]ReceiptVector, 0, len(base)+len(sessions)+len(events))
 	for _, c := range base {
-		encoded, err := json.Marshal(c.receipt)
+		encoded, err := mpp.MarshalPlainJSON(c.receipt)
 		if err != nil {
 			return nil, fmt.Errorf("receipt vector %q: %w",
 				c.name, err)
@@ -1255,7 +1255,7 @@ func receiptVectors() ([]ReceiptVector, error) {
 	// The session receipt and the top-up event travel in the same encoding
 	// but are not http.Header values, so encode them directly.
 	for _, c := range sessions {
-		encoded, err := json.Marshal(c.receipt)
+		encoded, err := mpp.MarshalPlainJSON(c.receipt)
 		if err != nil {
 			return nil, fmt.Errorf("receipt vector %q: %w",
 				c.name, err)
@@ -1270,7 +1270,7 @@ func receiptVectors() ([]ReceiptVector, error) {
 	}
 
 	for _, c := range events {
-		encoded, err := json.Marshal(c.event)
+		encoded, err := mpp.MarshalPlainJSON(c.event)
 		if err != nil {
 			return nil, fmt.Errorf("event vector %q: %w",
 				c.name, err)

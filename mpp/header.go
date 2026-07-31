@@ -1,6 +1,7 @@
 package mpp
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -277,11 +278,52 @@ func ParseCredential(h *http.Header) (*Credential, error) {
 	return &cred, nil
 }
 
+// MarshalPlainJSON serializes v the way every other implementation of this
+// protocol does, which is to say without encoding/json's HTML and JavaScript
+// escaping.
+//
+// json.Marshal escapes "<", ">" and "&" so its output is safe to inline in an
+// HTML document, and U+2028 and U+2029 so its output is safe to inline in a
+// script. None of those five is escaped by ECMAScript's JSON.stringify, so
+// leaving the default on makes our bytes differ from a JavaScript peer's for
+// any string containing one, over nothing more exotic than a description
+// reading "Q&A endpoint". The documents this produces go on the wire whole
+// rather than through the canonicalizer, so there is nothing downstream to
+// undo it. See canonicalWriteString for the same argument on the path that
+// does feed the challenge HMAC.
+func MarshalPlainJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+
+	// Encode appends a newline that Marshal does not, and a stray byte
+	// here would change every encoded credential and receipt.
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// EncodeCredential serializes a credential and base64url-encodes it for the
+// Authorization header, as the inverse of ParseCredential. Aperture is a seller
+// and so never sends one itself, but the encoding is part of the protocol
+// surface and buyers and test vectors need one blessed spelling of it.
+func EncodeCredential(cred *Credential) (string, error) {
+	data, err := MarshalPlainJSON(cred)
+	if err != nil {
+		return "", fmt.Errorf("mpp: failed to marshal credential: %w",
+			err)
+	}
+
+	return Base64URLEncode(data), nil
+}
+
 // SetReceiptHeader writes a Payment-Receipt header to the given http.Header.
 // The receipt is a base64url-encoded JSON object per draft-httpauth-payment-00
 // Section 5.3.
 func SetReceiptHeader(h http.Header, r *Receipt) error {
-	data, err := json.Marshal(r)
+	data, err := MarshalPlainJSON(r)
 	if err != nil {
 		return fmt.Errorf("mpp: failed to marshal receipt: %w", err)
 	}
