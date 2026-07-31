@@ -37,6 +37,12 @@ type MPPSessionsDB interface {
 	UpdateMPPSessionSpent(ctx context.Context,
 		arg sqlc.UpdateMPPSessionSpentParams) (sql.Result, error)
 
+	// SettleMPPSessionSpent adjusts the spent counter by a signed amount,
+	// clamped to the range the deposit allows, and returns the resulting
+	// spend.
+	SettleMPPSessionSpent(ctx context.Context,
+		arg sqlc.SettleMPPSessionSpentParams) (int64, error)
+
 	// CloseMPPSession marks the session as closed.
 	CloseMPPSession(ctx context.Context,
 		arg sqlc.CloseMPPSessionParams) (sql.Result, error)
@@ -253,6 +259,51 @@ func (s *MPPSessionsStore) DeductSessionBalance(ctx context.Context,
 	}
 
 	return nil
+}
+
+// SettleSessionBalance reconciles a request whose true cost is only known once
+// its response completed. A positive delta charges the shortfall of an
+// under-estimate, a negative delta gives back the excess of an over-estimate.
+// It returns the spend the session settled on.
+//
+// The adjustment is clamped rather than refused. Metered pricing deducts an
+// estimate before the response exists, so an under-estimate can settle to more
+// than the balance holds, and the seller absorbs that difference: the service
+// has already been rendered, and refusing the settlement would leave the
+// session's books wrong instead of merely a fraction of one request short. The
+// clamp is what keeps the shortfall bounded by the balance rather than driving
+// it negative and turning a refund into a claim against the buyer.
+//
+// NOTE: This implements the auth.SessionStore interface.
+func (s *MPPSessionsStore) SettleSessionBalance(ctx context.Context,
+	sessionID string, deltaSats int64) (int64, error) {
+
+	var spentSats int64
+
+	var writeTxOpts MPPSessionsTxOptions
+	err := s.db.ExecTx(ctx, &writeTxOpts, func(tx MPPSessionsDB) error {
+		spent, err := tx.SettleMPPSessionSpent(ctx,
+			sqlc.SettleMPPSessionSpentParams{
+				SpentSats: deltaSats,
+				UpdatedAt: s.clock.Now().UTC(),
+				SessionID: sessionID,
+			},
+		)
+		if err != nil {
+			return err
+		}
+
+		spentSats = spent
+
+		return nil
+	})
+
+	if err != nil {
+		return 0, fmt.Errorf("unable to settle balance for session "+
+			"%s: %w", sessionID, err)
+	}
+
+	return spentSats, nil
 }
 
 // CloseSession marks the session as closed. No further operations are accepted

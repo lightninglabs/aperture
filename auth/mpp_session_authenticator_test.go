@@ -94,6 +94,37 @@ func (m *mockSessionStore) DeductSessionBalance(_ context.Context,
 	return nil
 }
 
+// SettleSessionBalance mirrors the durable store: the spend moves by a signed
+// amount and is clamped to the range the deposit allows, so an under-estimate
+// settles to at most the whole balance rather than driving it negative.
+func (m *mockSessionStore) SettleSessionBalance(_ context.Context,
+	sessionID string, deltaSats int64) (int64, error) {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return 0, fmt.Errorf("session not found")
+	}
+	if s.Status != "open" {
+		return 0, fmt.Errorf("session already closed")
+	}
+
+	spent := s.SpentSats + deltaSats
+	switch {
+	case spent < 0:
+		spent = 0
+	case spent > s.DepositSats:
+		spent = s.DepositSats
+	}
+
+	s.SpentSats = spent
+	s.UpdatedAt = time.Now()
+
+	return spent, nil
+}
+
 func (m *mockSessionStore) CloseSession(_ context.Context,
 	sessionID string) error {
 

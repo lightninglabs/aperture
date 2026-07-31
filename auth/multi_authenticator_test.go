@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -153,4 +155,140 @@ func TestMultiAuthenticatorReceiptNilFromProvider(t *testing.T) {
 
 	receipt := multi.ReceiptHeader(&h, "test-service")
 	require.Nil(t, receipt)
+}
+
+// mockPricedAuth is a mock authenticator that knows the difference between the
+// one-shot charge price and a session's per-unit price.
+type mockPricedAuth struct {
+	mockAuthenticator
+
+	gotPrices ChallengePrices
+}
+
+var _ PricedChallenger = (*mockPricedAuth)(nil)
+
+func (m *mockPricedAuth) FreshChallengeHeaderWithPrices(_ string,
+	prices ChallengePrices) (http.Header, error) {
+
+	m.gotPrices = prices
+
+	return m.challengeHeader, m.challengeErr
+}
+
+// mockSettlerAuth is a mock authenticator holding one session balance.
+type mockSettlerAuth struct {
+	mockAuthenticator
+
+	sessionID string
+	charged   int64
+	knows     bool
+
+	settledFor string
+}
+
+var _ SessionSettler = (*mockSettlerAuth)(nil)
+
+func (m *mockSettlerAuth) BearerSessionID(_ *http.Header) (string, int64, bool) {
+	if !m.knows {
+		return "", 0, false
+	}
+
+	return m.sessionID, m.charged, true
+}
+
+func (m *mockSettlerAuth) SettleSessionRequest(_ context.Context,
+	sessionID string, _, _ int64) error {
+
+	if sessionID != m.sessionID {
+		return fmt.Errorf("unknown session %s", sessionID)
+	}
+
+	m.settledFor = sessionID
+
+	return nil
+}
+
+// TestMultiAuthenticatorPriceFanOut verifies that each sub-authenticator is
+// asked its own pricing question: one that only knows a single price keeps
+// receiving the charge price, and one that distinguishes the intents receives
+// the whole set.
+func TestMultiAuthenticatorPriceFanOut(t *testing.T) {
+	plainHeader := make(http.Header)
+	plainHeader.Set("WWW-Authenticate", "L402 macaroon=\"abc\"")
+
+	pricedHeader := make(http.Header)
+	pricedHeader.Set("WWW-Authenticate", "Payment id=\"xyz\"")
+
+	plain := &mockAuthenticator{challengeHeader: plainHeader}
+	priced := &mockPricedAuth{
+		mockAuthenticator: mockAuthenticator{
+			challengeHeader: pricedHeader,
+		},
+	}
+
+	multi := NewMultiAuthenticator(plain, priced)
+
+	prices := ChallengePrices{
+		Charge:         11_500,
+		SessionUnit:    7,
+		SessionDeposit: 400,
+	}
+
+	merged, err := multi.FreshChallengeHeaderWithPrices("svc", prices)
+	require.NoError(t, err)
+	require.Len(t, merged.Values("WWW-Authenticate"), 2)
+	require.Equal(t, prices, priced.gotPrices)
+
+	// The single-price entry point still reaches the priced authenticator,
+	// carrying only the charge price.
+	_, err = multi.FreshChallengeHeader("svc", 900)
+	require.NoError(t, err)
+	require.Equal(t, ChallengePrices{Charge: 900}, priced.gotPrices)
+}
+
+// TestMultiAuthenticatorSessionFanOut verifies that the session seam finds the
+// one authenticator holding the balance and ignores the rest.
+func TestMultiAuthenticatorSessionFanOut(t *testing.T) {
+	plain := &mockAuthenticator{}
+	stranger := &mockSettlerAuth{sessionID: "other", knows: false}
+	owner := &mockSettlerAuth{
+		sessionID: "session-abc",
+		charged:   7,
+		knows:     true,
+	}
+
+	multi := NewMultiAuthenticator(plain, stranger, owner)
+
+	header := make(http.Header)
+	sessionID, charged, ok := multi.BearerSessionID(&header)
+	require.True(t, ok)
+	require.Equal(t, "session-abc", sessionID)
+	require.EqualValues(t, 7, charged)
+
+	// The settlement has to reach the holder even though an earlier settler
+	// rejects it, so the first success wins rather than the first attempt.
+	require.NoError(t, multi.SettleSessionRequest(
+		context.Background(), "session-abc", 7, 19,
+	))
+	require.Equal(t, "session-abc", owner.settledFor)
+	require.Empty(t, stranger.settledFor)
+
+	// A session nobody holds is an error rather than a silent no-op.
+	require.Error(t, multi.SettleSessionRequest(
+		context.Background(), "nobody", 7, 19,
+	))
+}
+
+// TestMultiAuthenticatorNoSettlers verifies that a stack with no session
+// authenticator reports no session rather than pretending to hold one.
+func TestMultiAuthenticatorNoSettlers(t *testing.T) {
+	multi := NewMultiAuthenticator(&mockAuthenticator{})
+
+	header := make(http.Header)
+	_, _, ok := multi.BearerSessionID(&header)
+	require.False(t, ok)
+
+	require.Error(t, multi.SettleSessionRequest(
+		context.Background(), "session-abc", 7, 19,
+	))
 }

@@ -43,6 +43,7 @@ type Querier interface {
 	SelectOnionPrivateKey(ctx context.Context) ([]byte, error)
 	SetExpiry(ctx context.Context, arg SetExpiryParams) error
 	SetRemotePubKey(ctx context.Context, arg SetRemotePubKeyParams) error
+	SettleMPPSessionSpent(ctx context.Context, arg SettleMPPSessionSpentParams) (int64, error)
 	UpdateL402TransactionState(ctx context.Context, arg UpdateL402TransactionStateParams) (int64, error)
 	UpdateMPPSessionDeposit(ctx context.Context, arg UpdateMPPSessionDepositParams) (sql.Result, error)
 	UpdateMPPSessionSpent(ctx context.Context, arg UpdateMPPSessionSpentParams) (sql.Result, error)

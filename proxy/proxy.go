@@ -327,6 +327,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// An MPP session bearer request was already charged the
+		// challenge's per-unit estimate by the authenticator. Annotate
+		// it so the response modifier can reconcile that estimate
+		// against what the request turns out to cost.
+		r = p.checkSessionMetering(r, target)
+
 		// Inject receipt headers into the request context for the
 		// response modifier to pick up.
 		r = p.injectReceiptContext(r, resourceName)
@@ -481,6 +487,11 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 			// the resulting usage is reported to the pricer once
 			// the response completes.
 			attachUsageObserver(res)
+
+			// For MPP session bearer requests, observe it so the
+			// estimate deducted at request time is reconciled
+			// against what the response actually cost.
+			attachSessionObserver(res)
 
 			return nil
 		},
@@ -666,14 +677,35 @@ func addCorsHeaders(header http.Header) {
 	)
 }
 
+// freshChallengeHeader mints a challenge quoting the given set of prices,
+// falling back to the single-price interface for an authenticator that has no
+// use for more than the one-shot charge price.
+func (p *Proxy) freshChallengeHeader(serviceName string,
+	prices auth.ChallengePrices) (http.Header, error) {
+
+	if priced, ok := p.authenticator.(auth.PricedChallenger); ok {
+		return priced.FreshChallengeHeaderWithPrices(
+			serviceName, prices,
+		)
+	}
+
+	return p.authenticator.FreshChallengeHeader(serviceName, prices.Charge)
+}
+
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 	target *Service, serviceName string, servicePrice int64) {
 
-	header, err := p.authenticator.FreshChallengeHeader(
-		serviceName, servicePrice,
-	)
+	// The intents a challenge can carry ask different questions of the
+	// pricer. L402 and the MPP charge intent quote a one-shot purchase,
+	// which on a metered service is a whole token bundle, while the MPP
+	// session intent quotes what one request drawn against a prepaid
+	// balance costs. Quote both, so a session's per-unit amount is not the
+	// price of a bundle.
+	prices := quoteSessionPrices(r, target, servicePrice)
+
+	header, err := p.freshChallengeHeader(serviceName, prices)
 	if err != nil {
 		log.Errorf("Error creating new challenge header: %v", err)
 		sendDirectResponse(

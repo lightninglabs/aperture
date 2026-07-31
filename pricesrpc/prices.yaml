@@ -15,3 +15,9 @@ http:
     - selector: pricesrpc.Prices.ReportUsage
       post: "/v1/aperture/usage"
       body: "*"
+    - selector: pricesrpc.Prices.QuoteSession
+      post: "/v1/aperture/session/quote"
+      body: "*"
+    - selector: pricesrpc.Prices.SettleSession
+      post: "/v1/aperture/session/settle"
+      body: "*"

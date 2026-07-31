@@ -104,6 +104,31 @@ func (q *Queries) InsertMPPSession(ctx context.Context, arg InsertMPPSessionPara
 	return id, err
 }
 
+const settleMPPSessionSpent = `-- name: SettleMPPSessionSpent :one
+UPDATE mpp_sessions
+SET spent_sats = CASE
+        WHEN spent_sats + $1 < 0 THEN 0
+        WHEN spent_sats + $1 > deposit_sats THEN deposit_sats
+        ELSE spent_sats + $1
+    END,
+    updated_at = $2
+WHERE session_id = $3 AND status = 'open'
+RETURNING CAST(spent_sats AS BIGINT)
+`
+
+type SettleMPPSessionSpentParams struct {
+	SpentSats int64
+	UpdatedAt time.Time
+	SessionID string
+}
+
+func (q *Queries) SettleMPPSessionSpent(ctx context.Context, arg SettleMPPSessionSpentParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, settleMPPSessionSpent, arg.SpentSats, arg.UpdatedAt, arg.SessionID)
+	var spent_sats int64
+	err := row.Scan(&spent_sats)
+	return spent_sats, err
+}
+
 const updateMPPSessionDeposit = `-- name: UpdateMPPSessionDeposit :execresult
 UPDATE mpp_sessions
 SET deposit_sats = deposit_sats + $1, updated_at = $2

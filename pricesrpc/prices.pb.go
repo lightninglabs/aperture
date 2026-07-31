@@ -563,6 +563,314 @@ func (x *ReportUsageResponse) GetRemainingSats() int64 {
 	return 0
 }
 
+type QuoteSessionRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The URL path of the request.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// The full HTTP request serialized as text.
+	HttpRequestText string `protobuf:"bytes,2,opt,name=http_request_text,json=httpRequestText,proto3" json:"http_request_text,omitempty"`
+	// The name of the aperture service the request is for.
+	ServiceName string `protobuf:"bytes,3,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	// The session the request will be served against. Empty when the quote is
+	// for a fresh challenge, which is minted before any session exists.
+	SessionId     string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuoteSessionRequest) Reset() {
+	*x = QuoteSessionRequest{}
+	mi := &file_prices_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuoteSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuoteSessionRequest) ProtoMessage() {}
+
+func (x *QuoteSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuoteSessionRequest.ProtoReflect.Descriptor instead.
+func (*QuoteSessionRequest) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *QuoteSessionRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *QuoteSessionRequest) GetHttpRequestText() string {
+	if x != nil {
+		return x.HttpRequestText
+	}
+	return ""
+}
+
+func (x *QuoteSessionRequest) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+func (x *QuoteSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type QuoteSessionResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The estimated cost in satoshis of serving one request of this shape.
+	// This is the per-unit amount a session challenge advertises and the
+	// amount deducted from the session balance before proxying.
+	UnitPriceSats int64 `protobuf:"varint,1,opt,name=unit_price_sats,json=unitPriceSats,proto3" json:"unit_price_sats,omitempty"`
+	// The deposit in satoshis to ask for when opening a fresh session. Zero
+	// leaves the deposit to aperture's configured deposit multiplier.
+	DepositSats   int64 `protobuf:"varint,2,opt,name=deposit_sats,json=depositSats,proto3" json:"deposit_sats,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuoteSessionResponse) Reset() {
+	*x = QuoteSessionResponse{}
+	mi := &file_prices_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuoteSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuoteSessionResponse) ProtoMessage() {}
+
+func (x *QuoteSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuoteSessionResponse.ProtoReflect.Descriptor instead.
+func (*QuoteSessionResponse) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *QuoteSessionResponse) GetUnitPriceSats() int64 {
+	if x != nil {
+		return x.UnitPriceSats
+	}
+	return 0
+}
+
+func (x *QuoteSessionResponse) GetDepositSats() int64 {
+	if x != nil {
+		return x.DepositSats
+	}
+	return 0
+}
+
+type SettleSessionRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The session the request was served against.
+	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// The URL path of the request.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// The name of the aperture service the request was for.
+	ServiceName string `protobuf:"bytes,3,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	// The HTTP status code the backend responded with.
+	HttpStatus int32 `protobuf:"varint,4,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
+	// The Content-Type of the backend response.
+	ContentType string `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	// The Content-Encoding the backend responded with. A non-identity value
+	// means the captured tail is compressed and could not be costed.
+	ContentEncoding string `protobuf:"bytes,6,opt,name=content_encoding,json=contentEncoding,proto3" json:"content_encoding,omitempty"`
+	// Whether the response body was read to completion.
+	Complete bool `protobuf:"varint,7,opt,name=complete,proto3" json:"complete,omitempty"`
+	// A capped tail of the response body. For SSE streams this contains the
+	// trailing chunks, including any final usage object.
+	ResponseTail []byte `protobuf:"bytes,8,opt,name=response_tail,json=responseTail,proto3" json:"response_tail,omitempty"`
+	// The estimate in satoshis aperture already deducted from the session
+	// balance before proxying this request.
+	EstimateSats int64 `protobuf:"varint,9,opt,name=estimate_sats,json=estimateSats,proto3" json:"estimate_sats,omitempty"`
+	// The full HTTP request serialized as text. A session books no model the
+	// way an L402 token bundle does, so the request is echoed back here for
+	// the pricer to resolve the model it must be costed at.
+	HttpRequestText string `protobuf:"bytes,10,opt,name=http_request_text,json=httpRequestText,proto3" json:"http_request_text,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SettleSessionRequest) Reset() {
+	*x = SettleSessionRequest{}
+	mi := &file_prices_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SettleSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SettleSessionRequest) ProtoMessage() {}
+
+func (x *SettleSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SettleSessionRequest.ProtoReflect.Descriptor instead.
+func (*SettleSessionRequest) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SettleSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SettleSessionRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *SettleSessionRequest) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+func (x *SettleSessionRequest) GetHttpStatus() int32 {
+	if x != nil {
+		return x.HttpStatus
+	}
+	return 0
+}
+
+func (x *SettleSessionRequest) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *SettleSessionRequest) GetContentEncoding() string {
+	if x != nil {
+		return x.ContentEncoding
+	}
+	return ""
+}
+
+func (x *SettleSessionRequest) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *SettleSessionRequest) GetResponseTail() []byte {
+	if x != nil {
+		return x.ResponseTail
+	}
+	return nil
+}
+
+func (x *SettleSessionRequest) GetEstimateSats() int64 {
+	if x != nil {
+		return x.EstimateSats
+	}
+	return 0
+}
+
+func (x *SettleSessionRequest) GetHttpRequestText() string {
+	if x != nil {
+		return x.HttpRequestText
+	}
+	return ""
+}
+
+type SettleSessionResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What the request actually cost, in satoshis. Aperture reconciles this
+	// against the estimate it already deducted, charging the shortfall or
+	// giving back the excess.
+	CostSats      int64 `protobuf:"varint,1,opt,name=cost_sats,json=costSats,proto3" json:"cost_sats,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SettleSessionResponse) Reset() {
+	*x = SettleSessionResponse{}
+	mi := &file_prices_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SettleSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SettleSessionResponse) ProtoMessage() {}
+
+func (x *SettleSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_prices_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SettleSessionResponse.ProtoReflect.Descriptor instead.
+func (*SettleSessionResponse) Descriptor() ([]byte, []int) {
+	return file_prices_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SettleSessionResponse) GetCostSats() int64 {
+	if x != nil {
+		return x.CostSats
+	}
+	return 0
+}
+
 var File_prices_proto protoreflect.FileDescriptor
 
 const file_prices_proto_rawDesc = "" +
@@ -606,12 +914,39 @@ const file_prices_proto_rawDesc = "" +
 	"\x11reserved_estimate\x18\t \x01(\x03R\x10reservedEstimate\"_\n" +
 	"\x13ReportUsageResponse\x12!\n" +
 	"\fdebited_sats\x18\x01 \x01(\x03R\vdebitedSats\x12%\n" +
-	"\x0eremaining_sats\x18\x02 \x01(\x03R\rremainingSats2\xd2\x02\n" +
+	"\x0eremaining_sats\x18\x02 \x01(\x03R\rremainingSats\"\x97\x01\n" +
+	"\x13QuoteSessionRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12*\n" +
+	"\x11http_request_text\x18\x02 \x01(\tR\x0fhttpRequestText\x12!\n" +
+	"\fservice_name\x18\x03 \x01(\tR\vserviceName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\"a\n" +
+	"\x14QuoteSessionResponse\x12&\n" +
+	"\x0funit_price_sats\x18\x01 \x01(\x03R\runitPriceSats\x12!\n" +
+	"\fdeposit_sats\x18\x02 \x01(\x03R\vdepositSats\"\xed\x02\n" +
+	"\x14SettleSessionRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12!\n" +
+	"\fservice_name\x18\x03 \x01(\tR\vserviceName\x12\x1f\n" +
+	"\vhttp_status\x18\x04 \x01(\x05R\n" +
+	"httpStatus\x12!\n" +
+	"\fcontent_type\x18\x05 \x01(\tR\vcontentType\x12)\n" +
+	"\x10content_encoding\x18\x06 \x01(\tR\x0fcontentEncoding\x12\x1a\n" +
+	"\bcomplete\x18\a \x01(\bR\bcomplete\x12#\n" +
+	"\rresponse_tail\x18\b \x01(\fR\fresponseTail\x12#\n" +
+	"\restimate_sats\x18\t \x01(\x03R\festimateSats\x12*\n" +
+	"\x11http_request_text\x18\n" +
+	" \x01(\tR\x0fhttpRequestText\"4\n" +
+	"\x15SettleSessionResponse\x12\x1b\n" +
+	"\tcost_sats\x18\x01 \x01(\x03R\bcostSats2\xf7\x03\n" +
 	"\x06Prices\x12C\n" +
 	"\bGetPrice\x12\x1a.pricesrpc.GetPriceRequest\x1a\x1b.pricesrpc.GetPriceResponse\x12X\n" +
 	"\x0fChallengeMinted\x12!.pricesrpc.ChallengeMintedRequest\x1a\".pricesrpc.ChallengeMintedResponse\x12[\n" +
 	"\x10AuthorizeRequest\x12\".pricesrpc.AuthorizeRequestRequest\x1a#.pricesrpc.AuthorizeRequestResponse\x12L\n" +
-	"\vReportUsage\x12\x1d.pricesrpc.ReportUsageRequest\x1a\x1e.pricesrpc.ReportUsageResponseB-Z+github.com/lightninglabs/aperture/pricesrpcb\x06proto3"
+	"\vReportUsage\x12\x1d.pricesrpc.ReportUsageRequest\x1a\x1e.pricesrpc.ReportUsageResponse\x12O\n" +
+	"\fQuoteSession\x12\x1e.pricesrpc.QuoteSessionRequest\x1a\x1f.pricesrpc.QuoteSessionResponse\x12R\n" +
+	"\rSettleSession\x12\x1f.pricesrpc.SettleSessionRequest\x1a .pricesrpc.SettleSessionResponseB-Z+github.com/lightninglabs/aperture/pricesrpcb\x06proto3"
 
 var (
 	file_prices_proto_rawDescOnce sync.Once
@@ -625,7 +960,7 @@ func file_prices_proto_rawDescGZIP() []byte {
 	return file_prices_proto_rawDescData
 }
 
-var file_prices_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_prices_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_prices_proto_goTypes = []any{
 	(*GetPriceRequest)(nil),          // 0: pricesrpc.GetPriceRequest
 	(*GetPriceResponse)(nil),         // 1: pricesrpc.GetPriceResponse
@@ -635,21 +970,29 @@ var file_prices_proto_goTypes = []any{
 	(*AuthorizeRequestResponse)(nil), // 5: pricesrpc.AuthorizeRequestResponse
 	(*ReportUsageRequest)(nil),       // 6: pricesrpc.ReportUsageRequest
 	(*ReportUsageResponse)(nil),      // 7: pricesrpc.ReportUsageResponse
+	(*QuoteSessionRequest)(nil),      // 8: pricesrpc.QuoteSessionRequest
+	(*QuoteSessionResponse)(nil),     // 9: pricesrpc.QuoteSessionResponse
+	(*SettleSessionRequest)(nil),     // 10: pricesrpc.SettleSessionRequest
+	(*SettleSessionResponse)(nil),    // 11: pricesrpc.SettleSessionResponse
 }
 var file_prices_proto_depIdxs = []int32{
-	0, // 0: pricesrpc.Prices.GetPrice:input_type -> pricesrpc.GetPriceRequest
-	2, // 1: pricesrpc.Prices.ChallengeMinted:input_type -> pricesrpc.ChallengeMintedRequest
-	4, // 2: pricesrpc.Prices.AuthorizeRequest:input_type -> pricesrpc.AuthorizeRequestRequest
-	6, // 3: pricesrpc.Prices.ReportUsage:input_type -> pricesrpc.ReportUsageRequest
-	1, // 4: pricesrpc.Prices.GetPrice:output_type -> pricesrpc.GetPriceResponse
-	3, // 5: pricesrpc.Prices.ChallengeMinted:output_type -> pricesrpc.ChallengeMintedResponse
-	5, // 6: pricesrpc.Prices.AuthorizeRequest:output_type -> pricesrpc.AuthorizeRequestResponse
-	7, // 7: pricesrpc.Prices.ReportUsage:output_type -> pricesrpc.ReportUsageResponse
-	4, // [4:8] is the sub-list for method output_type
-	0, // [0:4] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0,  // 0: pricesrpc.Prices.GetPrice:input_type -> pricesrpc.GetPriceRequest
+	2,  // 1: pricesrpc.Prices.ChallengeMinted:input_type -> pricesrpc.ChallengeMintedRequest
+	4,  // 2: pricesrpc.Prices.AuthorizeRequest:input_type -> pricesrpc.AuthorizeRequestRequest
+	6,  // 3: pricesrpc.Prices.ReportUsage:input_type -> pricesrpc.ReportUsageRequest
+	8,  // 4: pricesrpc.Prices.QuoteSession:input_type -> pricesrpc.QuoteSessionRequest
+	10, // 5: pricesrpc.Prices.SettleSession:input_type -> pricesrpc.SettleSessionRequest
+	1,  // 6: pricesrpc.Prices.GetPrice:output_type -> pricesrpc.GetPriceResponse
+	3,  // 7: pricesrpc.Prices.ChallengeMinted:output_type -> pricesrpc.ChallengeMintedResponse
+	5,  // 8: pricesrpc.Prices.AuthorizeRequest:output_type -> pricesrpc.AuthorizeRequestResponse
+	7,  // 9: pricesrpc.Prices.ReportUsage:output_type -> pricesrpc.ReportUsageResponse
+	9,  // 10: pricesrpc.Prices.QuoteSession:output_type -> pricesrpc.QuoteSessionResponse
+	11, // 11: pricesrpc.Prices.SettleSession:output_type -> pricesrpc.SettleSessionResponse
+	6,  // [6:12] is the sub-list for method output_type
+	0,  // [0:6] is the sub-list for method input_type
+	0,  // [0:0] is the sub-list for extension type_name
+	0,  // [0:0] is the sub-list for extension extendee
+	0,  // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_prices_proto_init() }
@@ -663,7 +1006,7 @@ func file_prices_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_prices_proto_rawDesc), len(file_prices_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

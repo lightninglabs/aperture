@@ -121,6 +121,15 @@ func NewGRPCPricer(cfg *Config) (*GRPCPricer, error) {
 	return &c, nil
 }
 
+// SerializeRequest serializes a request into the text form the pricer RPCs
+// carry, leaving the request itself forwardable. Session settlement needs the
+// request back once the response has completed, and it must be captured in
+// exactly the shape the pricer already parses, so the serializer is shared
+// rather than reimplemented at the call site.
+func SerializeRequest(r *http.Request) (string, error) {
+	return dumpRequest(r)
+}
+
 // dumpRequest serializes the request's headers and a bounded prefix of its
 // body, while leaving the request forwardable: the full body is buffered and
 // restored on the request so a later reverse-proxy pass still sees it. Only a
@@ -266,6 +275,61 @@ func (c GRPCPricer) ReportUsage(ctx context.Context, usage *Usage) error {
 	})
 
 	return err
+}
+
+// QuoteSession asks the price server what one request drawn against a prepaid
+// session should cost. It is part of the SessionPricer interface.
+func (c GRPCPricer) QuoteSession(ctx context.Context, r *http.Request,
+	sessionID string, serviceName string) (*SessionQuote, error) {
+
+	reqText, err := dumpRequest(r)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.rpcClient.QuoteSession(
+		ctx, &pricesrpc.QuoteSessionRequest{
+			Path:            r.URL.Path,
+			HttpRequestText: reqText,
+			ServiceName:     serviceName,
+			SessionId:       sessionID,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SessionQuote{
+		UnitPriceSats: resp.UnitPriceSats,
+		DepositSats:   resp.DepositSats,
+	}, nil
+}
+
+// SettleSession asks the price server what a completed response actually cost,
+// so aperture can reconcile it against the estimate it already deducted from
+// the session balance. It is part of the SessionPricer interface.
+func (c GRPCPricer) SettleSession(ctx context.Context,
+	usage *SessionUsage) (int64, error) {
+
+	resp, err := c.rpcClient.SettleSession(
+		ctx, &pricesrpc.SettleSessionRequest{
+			SessionId:       usage.SessionID,
+			Path:            usage.Path,
+			ServiceName:     usage.ServiceName,
+			HttpStatus:      int32(usage.HTTPStatus),
+			ContentType:     usage.ContentType,
+			ContentEncoding: usage.ContentEncoding,
+			Complete:        usage.Complete,
+			ResponseTail:    usage.ResponseTail,
+			EstimateSats:    usage.EstimateSats,
+			HttpRequestText: usage.RequestText,
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return resp.CostSats, nil
 }
 
 // Close closes the gRPC connection. It is part of the Pricer interface.

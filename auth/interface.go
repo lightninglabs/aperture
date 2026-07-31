@@ -87,12 +87,80 @@ type SessionStore interface {
 	// accepted on a closed session.
 	CloseSession(ctx context.Context, sessionID string) error
 
+	// SettleSessionBalance atomically adjusts the session's spent counter
+	// by a signed amount, clamped so the spend can neither go below zero
+	// nor above the deposit, and returns the resulting spend. It is how a
+	// request charged an estimate before its response existed is
+	// reconciled against what it turned out to cost.
+	SettleSessionBalance(ctx context.Context, sessionID string,
+		deltaSats int64) (int64, error)
+
 	// CloseSessionAndGetBalance atomically closes the session and returns
 	// the remaining balance (deposit_sats - spent_sats). This prevents
 	// the TOCTOU race where a concurrent bearer request could deduct
 	// balance between a separate read and close.
 	CloseSessionAndGetBalance(ctx context.Context,
 		sessionID string) (int64, error)
+}
+
+// ChallengePrices carries the prices a fresh 402 challenge should quote. A
+// single number no longer suffices, because the intents a challenge can carry
+// ask genuinely different questions of the pricer: L402 and the MPP charge
+// intent quote a whole one-shot purchase, which for a metered service is a
+// token bundle, while the MPP session intent quotes the cost of one request
+// drawn against a prepaid balance. Quoting a bundle price as a session's
+// per-unit amount would make every bearer request cost as much as a bundle.
+type ChallengePrices struct {
+	// Charge is the price in satoshis of a single one-shot purchase. It is
+	// what the L402 and MPP charge challenges quote, and it is the value
+	// the plain FreshChallengeHeader receives.
+	Charge int64
+
+	// SessionUnit is the estimated price in satoshis of one request served
+	// against a prepaid session. Zero means no session-aware price was
+	// available, and the session challenge falls back to Charge.
+	SessionUnit int64
+
+	// SessionDeposit is the deposit in satoshis to ask for when opening a
+	// session. Zero leaves the deposit to the authenticator's configured
+	// deposit multiplier.
+	SessionDeposit int64
+}
+
+// PricedChallenger is an optional interface an Authenticator implements when
+// the challenge it mints depends on more than one price. Authenticators that
+// do not implement it are driven through FreshChallengeHeader with the charge
+// price, which is what they have always received.
+type PricedChallenger interface {
+	// FreshChallengeHeaderWithPrices returns a challenge header quoting the
+	// given set of prices.
+	FreshChallengeHeaderWithPrices(serviceName string,
+		prices ChallengePrices) (http.Header, error)
+}
+
+// SessionSettler is an optional interface an Authenticator implements when it
+// holds prepaid session balances that are drawn down per request.
+//
+// It exists because the two halves of metered session pricing sit on opposite
+// sides of the authenticator's boundary. An Authenticator only ever sees
+// request headers, so it cannot ask a pricer what the request in hand should
+// cost, and it never sees a response at all, so it cannot learn what the
+// request did cost. The proxy sees both, but the balance lives behind the
+// authenticator's session store. This interface is the narrow seam between
+// them: the proxy costs a completed request and hands the reconciliation back
+// to whoever owns the balance.
+type SessionSettler interface {
+	// BearerSessionID returns the session a bearer credential in the header
+	// draws against, along with the amount that credential's challenge
+	// quoted and that the authenticator has already deducted. It reports
+	// false for a header that is not an MPP session bearer credential.
+	BearerSessionID(header *http.Header) (sessionID string,
+		chargedSats int64, ok bool)
+
+	// SettleSessionRequest reconciles a request that was charged
+	// chargedSats against the actualSats it turned out to cost.
+	SettleSessionRequest(ctx context.Context, sessionID string,
+		chargedSats, actualSats int64) error
 }
 
 // Session represents an MPP prepaid session. The session is identified by the

@@ -33,6 +33,27 @@ service Prices {
     SSE stream) and debits the token's balance.
     */
     rpc ReportUsage (ReportUsageRequest) returns (ReportUsageResponse);
+
+    /*
+    QuoteSession prices a single request drawn against a prepaid MPP session
+    balance. GetPrice quotes a whole one-shot purchase, which for a metered
+    pricer is a token bundle; this quotes the estimated cost of the one
+    request in hand. That estimate is what a session challenge advertises as
+    its per-unit amount and what aperture deducts from the session balance
+    before proxying.
+    */
+    rpc QuoteSession (QuoteSessionRequest) returns (QuoteSessionResponse);
+
+    /*
+    SettleSession costs a response that was served against a session balance
+    and returns what the request should actually have cost, derived from the
+    captured response excerpt in the same way ReportUsage derives a debit.
+    Aperture already deducted an estimate before proxying, so it reconciles
+    the difference against the session's balance. Unlike ReportUsage, the
+    balance itself lives in aperture rather than in the pricer: the pricer
+    costs, aperture holds and moves the funds.
+    */
+    rpc SettleSession (SettleSessionRequest) returns (SettleSessionResponse);
 }
 
 message GetPriceRequest {
@@ -142,4 +163,74 @@ message ReportUsageResponse {
 
     // The remaining balance of the token in satoshis. Informational.
     int64 remaining_sats = 2;
+}
+
+message QuoteSessionRequest {
+    // The URL path of the request.
+    string path = 1;
+
+    // The full HTTP request serialized as text.
+    string http_request_text = 2;
+
+    // The name of the aperture service the request is for.
+    string service_name = 3;
+
+    // The session the request will be served against. Empty when the quote is
+    // for a fresh challenge, which is minted before any session exists.
+    string session_id = 4;
+}
+
+message QuoteSessionResponse {
+    // The estimated cost in satoshis of serving one request of this shape.
+    // This is the per-unit amount a session challenge advertises and the
+    // amount deducted from the session balance before proxying.
+    int64 unit_price_sats = 1;
+
+    // The deposit in satoshis to ask for when opening a fresh session. Zero
+    // leaves the deposit to aperture's configured deposit multiplier.
+    int64 deposit_sats = 2;
+}
+
+message SettleSessionRequest {
+    // The session the request was served against.
+    string session_id = 1;
+
+    // The URL path of the request.
+    string path = 2;
+
+    // The name of the aperture service the request was for.
+    string service_name = 3;
+
+    // The HTTP status code the backend responded with.
+    int32 http_status = 4;
+
+    // The Content-Type of the backend response.
+    string content_type = 5;
+
+    // The Content-Encoding the backend responded with. A non-identity value
+    // means the captured tail is compressed and could not be costed.
+    string content_encoding = 6;
+
+    // Whether the response body was read to completion.
+    bool complete = 7;
+
+    // A capped tail of the response body. For SSE streams this contains the
+    // trailing chunks, including any final usage object.
+    bytes response_tail = 8;
+
+    // The estimate in satoshis aperture already deducted from the session
+    // balance before proxying this request.
+    int64 estimate_sats = 9;
+
+    // The full HTTP request serialized as text. A session books no model the
+    // way an L402 token bundle does, so the request is echoed back here for
+    // the pricer to resolve the model it must be costed at.
+    string http_request_text = 10;
+}
+
+message SettleSessionResponse {
+    // What the request actually cost, in satoshis. Aperture reconciles this
+    // against the estimate it already deducted, charging the shortfall or
+    // giving back the excess.
+    int64 cost_sats = 1;
 }

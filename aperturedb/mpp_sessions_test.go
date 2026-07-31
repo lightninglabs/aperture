@@ -550,3 +550,122 @@ func TestMPPSessionsAreIsolated(t *testing.T) {
 		require.Equal(t, int64(1000), got.DepositSats)
 	}
 }
+
+// TestMPPSessionSettleClamps asserts the reconciliation clamps rather than
+// refuses. Metered pricing charges an estimate before the response exists, so
+// the true cost can land either side of it, and both directions have to settle
+// without leaving the session's books inconsistent.
+func TestMPPSessionSettleClamps(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	session := openSession(t, store, ctx, 0x20, 1000)
+	require.NoError(t, store.DeductSessionBalance(ctx, session.SessionID, 100))
+
+	// An under-estimate charges the shortfall.
+	spent, err := store.SettleSessionBalance(ctx, session.SessionID, 40)
+	require.NoError(t, err)
+	require.Equal(t, int64(140), spent)
+
+	// An over-estimate gives the excess back.
+	spent, err = store.SettleSessionBalance(ctx, session.SessionID, -90)
+	require.NoError(t, err)
+	require.Equal(t, int64(50), spent)
+
+	// A settlement larger than the balance is absorbed by the seller rather
+	// than turning the refund into a claim against the buyer. Refusing it
+	// instead would leave the books showing service rendered but unbilled.
+	spent, err = store.SettleSessionBalance(ctx, session.SessionID, 10_000)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), spent)
+
+	// And a give-back larger than the spend cannot manufacture a credit.
+	spent, err = store.SettleSessionBalance(ctx, session.SessionID, -10_000)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), spent)
+
+	got, err := store.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), got.DepositSats)
+	require.Equal(t, int64(0), got.SpentSats)
+}
+
+// TestMPPSessionSettleRejectsClosed asserts a settlement cannot land on a
+// closed session. The refund for a closed session has already been computed and
+// possibly paid, so a late settlement would move money that is no longer there.
+func TestMPPSessionSettleRejectsClosed(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	session := openSession(t, store, ctx, 0x21, 1000)
+
+	_, err := store.CloseSessionAndGetBalance(ctx, session.SessionID)
+	require.NoError(t, err)
+
+	_, err = store.SettleSessionBalance(ctx, session.SessionID, 10)
+	require.Error(t, err)
+
+	_, err = store.SettleSessionBalance(ctx, "no-such-session", 10)
+	require.Error(t, err)
+}
+
+// TestMPPSessionConcurrentSettlements asserts that settlements racing each
+// other, and racing draw-downs, never leave the spend outside the range the
+// deposit allows. Settlements run detached from the request that produced them,
+// so several land on one session at once as a matter of course.
+func TestMPPSessionConcurrentSettlements(t *testing.T) {
+	t.Parallel()
+
+	ctx := testSessionCtx(t)
+	store := newMPPSessionsStore(t)
+
+	const (
+		deposit  = 10_000
+		requests = 40
+	)
+
+	session := openSession(t, store, ctx, 0x22, deposit)
+
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			// Half the goroutines draw down, half settle in either
+			// direction, so the spend is pushed at both bounds.
+			if idx%2 == 0 {
+				_ = store.DeductSessionBalance(
+					ctx, session.SessionID, 400,
+				)
+
+				return
+			}
+
+			delta := int64(600)
+			if idx%4 == 1 {
+				delta = -600
+			}
+
+			_, err := store.SettleSessionBalance(
+				ctx, session.SessionID, delta,
+			)
+			require.NoError(t, err)
+		}(i)
+	}
+	wg.Wait()
+
+	got, err := store.GetSession(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, got.SpentSats, int64(0))
+	require.LessOrEqual(t, got.SpentSats, got.DepositSats)
+
+	// The remaining balance is still exactly what a close would pay out.
+	refund, err := store.CloseSessionAndGetBalance(ctx, session.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(deposit), got.SpentSats+refund)
+}

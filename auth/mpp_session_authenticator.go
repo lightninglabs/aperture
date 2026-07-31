@@ -97,6 +97,8 @@ const (
 // Compile-time interface checks.
 var _ Authenticator = (*MPPSessionAuthenticator)(nil)
 var _ ReceiptProvider = (*MPPSessionAuthenticator)(nil)
+var _ PricedChallenger = (*MPPSessionAuthenticator)(nil)
+var _ SessionSettler = (*MPPSessionAuthenticator)(nil)
 
 // MPPSessionConfig holds the configuration for the session authenticator.
 type MPPSessionConfig struct {
@@ -661,6 +663,30 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 	servicePrice int64) (http.Header, error) {
 
+	return a.FreshChallengeHeaderWithPrices(serviceName, ChallengePrices{
+		Charge: servicePrice,
+	})
+}
+
+// FreshChallengeHeaderWithPrices returns a WWW-Authenticate: Payment header
+// containing a session challenge priced with the session-aware quote when one
+// is available.
+//
+// The unit price a session advertises is the estimated cost of one request, not
+// the price of a one-shot purchase. On a metered service those differ by orders
+// of magnitude, since a one-shot purchase buys a whole token bundle, so quoting
+// the charge price here would make every bearer request cost a bundle and empty
+// the deposit on its first call.
+//
+// NOTE: This is part of the PricedChallenger interface.
+func (a *MPPSessionAuthenticator) FreshChallengeHeaderWithPrices(
+	serviceName string, prices ChallengePrices) (http.Header, error) {
+
+	servicePrice := prices.SessionUnit
+	if servicePrice <= 0 {
+		servicePrice = prices.Charge
+	}
+
 	// Compute deposit amount with overflow check.
 	mult := int64(a.depositMultiplier)
 	if servicePrice > 0 && mult > math.MaxInt64/servicePrice {
@@ -668,6 +694,13 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 			"price=%d multiplier=%d", servicePrice, mult)
 	}
 	depositSats := servicePrice * mult
+
+	// A pricer that has an opinion about the deposit overrides the
+	// multiplier, since it is the one that knows how many requests a
+	// session needs to hold to be worth opening.
+	if prices.SessionDeposit > 0 {
+		depositSats = prices.SessionDeposit
+	}
 
 	// Create a deposit invoice.
 	paymentRequest, paymentHash, err := a.challenger.NewChallenge(
@@ -796,6 +829,85 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 	}
 
 	return receiptHeader
+}
+
+// BearerSessionID returns the session a bearer credential in the header draws
+// against, along with the per-unit amount its challenge quoted, which is what
+// handleBearer has already deducted from the balance.
+//
+// The credential is only parsed here, never trusted on its own: the amount is
+// read out of the challenge the server itself minted and HMAC-bound, and the
+// session was authenticated by Accept before the proxy ever asks. A caller that
+// has not run Accept first must not treat this as authentication.
+//
+// NOTE: This is part of the SessionSettler interface.
+func (a *MPPSessionAuthenticator) BearerSessionID(header *http.Header) (string,
+	int64, bool) {
+
+	cred, err := mpp.ParseCredential(header)
+	if err != nil {
+		return "", 0, false
+	}
+
+	if cred.Challenge.Method != mpp.MethodLightning ||
+		cred.Challenge.Intent != mpp.IntentSession {
+
+		return "", 0, false
+	}
+
+	var payload mpp.SessionPayload
+	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
+		return "", 0, false
+	}
+
+	if payload.Action != mpp.SessionActionBearer || payload.SessionID == "" {
+		return "", 0, false
+	}
+
+	var sessReq mpp.SessionRequest
+	if err := mpp.DecodeRequest(cred.Challenge.Request, &sessReq); err != nil {
+		return "", 0, false
+	}
+
+	charged, err := strconv.ParseInt(sessReq.Amount, 10, 64)
+	if err != nil || charged < 0 {
+		return "", 0, false
+	}
+
+	return payload.SessionID, charged, true
+}
+
+// SettleSessionRequest reconciles a request that was charged chargedSats at
+// bearer time against the actualSats its completed response turned out to cost.
+//
+// This is the second half of post-hoc reconciliation, which is the accounting
+// model sessions use deliberately. The alternative, reserving a worst case at
+// request time and releasing the remainder, never overspends but makes the
+// buyer's displayed balance lurch downward for the length of every request.
+// Reconciling instead leaves the balance transiently optimistic between the
+// start of a request and the end of its response, and the most that optimism
+// can cost the seller is the difference on a single in-flight request.
+//
+// NOTE: This is part of the SessionSettler interface.
+func (a *MPPSessionAuthenticator) SettleSessionRequest(ctx context.Context,
+	sessionID string, chargedSats, actualSats int64) error {
+
+	delta := actualSats - chargedSats
+	if delta == 0 {
+		return nil
+	}
+
+	spent, err := a.sessionStore.SettleSessionBalance(ctx, sessionID, delta)
+	if err != nil {
+		return fmt.Errorf("unable to settle session %s: %w", sessionID,
+			err)
+	}
+
+	log.Debugf("MPP Session: Settled session %s by %d sats (charged %d, "+
+		"cost %d), spend now %d", sessionID, delta, chargedSats,
+		actualSats, spent)
+
+	return nil
 }
 
 // networkToChainParams converts a network name string to the corresponding
