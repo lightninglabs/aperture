@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,135 @@ func (m *mppMockAuthenticator) ReceiptHeader(header *http.Header,
 	receiptHeader := make(http.Header)
 	mpp.SetReceiptHeader(receiptHeader, receipt) //nolint:errcheck
 	return receiptHeader
+}
+
+// mppJoinedChallengeAuth emits its Payment challenge as the trailing element
+// of a single comma-joined WWW-Authenticate field value, under a caller chosen
+// spelling of the auth-scheme token.
+//
+// This is the shape a challenge takes once anything on the path folds repeated
+// header lines into one field value, which RFC 9110 Section 5.3 permits, and
+// it is what the proxy itself has to recognize before it decides whether the
+// body is Problem Details JSON.
+type mppJoinedChallengeAuth struct {
+	*mppMockAuthenticator
+
+	// scheme is the spelling of the Payment auth-scheme token to emit.
+	scheme string
+}
+
+var _ auth.Authenticator = (*mppJoinedChallengeAuth)(nil)
+
+func (m *mppJoinedChallengeAuth) FreshChallengeHeader(service string,
+	price int64) (http.Header, error) {
+
+	base, err := m.mppMockAuthenticator.FreshChallengeHeader(
+		service, price,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lift the Payment challenge out of the mock's header and re-emit it
+	// under the scheme spelling under test.
+	var payment string
+	for _, v := range base.Values("WWW-Authenticate") {
+		if strings.HasPrefix(v, mpp.AuthScheme+" ") {
+			payment = m.scheme +
+				strings.TrimPrefix(v, mpp.AuthScheme)
+
+			break
+		}
+	}
+	if payment == "" {
+		return nil, fmt.Errorf("mock emitted no Payment challenge")
+	}
+
+	header := make(http.Header)
+	header.Set("WWW-Authenticate",
+		`L402 macaroon="mock", invoice="lnbcrt...", `+payment)
+
+	return header, nil
+}
+
+// TestProxyMPPChallengeNotFirstInValue verifies that the proxy still answers
+// with a Problem Details body when the Payment challenge is not the first
+// element of its WWW-Authenticate field value, and that it matches the
+// auth-scheme token case-insensitively as RFC 9110 Section 11.1 requires.
+func TestProxyMPPChallengeNotFirstInValue(t *testing.T) {
+	testCases := []struct {
+		name   string
+		scheme string
+	}{{
+		name:   "canonical scheme",
+		scheme: "Payment",
+	}, {
+		name:   "lowercase scheme",
+		scheme: "payment",
+	}, {
+		name:   "mixed case scheme",
+		scheme: "PaYmEnT",
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAuth := &mppJoinedChallengeAuth{
+				mppMockAuthenticator: newMPPMockAuth(),
+				scheme:               tc.scheme,
+			}
+
+			services := []*proxy.Service{{
+				Address:    testMPPBackendAddr,
+				HostRegexp: ".*",
+				PathRegexp: "^/http/.*$",
+				Protocol:   "http",
+				Auth:       "on",
+				Price:      100,
+			}}
+
+			p, err := proxy.New(mockAuth, services, nil, nil)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(
+				"GET", "http://localhost/http/test", nil,
+			)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+
+			resp := rec.Result()
+			defer resp.Body.Close()
+
+			require.Equal(t, http.StatusPaymentRequired,
+				resp.StatusCode)
+
+			// The challenge has to reach the client as one field
+			// value that leads with a challenge for another
+			// scheme, or the case under test is not the one being
+			// exercised.
+			values := resp.Header.Values("Www-Authenticate")
+			require.Len(t, values, 1)
+			require.True(t, strings.HasPrefix(values[0], "L402 "),
+				"expected the L402 challenge first, got %q",
+				values[0])
+			require.Contains(t, values[0], tc.scheme+" ")
+
+			// The Payment challenge is present, so the body must
+			// be RFC 9457 Problem Details rather than the plain
+			// text of a bare L402 response.
+			require.Equal(t, mpp.ProblemContentType,
+				resp.Header.Get("Content-Type"))
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			var problem mpp.ProblemDetails
+			require.NoError(t, json.Unmarshal(body, &problem))
+			require.Equal(t, mpp.ProblemPaymentRequired,
+				problem.Type)
+			require.Equal(t, http.StatusPaymentRequired,
+				problem.Status)
+		})
+	}
 }
 
 // TestProxyMPP402Response verifies that the proxy returns correct 402

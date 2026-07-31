@@ -713,13 +713,15 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 
 	// Check if a Payment scheme challenge is present. If so, use RFC
 	// 9457 Problem Details JSON in the response body per the MPP spec.
-	hasMPP := false
-	for _, v := range header.Values("WWW-Authenticate") {
-		if strings.HasPrefix(v, mpp.AuthScheme+" ") {
-			hasMPP = true
-			break
-		}
-	}
+	//
+	// The header is parsed rather than prefix-matched, because a Payment
+	// challenge need not open its field value: RFC 9110 Section 5.3 lets
+	// anything on the path fold repeated header lines into one
+	// comma-joined value, which leaves the challenge sitting behind
+	// another scheme's. The auth-scheme token is also case-insensitive
+	// per RFC 9110 Section 11.1, which a prefix match does not honor.
+	challenges, parseErr := mpp.ParseChallengeHeaders(header)
+	hasMPP := parseErr == nil && len(challenges) > 0
 
 	if hasMPP {
 		w.Header().Set("Content-Type", mpp.ProblemContentType)
