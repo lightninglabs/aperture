@@ -34,6 +34,14 @@ type LncSession struct {
 	DevServer          bool
 }
 
+type MppConsumedCharge struct {
+	ID          int32
+	PaymentHash []byte
+	ChallengeID string
+	ExpiresAt   time.Time
+	ConsumedAt  time.Time
+}
+
 type MppSession struct {
 	ID            int32
 	SessionID     string

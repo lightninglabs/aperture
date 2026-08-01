@@ -7,12 +7,23 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/lightninglabs/aperture/mint"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
+)
+
+const (
+	// consumeTimeout bounds the store call that decides a request. It is
+	// short on purpose: the client is waiting on it.
+	consumeTimeout = 5 * time.Second
+
+	// pruneTimeout bounds a single background sweep of expired consumption
+	// records.
+	pruneTimeout = 30 * time.Second
 )
 
 // MPPAuthenticator is an authenticator that implements the Payment HTTP
@@ -42,20 +53,72 @@ type MPPAuthenticator struct {
 
 	// challengeExpiry is the duration after which a challenge expires.
 	challengeExpiry time.Duration
+
+	// chargeStore remembers which payments have already bought a request,
+	// which is what keeps a credential from being replayed. It is never
+	// nil: an authenticator without one would serve every replay, so the
+	// constructor refuses to build one.
+	chargeStore ChargeStore
+
+	// pruneInterval is how often expired consumption records are swept.
+	pruneInterval time.Duration
+
+	// retentionMargin is how far past a challenge's expiry its consumption
+	// record is kept before it may be pruned.
+	retentionMargin time.Duration
+
+	// quit is closed to stop the pruner, and wg waits for it to leave.
+	quit chan struct{}
+	wg   sync.WaitGroup
+
+	// started and stopped guard Start and Stop against being run twice.
+	started sync.Once
+	stopped sync.Once
 }
 
 // Compile-time interface checks.
 var _ Authenticator = (*MPPAuthenticator)(nil)
 var _ ReceiptProvider = (*MPPAuthenticator)(nil)
 
+const (
+	// defaultChallengeExpiry is the default challenge expiration duration.
+	defaultChallengeExpiry = 15 * time.Minute
+
+	// defaultPruneInterval is how often the authenticator sweeps
+	// consumption records whose challenges can no longer be presented.
+	defaultPruneInterval = 5 * time.Minute
+
+	// defaultRetentionMargin is how long a consumption record outlives the
+	// expiry of the challenge it records.
+	//
+	// A record is only ever needed while its challenge could still be
+	// accepted, and that stops at the expiry the challenge carries. The
+	// margin exists because the clock that decides a challenge has expired
+	// and the clock that decides a record may go need not be the same one:
+	// several proxies can share a database. It is deliberately generous and
+	// deliberately one-sided, since keeping a dead record costs a row and
+	// dropping a live one costs a payment.
+	defaultRetentionMargin = time.Hour
+)
+
 // NewMPPAuthenticator creates a new authenticator for the Payment HTTP
 // Authentication Scheme with the "charge" intent.
-// defaultChallengeExpiry is the default challenge expiration duration.
-const defaultChallengeExpiry = 15 * time.Minute
-
+//
+// The charge store is required. Everything else the authenticator checks is a
+// property of the payment rather than of the request carrying it, so without
+// somewhere to record that a payment has been spent there is no way to tell a
+// first presentation from a replay, and one payment would buy unlimited
+// service. Refusing to build is the only honest answer for a deployment that
+// cannot offer one.
 func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
 	realm string, hmacSecret []byte, network string,
-	txnRecorder TransactionRecorder) *MPPAuthenticator {
+	txnRecorder TransactionRecorder,
+	chargeStore ChargeStore) (*MPPAuthenticator, error) {
+
+	if chargeStore == nil {
+		return nil, fmt.Errorf("MPP: a charge store is required, " +
+			"without one every charge credential can be replayed")
+	}
 
 	return &MPPAuthenticator{
 		challenger:      challenger,
@@ -65,6 +128,77 @@ func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
 		hmacSecret:      hmacSecret,
 		network:         network,
 		challengeExpiry: defaultChallengeExpiry,
+		chargeStore:     chargeStore,
+		pruneInterval:   defaultPruneInterval,
+		retentionMargin: defaultRetentionMargin,
+		quit:            make(chan struct{}),
+	}, nil
+}
+
+// Start launches the background sweep that keeps the consumption record table
+// from growing without bound. It is safe to call more than once.
+func (a *MPPAuthenticator) Start() {
+	a.started.Do(func() {
+		a.wg.Add(1)
+		go a.pruneLoop()
+	})
+}
+
+// Stop halts the background sweep and waits for it to finish. It is safe to
+// call more than once, and safe to call on an authenticator that was never
+// started.
+func (a *MPPAuthenticator) Stop() {
+	a.stopped.Do(func() {
+		close(a.quit)
+		a.wg.Wait()
+	})
+}
+
+// pruneLoop periodically drops consumption records whose challenges have been
+// expired long enough that no credential naming them could be accepted again.
+func (a *MPPAuthenticator) pruneLoop() {
+	defer a.wg.Done()
+
+	ticker := time.NewTicker(a.pruneInterval)
+	defer ticker.Stop()
+
+	for {
+		// Sweep once on entry so a proxy that is restarted often still
+		// clears out what the previous run left behind.
+		a.prune()
+
+		select {
+		case <-ticker.C:
+
+		case <-a.quit:
+			return
+		}
+	}
+}
+
+// prune runs a single sweep.
+func (a *MPPAuthenticator) prune() {
+	ctx, cancel := context.WithTimeout(
+		context.Background(), pruneTimeout,
+	)
+	defer cancel()
+
+	// A record only matters while the challenge it records could still be
+	// accepted, and Accept refuses an expired challenge before it ever
+	// reaches the store. So a record whose expiry is far enough in the past
+	// cannot change any future answer, and dropping it cannot open a
+	// replay.
+	cutoff := time.Now().UTC().Add(-a.retentionMargin)
+
+	pruned, err := a.chargeStore.PruneConsumedCharges(ctx, cutoff)
+	if err != nil {
+		log.Errorf("MPP: Failed to prune consumed charges: %v", err)
+		return
+	}
+
+	if pruned > 0 {
+		log.Debugf("MPP: Pruned %d consumed charge records expired "+
+			"before %v", pruned, cutoff)
 	}
 }
 
@@ -109,18 +243,29 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		return false
 	}
 
-	// Check expiry if set.
-	if cred.Challenge.Expires != "" {
-		expiresAt, err := time.Parse(time.RFC3339,
-			cred.Challenge.Expires)
-		if err != nil {
-			log.Debugf("MPP: Invalid expires format: %v", err)
-			return false
-		}
-		if time.Now().After(expiresAt) {
-			log.Debugf("MPP: Challenge expired at %v", expiresAt)
-			return false
-		}
+	// Every challenge this authenticator mints carries an expiry, and the
+	// expiry is slot 4 of the challenge HMAC, so a client can neither drop
+	// it nor push it out. A credential that arrives without one therefore
+	// describes a challenge no deployment of this code has issued, and it
+	// is refused rather than treated as valid forever.
+	//
+	// The requirement is not merely tidiness. The expiry is the last moment
+	// at which this credential could be accepted, and that is what lets the
+	// record of its consumption eventually be dropped. A credential with no
+	// expiry would have to be remembered for all time.
+	if cred.Challenge.Expires == "" {
+		log.Debugf("MPP: Challenge carries no expiry")
+		return false
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339, cred.Challenge.Expires)
+	if err != nil {
+		log.Debugf("MPP: Invalid expires format: %v", err)
+		return false
+	}
+	if time.Now().After(expiresAt) {
+		log.Debugf("MPP: Challenge expired at %v", expiresAt)
+		return false
 	}
 
 	// Decode the charge payload to get the preimage.
@@ -173,6 +318,40 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 	)
 	if err != nil {
 		log.Debugf("MPP: Invoice verification failed: %v", err)
+		return false
+	}
+
+	// Everything above is a statement about the payment, and a payment that
+	// was made stays made. Spend it here, so that this credential buys this
+	// request and no other.
+	//
+	// The claim comes last of the checks, which is what keeps an honest
+	// client from burning its own payment: the invoice lookup polls the
+	// backend and can time out while an HTLC is still settling, and a
+	// client answered with a 402 in that window has to be able to present
+	// the same credential again. Once the claim is made, though, it stands
+	// whatever happens next. The spec is explicit that the invalidation and
+	// the decision to serve are one act, and that a consumed challenge
+	// stays consumed even if the response never reaches the client.
+	ctx, cancel := context.WithTimeout(
+		context.Background(), consumeTimeout,
+	)
+	defer cancel()
+
+	consumed, err := a.chargeStore.ConsumeCharge(
+		ctx, paymentHash, cred.Challenge.ID, expiresAt,
+	)
+	if err != nil {
+		// Fail closed. A store that cannot answer is a store that
+		// cannot tell a first presentation from a replay.
+		log.Errorf("MPP: Unable to consume charge for payment hash "+
+			"%x: %v", paymentHash[:], err)
+		return false
+	}
+	if !consumed {
+		log.Warnf("MPP: Refusing replayed charge credential for "+
+			"payment hash %x on service %s", paymentHash[:],
+			serviceName)
 		return false
 	}
 

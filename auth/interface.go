@@ -105,6 +105,40 @@ func (c CreditOutcome) String() string {
 	}
 }
 
+// ChargeStore remembers which Lightning payments have already bought a request
+// under the MPP charge intent. The charge credential is otherwise entirely a
+// statement about the past: the preimage hashes to the payment hash forever,
+// the challenge HMAC is stateless by design and says nothing about whether its
+// challenge has been redeemed, and a settled invoice stays settled. Nothing in
+// the credential distinguishes its first presentation from its thousandth, so
+// this store is the only thing that can.
+type ChargeStore interface {
+	// ConsumeCharge claims the given payment hash for the request being
+	// authorized, and reports whether this call is the one that claimed it.
+	// A hash that some earlier request already claimed returns false, and
+	// the credential naming it must be refused.
+	//
+	// The claim must be atomic. Concurrent presentations of one credential
+	// must see exactly one true between them, which rules out asking
+	// whether a hash is spent and then marking it spent: both callers would
+	// read it as unspent and both would be served.
+	//
+	// The expiry is the one the challenge carried. It is recorded rather
+	// than consulted, because a challenge past its expiry is refused before
+	// the store is reached; what it is for is telling a later prune which
+	// records can no longer matter.
+	ConsumeCharge(ctx context.Context, paymentHash lntypes.Hash,
+		challengeID string, expiresAt time.Time) (bool, error)
+
+	// PruneConsumedCharges removes every record whose challenge expired
+	// before the given instant, and returns how many it removed. Without it
+	// the table grows for as long as the proxy serves traffic, which on a
+	// public proxy is a slow denial of service rather than a tidiness
+	// problem.
+	PruneConsumedCharges(ctx context.Context,
+		expiredBefore time.Time) (int64, error)
+}
+
 // SessionStore persists MPP session state for the session intent. Sessions
 // track prepaid balances that are decremented as services are consumed.
 type SessionStore interface {

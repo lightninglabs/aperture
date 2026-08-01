@@ -7,6 +7,7 @@ package sqlc
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 type Querier interface {
@@ -16,6 +17,7 @@ type Querier interface {
 	CountL402TransactionsByDateRange(ctx context.Context, arg CountL402TransactionsByDateRangeParams) (int64, error)
 	CountL402TransactionsByService(ctx context.Context, serviceName string) (int64, error)
 	CountL402TransactionsFiltered(ctx context.Context, arg CountL402TransactionsFilteredParams) (int64, error)
+	DeleteExpiredMPPConsumedCharges(ctx context.Context, expiresAt time.Time) (sql.Result, error)
 	DeleteL402TransactionByTokenID(ctx context.Context, tokenID []byte) (int64, error)
 	DeleteOnionPrivateKey(ctx context.Context) error
 	DeleteSecretByHash(ctx context.Context, hash []byte) (int64, error)
@@ -27,11 +29,13 @@ type Querier interface {
 	GetL402TotalRevenueByDateRange(ctx context.Context, arg GetL402TotalRevenueByDateRangeParams) (int64, error)
 	GetL402TransactionByIdentifierHash(ctx context.Context, identifierHash []byte) (L402Transaction, error)
 	GetL402TransactionsByPaymentHash(ctx context.Context, paymentHash []byte) ([]L402Transaction, error)
+	GetMPPConsumedCharge(ctx context.Context, paymentHash []byte) (MppConsumedCharge, error)
 	GetMPPSessionByID(ctx context.Context, sessionID string) (MppSession, error)
 	GetMPPSessionCreditOwner(ctx context.Context, paymentHash []byte) (string, error)
 	GetSecretByHash(ctx context.Context, hash []byte) ([]byte, error)
 	GetSession(ctx context.Context, passphraseEntropy []byte) (LncSession, error)
 	InsertL402Transaction(ctx context.Context, arg InsertL402TransactionParams) (int32, error)
+	InsertMPPConsumedCharge(ctx context.Context, arg InsertMPPConsumedChargeParams) (sql.Result, error)
 	InsertMPPSession(ctx context.Context, arg InsertMPPSessionParams) (int32, error)
 	InsertMPPSessionCredit(ctx context.Context, arg InsertMPPSessionCreditParams) (sql.Result, error)
 	InsertSecret(ctx context.Context, arg InsertSecretParams) (int32, error)

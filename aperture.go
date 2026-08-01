@@ -251,6 +251,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		txnStore        *aperturedb.L402TransactionsStore
 		svcStore        *aperturedb.ServicesStore
 		mppSessionStore auth.SessionStore
+		mppChargeStore  auth.ChargeStore
 	)
 
 	// Connect to the chosen database backend.
@@ -287,6 +288,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		)
 		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
 
+		dbChargeTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPChargesDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppChargeStore = aperturedb.NewMPPChargesStore(dbChargeTxer)
+
 	case "sqlite": //nolint:dupl
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
@@ -303,6 +311,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			},
 		)
 		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
+
+		dbChargeTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPChargesDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppChargeStore = aperturedb.NewMPPChargesStore(dbChargeTxer)
 
 	default:
 		return fmt.Errorf("unknown database backend: %s",
@@ -442,7 +457,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 
 	a.proxy, a.proxyCleanup, err = createProxy(
 		a.cfg, initialServices, a.challenger, secretStore,
-		mppSessionStore, paymentSender, mintTxnStore,
+		mppSessionStore, mppChargeStore, paymentSender, mintTxnStore,
 		txnRecorder, adminPriority, adminFallback,
 	)
 	if err != nil {
@@ -1630,6 +1645,7 @@ func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
 func createProxy(cfg *Config, services []*proxy.Service,
 	challenger challenger.Challenger,
 	store mint.SecretStore, mppSessionStore auth.SessionStore,
+	mppChargeStore auth.ChargeStore,
 	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
 	txnRecorder auth.TransactionRecorder,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
@@ -1645,8 +1661,25 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	l402Auth := auth.NewL402Authenticator(minter, challenger)
 
 	// Build the authenticator, optionally composing with MPP.
-	var authenticator auth.Authenticator
+	var (
+		authenticator auth.Authenticator
+		mppCleanup    = func() {}
+	)
 	if cfg.Authenticator.EnableMPP {
+		// A charge credential is single use, and the only thing that
+		// can tell a first presentation from a replay is a durable
+		// record of what has been spent. Backends that provide no such
+		// record, etcd today, cannot serve the charge intent at all,
+		// and saying so here is better than starting up and quietly
+		// handing out unlimited service for one payment.
+		if mppChargeStore == nil {
+			return nil, nil, fmt.Errorf("MPP requires a sql "+
+				"database backend to record spent payments, "+
+				"but %v is configured: run aperture with "+
+				"sqlite or postgres, or without --enablempp",
+				cfg.DatabaseBackend)
+		}
+
 		realm := cfg.Authenticator.MPPRealm
 		if realm == "" {
 			realm = cfg.ListenAddr
@@ -1665,10 +1698,19 @@ func createProxy(cfg *Config, services []*proxy.Service,
 			network = "mainnet"
 		}
 
-		mppAuth := auth.NewMPPAuthenticator(
+		mppAuth, err := auth.NewMPPAuthenticator(
 			challenger, challenger, realm, hmacSecret, network,
-			txnRecorder,
+			txnRecorder, mppChargeStore,
 		)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// The authenticator runs a background sweep over the records of
+		// spent payments, which the caller stops along with the rest of
+		// the proxy.
+		mppAuth.Start()
+		mppCleanup = mppAuth.Stop
 
 		auths := []auth.Authenticator{l402Auth, mppAuth}
 
@@ -1716,6 +1758,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	staticServer := http.NotFoundHandler()
 	if cfg.ServeStatic {
 		if len(strings.TrimSpace(cfg.StaticRoot)) == 0 {
+			mppCleanup()
 			return nil, nil, fmt.Errorf("staticroot cannot be " +
 				"empty, must contain path to directory that " +
 				"contains index.html")
@@ -1725,17 +1768,24 @@ func createProxy(cfg *Config, services []*proxy.Service,
 
 	var (
 		localServices []proxy.LocalService
-		proxyCleanup  = func() {}
+		hashMailStop  = func() {}
 	)
 
 	if cfg.HashMail.Enabled {
 		hashMailServices, cleanup, err := createHashMailServer(cfg)
 		if err != nil {
+			mppCleanup()
 			return nil, nil, err
 		}
 
 		localServices = append(localServices, hashMailServices...)
-		proxyCleanup = cleanup
+		hashMailStop = cleanup
+	}
+
+	// Everything the proxy started is stopped together.
+	proxyCleanup := func() {
+		hashMailStop()
+		mppCleanup()
 	}
 
 	// Append admin fallback services (e.g. dashboard catch-all) before
