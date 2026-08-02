@@ -663,16 +663,29 @@ func matchService(req *http.Request, services []*Service) (*Service, bool) {
 // Resource Sharing. These header fields are needed to signal to the browser
 // that it's ok to allow requests to sub domains, even if the JS was served from
 // the top level domain.
+//
+// Every field is set rather than added, because this runs over the backend's
+// own response headers on the way out. A backend that sets its own CORS
+// headers, which any service that can also be reached directly will do, would
+// otherwise end up with two of each. Two Access-Control-Allow-Origin fields is
+// not a more emphatic "*", it is invalid per the fetch standard, and the
+// browser rejects the response outright. Aperture sits in front, so its view
+// wins.
 func addCorsHeaders(header http.Header) {
 	log.Debugf("Adding CORS headers to response.")
 
-	header.Add("Access-Control-Allow-Origin", "*")
-	header.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	header.Add("Access-Control-Expose-Headers",
+	header.Set("Access-Control-Allow-Origin", "*")
+	header.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	header.Set("Access-Control-Expose-Headers",
 		"WWW-Authenticate, Payment-Receipt")
-	header.Add(
+
+	// Content-Type has to be allowed for any JSON API behind the proxy. A
+	// POST carrying application/json is not a simple request, so the
+	// browser preflights it, and we answer that preflight ourselves
+	// without ever consulting the backend.
+	header.Set(
 		"Access-Control-Allow-Headers",
-		"Authorization, Grpc-Metadata-macaroon, "+
+		"Content-Type, Authorization, Grpc-Metadata-macaroon, "+
 			"WWW-Authenticate, Payment-Receipt",
 	)
 }
