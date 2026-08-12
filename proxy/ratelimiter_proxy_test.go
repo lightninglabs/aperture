@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +26,60 @@ func TestRateLimiterZeroPrice(t *testing.T) {
 	serveRateLimitRequest(t, p, http.StatusOK)
 	serveRateLimitRequest(t, p, http.StatusTooManyRequests)
 	require.Equal(t, int32(1), backendCalls.Load())
+}
+
+// TestRateLimiterDoesNotConsumeFreebie makes sure a rate limited request does
+// not consume one of the client's free requests.
+func TestRateLimiterDoesNotConsumeFreebie(t *testing.T) {
+	p, service, backendCalls := newRateLimitTestProxy(
+		t, auth.Level("freebie 2"), 1, time.Hour,
+	)
+
+	serveRateLimitRequest(t, p, http.StatusOK)
+	serveRateLimitRequest(t, p, http.StatusTooManyRequests)
+
+	// Replace the exhausted test bucket rather than depending on wall-clock
+	// refill timing. The next request should still have the second freebie
+	// available because the denied request was not tallied.
+	service.rateLimiter = NewRateLimiter(
+		service.Name, service.RateLimits,
+	)
+	serveRateLimitRequest(t, p, http.StatusOK)
+	serveRateLimitRequest(t, p, http.StatusPaymentRequired)
+	require.Equal(t, int32(2), backendCalls.Load())
+}
+
+// TestRateLimiterRefundsFreebieFailure makes sure an internal freebie store
+// failure does not consume rate-limit capacity for a request that is never
+// forwarded.
+func TestRateLimiterRefundsFreebieFailure(t *testing.T) {
+	p, service, backendCalls := newRateLimitTestProxy(
+		t, auth.Level("freebie 2"), 1, time.Hour,
+	)
+	service.freebieDB = &failOnceFreebieDB{}
+
+	serveRateLimitRequest(t, p, http.StatusInternalServerError)
+	serveRateLimitRequest(t, p, http.StatusOK)
+	require.Equal(t, int32(1), backendCalls.Load())
+}
+
+// failOnceFreebieDB fails its first tally and accepts subsequent tallies.
+type failOnceFreebieDB struct {
+	failed atomic.Bool
+}
+
+func (f *failOnceFreebieDB) CanPass(*http.Request, net.IP) (bool, error) {
+	return true, nil
+}
+
+func (f *failOnceFreebieDB) TallyFreebie(*http.Request,
+	net.IP) (bool, error) {
+
+	if f.failed.CompareAndSwap(false, true) {
+		return false, errors.New("injected freebie tally failure")
+	}
+
+	return true, nil
 }
 
 // newRateLimitTestProxy creates a proxy with a one-token burst and a backend

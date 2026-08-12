@@ -242,23 +242,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// accordingly.
 	authLevel := target.AuthRequired(r)
 
-	// checkRateLimit is a helper that checks rate limits after determining
-	// the authentication status. This ensures we only use L402 token IDs
-	// for authenticated requests, preventing DoS via garbage tokens.
-	checkRateLimit := func(authenticated bool) bool {
+	// reserveRateLimit provisionally admits a request. Most paths commit
+	// immediately through checkRateLimit; the freebie path can cancel the
+	// admission if updating its quota store fails.
+	reserveRateLimit := func(authenticated bool) (*rateLimitAdmission, bool) {
 		if target.rateLimiter == nil {
-			return true
+			return nil, true
 		}
 		key := ExtractRateLimitKey(r, remoteIP, authenticated)
-		allowed, retryAfter := target.rateLimiter.Allow(r, key)
+		admission, allowed, retryAfter := target.rateLimiter.reserve(r, key)
 		if !allowed {
-			prefixLog.Infof("Rate limit exceeded for key %s, "+
-				"retry after %v", key, retryAfter)
+			prefixLog.Infof("Rate limit exceeded, retry after %v",
+				retryAfter)
 			addCorsHeaders(w.Header())
 			sendRateLimitResponse(w, r, retryAfter)
 		}
 
-		return allowed
+		return admission, allowed
+	}
+
+	// checkRateLimit is a helper that checks rate limits after determining
+	// the authentication status. This ensures we only use L402 token IDs
+	// for authenticated requests, preventing DoS via garbage tokens.
+	checkRateLimit := func(authenticated bool) bool {
+		admission, allowed := reserveRateLimit(authenticated)
+		if !allowed {
+			return false
+		}
+
+		admission.Commit()
+
+		return true
 	}
 
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
@@ -385,7 +399,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				)
 				return
 			}
-			_, err = target.freebieDB.TallyFreebie(r, remoteIP)
+			// Provisionally reserve rate-limit capacity before tallying the
+			// freebie so a rejected request does not consume both quotas. Keep
+			// the defensive cancellation in this short-lived function so the
+			// admission isn't retained across the backend response.
+			var allowed bool
+			allowed, err = func() (bool, error) {
+				admission, allowed := reserveRateLimit(false)
+				if !allowed {
+					return false, nil
+				}
+				defer admission.Cancel()
+
+				_, err := target.freebieDB.TallyFreebie(r, remoteIP)
+				if err != nil {
+					return false, err
+				}
+
+				admission.Commit()
+
+				return true, nil
+			}()
 			if err != nil {
 				prefixLog.Errorf("Error updating freebie db: "+
 					"%v", err)
@@ -395,11 +429,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				)
 				return
 			}
-
-			// Unauthenticated freebie user, rate limit by IP.
-			if !checkRateLimit(false) {
+			if !allowed {
 				return
 			}
+
 		} else {
 			// Authenticated user on freebie path. Inject receipt
 			// headers and apply rate limit by L402 token.
