@@ -92,6 +92,69 @@ func TestRateLimiterLRUEviction(t *testing.T) {
 	require.Equal(t, 5, rl.Size())
 }
 
+// TestRateLimiterUndersizedCacheFailsClosed makes sure an admission larger than
+// the explicit cache bound cannot refresh its burst by evicting its own rules.
+func TestRateLimiterUndersizedCacheFailsClosed(t *testing.T) {
+	first := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	second := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	first.compiledPathRegexp = regexp.MustCompile(first.PathRegexp)
+	second.compiledPathRegexp = regexp.MustCompile(second.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{first, second},
+		WithMaxCacheSize(1),
+	)
+	require.Equal(t, 1, rl.maxSize)
+	req := httptest.NewRequest("GET", "/same", nil)
+
+	allowed, retryAfter := rl.Allow(req, "test-key")
+	require.False(t, allowed)
+	require.Equal(t, time.Second, retryAfter)
+	require.Zero(t, rl.Size())
+
+	// The decision remains fail-closed rather than receiving a fresh burst on
+	// every subsequent request.
+	allowed, _ = rl.Allow(req, "test-key")
+	require.False(t, allowed)
+}
+
+// TestRateLimiterCacheSizeOptions makes sure the public option remains an
+// actual upper bound, including its zero-cache behavior.
+func TestRateLimiterCacheSizeOptions(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		cfg := &RateLimitConfig{
+			Requests: 1,
+			Per:      time.Hour,
+			Burst:    1,
+		}
+		rl := NewRateLimiter(
+			t.Name(), []*RateLimitConfig{cfg}, WithMaxCacheSize(size),
+		)
+		require.Zero(t, rl.maxSize)
+
+		req := httptest.NewRequest("GET", "/limited", nil)
+		allowed, _ := rl.Allow(req, "test-key")
+		require.False(t, allowed)
+		require.Zero(t, rl.Size())
+	}
+
+	configs := []*RateLimitConfig{{}, {}, {}}
+	rl := NewRateLimiter(
+		t.Name(), configs, WithMaxCacheSize(len(configs)-1),
+	)
+	require.Equal(t, len(configs)-1, rl.maxSize)
+}
+
 // TestRateLimiterPathMatching tests that different path patterns have
 // independent limits.
 func TestRateLimiterPathMatching(t *testing.T) {

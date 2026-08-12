@@ -219,9 +219,15 @@ type RateLimiter struct {
 // RateLimiterOption is a functional option for configuring a RateLimiter.
 type RateLimiterOption func(*RateLimiter)
 
-// WithMaxCacheSize sets the maximum cache size.
+// WithMaxCacheSize sets the maximum number of cached client-rule entries. A
+// non-positive value disables caching; matching requests then fail closed
+// because their rate-limit state cannot be retained safely.
 func WithMaxCacheSize(size int) RateLimiterOption {
 	return func(rl *RateLimiter) {
+		if size < 0 {
+			size = 0
+		}
+
 		rl.maxSize = size
 	}
 }
@@ -285,6 +291,20 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 	}
 	if len(matches) == 0 {
 		return nil, true, 0
+	}
+
+	// Every matching rule needs durable state until a later request. If one
+	// admission is larger than the explicit cache bound, admitting it would
+	// evict buckets created earlier in the same request and refresh their burst
+	// on every call. Preserve the configured maximum and fail closed instead.
+	if len(matches) > rl.maxSize {
+		for _, match := range matches {
+			rateLimitDenied.WithLabelValues(
+				rl.serviceName, match.cfg.PathRegexp,
+			).Inc()
+		}
+
+		return nil, false, time.Second
 	}
 
 	clientLock := rl.clientLocks.lock(key)
