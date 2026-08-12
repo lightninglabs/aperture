@@ -297,8 +297,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// If the price returned is zero, then break out of the
-			// switch statement and allow access to the service.
+			// switch statement and allow access to the service. The
+			// request is unauthenticated, so rate limit it by IP first.
 			if price == 0 {
+				if !checkRateLimit(false) {
+					return
+				}
+
 				break
 			}
 
@@ -363,10 +368,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-				// If the price returned is zero, then break
-				// out of the switch statement and allow access
-				// to the service.
+				// If the price returned is zero, then break out of
+				// the switch statement and allow access to the
+				// service. The request is unauthenticated, so rate
+				// limit it by IP first.
 				if price == 0 {
+					if !checkRateLimit(false) {
+						return
+					}
+
 					break
 				}
 
