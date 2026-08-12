@@ -34,6 +34,117 @@ type limiterEntry struct {
 	limiter *rate.Limiter
 }
 
+// clientLock serializes admissions for one exact client key. refs includes the
+// current holder and all waiters so the lock can be removed safely when the
+// last user releases it.
+type clientLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// clientLockSet provides lifecycle-bounded per-client locks. The number of
+// entries is bounded by concurrent admissions rather than historical client
+// cardinality, and unrelated clients never block each other because of a hash
+// collision.
+type clientLockSet struct {
+	mu    sync.Mutex
+	locks map[string]*clientLock
+}
+
+// lock acquires and returns the lock for key. Callers must pass the returned
+// pointer to unlock exactly once.
+func (s *clientLockSet) lock(key string) *clientLock {
+	s.mu.Lock()
+	if s.locks == nil {
+		s.locks = make(map[string]*clientLock)
+	}
+
+	lock, ok := s.locks[key]
+	if !ok {
+		lock = &clientLock{}
+		s.locks[key] = lock
+	}
+	lock.refs++
+	s.mu.Unlock()
+
+	lock.mu.Lock()
+
+	return lock
+}
+
+// unlock releases a keyed lock after its final waiter leaves.
+func (s *clientLockSet) unlock(key string, lock *clientLock) {
+	// Unlock the client before dropping its reference. A new waiter that
+	// arrives in between increments refs on this same lock, preventing it
+	// from being removed while still in use.
+	lock.mu.Unlock()
+
+	s.mu.Lock()
+	lock.refs--
+	if lock.refs == 0 {
+		delete(s.locks, key)
+	}
+	s.mu.Unlock()
+}
+
+// ruleReservation records one rule's token reservation.
+type ruleReservation struct {
+	ruleIndex   int
+	cfg         *RateLimitConfig
+	reservation *rate.Reservation
+}
+
+// matchingRule identifies one configured rule that applies to a request.
+type matchingRule struct {
+	ruleIndex int
+	cfg       *RateLimitConfig
+}
+
+// rateLimitAdmission is a successful, provisional multi-rule admission. The
+// exact client's lock remains held until Commit or Cancel, making a later
+// cancellation exact without blocking unrelated clients.
+type rateLimitAdmission struct {
+	now          time.Time
+	reservations []ruleReservation
+	clientLocks  *clientLockSet
+	clientKey    string
+	clientLock   *clientLock
+	serviceName  string
+	once         sync.Once
+}
+
+// Commit consumes the reserved tokens and records the allowed rule metrics.
+func (a *rateLimitAdmission) Commit() {
+	if a == nil {
+		return
+	}
+
+	a.once.Do(func() {
+		defer a.clientLocks.unlock(a.clientKey, a.clientLock)
+
+		for _, rr := range a.reservations {
+			rateLimitAllowed.WithLabelValues(
+				a.serviceName, rr.cfg.PathRegexp,
+			).Inc()
+		}
+	})
+}
+
+// Cancel refunds every rule reservation and releases the client lock.
+func (a *rateLimitAdmission) Cancel() {
+	if a == nil {
+		return
+	}
+
+	a.once.Do(func() {
+		defer a.clientLocks.unlock(a.clientKey, a.clientLock)
+
+		for _, rr := range a.reservations {
+			rr.reservation.CancelAt(a.now)
+		}
+	})
+}
+
 // Size implements cache.Value. Returns 1 so the LRU cache counts entries
 // rather than bytes.
 func (e *limiterEntry) Size() (uint64, error) {
@@ -44,6 +155,11 @@ func (e *limiterEntry) Size() (uint64, error) {
 type RateLimiter struct {
 	// cacheMu protects the LRU cache which is not concurrency-safe.
 	cacheMu sync.Mutex
+
+	// clientLocks serialize admission across all rules for an exact client.
+	// This makes multi-rule decisions atomic without allowing a slow
+	// provisional admission to block a hash-colliding client.
+	clientLocks clientLockSet
 
 	// configs is the list of rate limit configurations for this limiter.
 	configs []*RateLimitConfig
@@ -93,44 +209,75 @@ func NewRateLimiter(serviceName string, configs []*RateLimitConfig,
 // duration to wait if denied.
 func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 	time.Duration) {
+	admission, allowed, retryAfter := rl.reserve(r, key)
+	if !allowed {
+		return false, retryAfter
+	}
+
+	admission.Commit()
+
+	return true, 0
+}
+
+// reserve provisionally reserves one token from every matching rule. A
+// successful admission must be finalized with Commit or Cancel. This internal
+// two-phase form lets callers refund capacity when a later prerequisite fails.
+func (rl *RateLimiter) reserve(r *http.Request, key string) (
+	*rateLimitAdmission, bool, time.Duration) {
 
 	path := r.URL.Path
 
-	// Collect all matching configs and their reservations. We need to check
-	// all rules before consuming any tokens, so that if any rule denies we
-	// can cancel all reservations.
-	type ruleReservation struct {
-		cfg         *RateLimitConfig
-		reservation *rate.Reservation
-	}
-	reservations := make([]ruleReservation, 0, len(rl.configs))
-
+	// Find matching rules before acquiring the exact-client lock. Requests
+	// that do not match any rule are unrestricted and should not contend on
+	// the global lock map or allocate a per-client lock.
+	var matches []matchingRule
 	for ruleIndex, cfg := range rl.configs {
 		if !cfg.Matches(path) {
 			continue
 		}
 
+		matches = append(matches, matchingRule{
+			ruleIndex: ruleIndex,
+			cfg:       cfg,
+		})
+	}
+	if len(matches) == 0 {
+		return nil, true, 0
+	}
+
+	clientLock := rl.clientLocks.lock(key)
+	lockTransferred := false
+	defer func() {
+		if !lockTransferred {
+			rl.clientLocks.unlock(key, clientLock)
+		}
+	}()
+
+	now := time.Now()
+
+	// Collect all matching configs and their reservations. We need to check
+	// all rules before consuming any tokens, so that if any rule denies we
+	// can cancel all reservations.
+	reservations := make([]ruleReservation, 0, len(matches))
+
+	for _, match := range matches {
 		// Create a composite key for independent limiting per rule. The
 		// rule index is intentionally part of the identity because
 		// multiple limits with different time horizons can legitimately
 		// use the same path pattern.
 		cacheKey := limiterKey{
 			clientKey: key,
-			ruleIndex: ruleIndex,
+			ruleIndex: match.ruleIndex,
 		}
 
-		limiter := rl.getOrCreateLimiter(cacheKey, cfg)
-		reservation := limiter.Reserve()
+		limiter := rl.getOrCreateLimiter(cacheKey, match.cfg)
+		reservation := limiter.ReserveN(now, 1)
 
 		reservations = append(reservations, ruleReservation{
-			cfg:         cfg,
+			ruleIndex:   match.ruleIndex,
+			cfg:         match.cfg,
 			reservation: reservation,
 		})
-	}
-
-	// If no rules matched, allow the request.
-	if len(reservations) == 0 {
-		return true, 0
 	}
 
 	// Check if all reservations can proceed immediately. If any rule
@@ -141,14 +288,15 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 
 	for _, rr := range reservations {
 		if !rr.reservation.OK() {
-			// Rate is zero or infinity.
+			// The request exceeds the limiter's burst. Service validation
+			// prevents this for configured rules, but keep the direct
+			// RateLimiter API fail closed.
 			allAllowed = false
 			maxWait = time.Second
-
-			break
+			continue
 		}
 
-		delay := rr.reservation.Delay()
+		delay := rr.reservation.DelayFrom(now)
 		if delay > 0 {
 			allAllowed = false
 			if delay > maxWait {
@@ -160,23 +308,25 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 	// If any rule denied, cancel all reservations and return denied.
 	if !allAllowed {
 		for _, rr := range reservations {
-			rr.reservation.Cancel()
+			rr.reservation.CancelAt(now)
 			rateLimitDenied.WithLabelValues(
 				rl.serviceName, rr.cfg.PathRegexp,
 			).Inc()
 		}
 
-		return false, maxWait
+		return nil, false, maxWait
 	}
 
-	// All rules allowed - tokens are consumed, record metrics.
-	for _, rr := range reservations {
-		rateLimitAllowed.WithLabelValues(
-			rl.serviceName, rr.cfg.PathRegexp,
-		).Inc()
-	}
+	lockTransferred = true
 
-	return true, 0
+	return &rateLimitAdmission{
+		now:          now,
+		reservations: reservations,
+		clientLocks:  &rl.clientLocks,
+		clientKey:    key,
+		clientLock:   clientLock,
+		serviceName:  rl.serviceName,
+	}, true, 0
 }
 
 // getOrCreateLimiter retrieves an existing limiter or creates a new one.

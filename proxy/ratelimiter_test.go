@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,9 +56,15 @@ func TestRateLimiterNoMatchingRules(t *testing.T) {
 	// Request to non-matching path should always be allowed.
 	for i := 0; i < 100; i++ {
 		req := httptest.NewRequest("GET", "/other/path", nil)
-		allowed, _ := rl.Allow(req, "test-key")
+		allowed, _ := rl.Allow(req, fmt.Sprintf("test-key-%d", i))
 		require.True(t, allowed, "non-matching request should be allowed")
 	}
+
+	// Non-matching traffic must not allocate cache entries or keyed locks.
+	require.Zero(t, rl.Size())
+	rl.clientLocks.mu.Lock()
+	require.Nil(t, rl.clientLocks.locks)
+	rl.clientLocks.mu.Unlock()
 }
 
 // TestRateLimiterLRUEviction tests that the LRU cache evicts old entries.
@@ -166,6 +175,273 @@ func TestRateLimiterMultipleRulesAllMustPass(t *testing.T) {
 	req := httptest.NewRequest("GET", "/expensive", nil)
 	allowed, _ := rl.Allow(req, "test-key")
 	require.False(t, allowed, "should be denied by /expensive rule")
+}
+
+// TestRateLimiterDeniedRuleDoesNotConsumeAllowedRule makes sure a request
+// denied by one rule does not consume capacity from another matching rule.
+func TestRateLimiterDeniedRuleDoesNotConsumeAllowedRule(t *testing.T) {
+	global := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    2,
+	}
+	specific := &RateLimitConfig{
+		PathRegexp: "^/expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	specific.compiledPathRegexp = regexp.MustCompile(specific.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{global, specific},
+	)
+	expensive := httptest.NewRequest("GET", "/expensive", nil)
+	other := httptest.NewRequest("GET", "/other", nil)
+
+	allowed, _ := rl.Allow(expensive, "test-key")
+	require.True(t, allowed)
+
+	allowed, _ = rl.Allow(expensive, "test-key")
+	require.False(t, allowed)
+
+	// The rejected expensive request must not spend the second global
+	// token, so an unrelated path still has capacity.
+	allowed, _ = rl.Allow(other, "test-key")
+	require.True(t, allowed)
+}
+
+// TestRateLimiterConcurrentMultipleRulesAtomic makes sure concurrent requests
+// for one client cannot partially consume a set of matching rules.
+func TestRateLimiterConcurrentMultipleRulesAtomic(t *testing.T) {
+	global := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    20,
+	}
+	specific := &RateLimitConfig{
+		PathRegexp: "^/concurrent-expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	specific.compiledPathRegexp = regexp.MustCompile(specific.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{global, specific},
+	)
+	var allowedCount atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(
+				"GET", "/concurrent-expensive", nil,
+			)
+			allowed, _ := rl.Allow(req, "test-key")
+			if allowed {
+				allowedCount.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(1), allowedCount.Load())
+
+	// Only the one successful request should have consumed global
+	// capacity, leaving 19 tokens for paths that do not match the strict
+	// rule.
+	other := httptest.NewRequest("GET", "/other", nil)
+	for range 19 {
+		allowed, _ := rl.Allow(other, "test-key")
+		require.True(t, allowed)
+	}
+	allowed, _ := rl.Allow(other, "test-key")
+	require.False(t, allowed)
+}
+
+// TestRateLimiterProvisionalAdmissionsAreIsolatedByClient makes sure an
+// admission held open for one client does not block an unrelated client. The
+// keys deliberately collide under the former 256-shard FNV lock scheme.
+func TestRateLimiterProvisionalAdmissionsAreIsolatedByClient(t *testing.T) {
+	cfg := &RateLimitConfig{
+		Requests: 10,
+		Per:      time.Hour,
+		Burst:    10,
+	}
+	rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+	req := httptest.NewRequest("GET", "/limited", nil)
+
+	firstKey := "client-a"
+	firstShard := legacyClientLockShard(firstKey)
+	var collidingKey string
+	for i := 0; ; i++ {
+		candidate := fmt.Sprintf("client-%d", i)
+		if candidate != firstKey &&
+			legacyClientLockShard(candidate) == firstShard {
+
+			collidingKey = candidate
+			break
+		}
+	}
+
+	admission, allowed, _ := rl.reserve(req, firstKey)
+	require.True(t, allowed)
+	defer admission.Cancel()
+
+	result := make(chan bool, 1)
+	go func() {
+		allowed, _ := rl.Allow(req, collidingKey)
+		result <- allowed
+	}()
+
+	select {
+	case allowed := <-result:
+		require.True(t, allowed)
+
+	case <-time.After(time.Second):
+		t.Fatal("hash-colliding client blocked by provisional admission")
+	}
+
+	admission.Cancel()
+	rl.clientLocks.mu.Lock()
+	remainingLocks := len(rl.clientLocks.locks)
+	rl.clientLocks.mu.Unlock()
+	require.Zero(t, remainingLocks)
+}
+
+// TestRateLimiterProvisionalAdmissionsSerializeSameClient verifies that a
+// provisional admission remains the exact ordering boundary for later
+// requests using the same client key.
+func TestRateLimiterProvisionalAdmissionsSerializeSameClient(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "cancel"
+		if commit {
+			name = "commit"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			cfg := &RateLimitConfig{
+				Requests: 1,
+				Per:      time.Hour,
+				Burst:    1,
+			}
+			rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+			req := httptest.NewRequest("GET", "/limited", nil)
+
+			first, allowed, _ := rl.reserve(req, "same-client")
+			require.True(t, allowed)
+			defer first.Cancel()
+
+			result := make(chan bool, 1)
+			go func() {
+				allowed, _ := rl.Allow(req, "same-client")
+				result <- allowed
+			}()
+
+			// Wait until the second admission has registered as a waiter,
+			// then prove it cannot pass the first admission out of order.
+			require.Eventually(t, func() bool {
+				rl.clientLocks.mu.Lock()
+				defer rl.clientLocks.mu.Unlock()
+
+				lock := rl.clientLocks.locks["same-client"]
+				return lock != nil && lock.refs == 2
+			}, time.Second, time.Millisecond)
+			select {
+			case <-result:
+				t.Fatal("same-client admission completed out of order")
+			default:
+			}
+
+			if commit {
+				first.Commit()
+			} else {
+				first.Cancel()
+			}
+
+			select {
+			case secondAllowed := <-result:
+				require.Equal(t, !commit, secondAllowed)
+			case <-time.After(time.Second):
+				t.Fatal("same-client admission did not resume")
+			}
+			rl.clientLocks.mu.Lock()
+			require.Empty(t, rl.clientLocks.locks)
+			rl.clientLocks.mu.Unlock()
+		})
+	}
+}
+
+// TestRateLimiterAdmissionConcurrentFinalization races Commit and Cancel to
+// verify that exactly one terminal action takes effect and the client lock is
+// released once.
+func TestRateLimiterAdmissionConcurrentFinalization(t *testing.T) {
+	cfg := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    1,
+	}
+	rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+	req := httptest.NewRequest("GET", "/limited", nil)
+	labels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": "",
+	}
+	allowedBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_allowed_total", labels,
+	)
+
+	admission, allowed, _ := rl.reserve(req, "same-client")
+	require.True(t, allowed)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(commit bool) {
+			defer wg.Done()
+			<-start
+
+			if commit {
+				admission.Commit()
+				return
+			}
+
+			admission.Cancel()
+		}(i%2 == 0)
+	}
+	close(start)
+	wg.Wait()
+
+	allowedAfter := prometheusCounterValue(
+		t, "aperture_ratelimit_allowed_total", labels,
+	)
+	commitWon := allowedAfter == allowedBefore+1
+	require.True(t, commitWon || allowedAfter == allowedBefore)
+
+	nextAllowed, _ := rl.Allow(req, "same-client")
+	require.Equal(t, !commitWon, nextAllowed)
+	rl.clientLocks.mu.Lock()
+	require.Empty(t, rl.clientLocks.locks)
+	rl.clientLocks.mu.Unlock()
+}
+
+// legacyClientLockShard computes the shard used by the former lock scheme.
+func legacyClientLockShard(key string) uint32 {
+	const (
+		offset32 = uint32(2166136261)
+		prime32  = uint32(16777619)
+	)
+
+	hash := offset32
+	for idx := 0; idx < len(key); idx++ {
+		hash ^= uint32(key[idx])
+		hash *= prime32
+	}
+
+	return hash % 256
 }
 
 // TestRateLimiterDuplicatePatternsIndependent makes sure rules with identical
@@ -463,4 +739,49 @@ func TestRateLimiterTokenRefill(t *testing.T) {
 	// Should have a token now.
 	allowed, _ = rl.Allow(req, "test-key")
 	require.True(t, allowed)
+}
+
+// prometheusCounterValue returns the value of a counter with an exact label
+// set, or zero if the labeled metric has not been collected yet.
+func prometheusCounterValue(t *testing.T, name string,
+	wantLabels map[string]string) float64 {
+
+	t.Helper()
+
+	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range metricFamilies {
+		if family.GetName() != name {
+			continue
+		}
+
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if !mapsEqual(labels, wantLabels) {
+				continue
+			}
+
+			return metric.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+func mapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+
+	return true
 }
