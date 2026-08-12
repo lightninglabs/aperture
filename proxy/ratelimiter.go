@@ -49,6 +49,7 @@ type clientLock struct {
 type clientLockSet struct {
 	mu    sync.Mutex
 	locks map[string]*clientLock
+	pool  sync.Pool
 }
 
 // lock acquires and returns the lock for key. Callers must pass the returned
@@ -61,7 +62,12 @@ func (s *clientLockSet) lock(key string) *clientLock {
 
 	lock, ok := s.locks[key]
 	if !ok {
-		lock = &clientLock{}
+		pooled := s.pool.Get()
+		if pooled == nil {
+			lock = &clientLock{}
+		} else {
+			lock = pooled.(*clientLock)
+		}
 		s.locks[key] = lock
 	}
 	lock.refs++
@@ -72,7 +78,7 @@ func (s *clientLockSet) lock(key string) *clientLock {
 	return lock
 }
 
-// unlock releases a keyed lock after its final waiter leaves.
+// unlock releases a keyed lock and recycles it after its final waiter leaves.
 func (s *clientLockSet) unlock(key string, lock *clientLock) {
 	// Unlock the client before dropping its reference. A new waiter that
 	// arrives in between increments refs on this same lock, preventing it
@@ -81,10 +87,15 @@ func (s *clientLockSet) unlock(key string, lock *clientLock) {
 
 	s.mu.Lock()
 	lock.refs--
-	if lock.refs == 0 {
+	recycle := lock.refs == 0
+	if recycle {
 		delete(s.locks, key)
 	}
 	s.mu.Unlock()
+
+	if recycle {
+		s.pool.Put(lock)
+	}
 }
 
 // ruleReservation records one rule's token reservation.
@@ -120,11 +131,30 @@ func (a *rateLimitAdmission) Commit() {
 	}
 
 	a.once.Do(func() {
-		defer a.clientLocks.unlock(a.clientKey, a.clientLock)
+		// Drop all admission-owned references before recording metrics. A
+		// caller may defensively retain the admission until a long-lived
+		// backend response completes, but finalized reservations and evicted
+		// limiter entries should become collectible immediately.
+		reservations := a.reservations
+		clientLocks := a.clientLocks
+		clientKey := a.clientKey
+		clientLock := a.clientLock
+		serviceName := a.serviceName
+		a.reservations = nil
+		a.clientLocks = nil
+		a.clientKey = ""
+		a.clientLock = nil
+		a.serviceName = ""
+		a.now = time.Time{}
 
-		for _, rr := range a.reservations {
+		// Committing a reservation requires no rate.Limiter mutation. Release
+		// the exact-client lock before the Prometheus work so metrics collection
+		// cannot delay the client's next request.
+		clientLocks.unlock(clientKey, clientLock)
+
+		for _, rr := range reservations {
 			rateLimitAllowed.WithLabelValues(
-				a.serviceName, rr.cfg.PathRegexp,
+				serviceName, rr.cfg.PathRegexp,
 			).Inc()
 		}
 	})
@@ -137,10 +167,22 @@ func (a *rateLimitAdmission) Cancel() {
 	}
 
 	a.once.Do(func() {
-		defer a.clientLocks.unlock(a.clientKey, a.clientLock)
+		reservations := a.reservations
+		clientLocks := a.clientLocks
+		clientKey := a.clientKey
+		clientLock := a.clientLock
+		now := a.now
+		a.reservations = nil
+		a.clientLocks = nil
+		a.clientKey = ""
+		a.clientLock = nil
+		a.serviceName = ""
+		a.now = time.Time{}
 
-		for _, rr := range a.reservations {
-			rr.reservation.CancelAt(a.now)
+		defer clientLocks.unlock(clientKey, clientLock)
+
+		for _, rr := range reservations {
+			rr.reservation.CancelAt(now)
 		}
 	})
 }

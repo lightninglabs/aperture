@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -374,6 +375,56 @@ func TestRateLimiterProvisionalAdmissionsSerializeSameClient(t *testing.T) {
 	}
 }
 
+// TestRateLimiterAdmissionDropsReferences makes sure finalization releases the
+// exact-client lock and stops retaining reservations even if a caller keeps the
+// admission object alive.
+func TestRateLimiterAdmissionDropsReferences(t *testing.T) {
+	for _, commit := range []bool{true, false} {
+		name := "cancel"
+		if commit {
+			name = "commit"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			cfg := &RateLimitConfig{
+				Requests: 1,
+				Per:      time.Hour,
+				Burst:    1,
+			}
+			rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+			req := httptest.NewRequest("GET", "/limited", nil)
+
+			admission, allowed, _ := rl.reserve(req, "test-key")
+			require.True(t, allowed)
+			require.NotEmpty(t, admission.reservations)
+			require.NotNil(t, admission.clientLocks)
+			require.NotNil(t, admission.clientLock)
+			require.Equal(t, "test-key", admission.clientKey)
+
+			if commit {
+				admission.Commit()
+			} else {
+				admission.Cancel()
+			}
+
+			require.Nil(t, admission.reservations)
+			require.Nil(t, admission.clientLocks)
+			require.Nil(t, admission.clientLock)
+			require.Empty(t, admission.clientKey)
+			require.Empty(t, admission.serviceName)
+			require.True(t, admission.now.IsZero())
+
+			// Finalization remains idempotent in either order.
+			admission.Commit()
+			admission.Cancel()
+
+			rl.clientLocks.mu.Lock()
+			require.Empty(t, rl.clientLocks.locks)
+			rl.clientLocks.mu.Unlock()
+		})
+	}
+}
+
 // TestRateLimiterAdmissionConcurrentFinalization races Commit and Cancel to
 // verify that exactly one terminal action takes effect and the client lock is
 // released once.
@@ -420,12 +471,55 @@ func TestRateLimiterAdmissionConcurrentFinalization(t *testing.T) {
 	)
 	commitWon := allowedAfter == allowedBefore+1
 	require.True(t, commitWon || allowedAfter == allowedBefore)
+	require.Nil(t, admission.reservations)
+	require.Nil(t, admission.clientLocks)
+	require.Nil(t, admission.clientLock)
 
 	nextAllowed, _ := rl.Allow(req, "same-client")
 	require.Equal(t, !commitWon, nextAllowed)
 	rl.clientLocks.mu.Lock()
 	require.Empty(t, rl.clientLocks.locks)
 	rl.clientLocks.mu.Unlock()
+}
+
+// TestClientLockSetHighChurn exercises pooled lock reuse while many keys and
+// waiters contend. At most one goroutine may hold a given key at a time, and no
+// historical key may remain after the final release.
+func TestClientLockSetHighChurn(t *testing.T) {
+	const (
+		keyCount = 8
+		workers  = 32
+		loops    = 500
+	)
+
+	var locks clientLockSet
+	active := make([]atomic.Int32, keyCount)
+	var violated atomic.Bool
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+
+			for iteration := 0; iteration < loops; iteration++ {
+				keyIndex := (worker + iteration) % keyCount
+				key := fmt.Sprintf("key-%d", keyIndex)
+				lock := locks.lock(key)
+				if active[keyIndex].Add(1) != 1 {
+					violated.Store(true)
+				}
+				runtime.Gosched()
+				active[keyIndex].Add(-1)
+				locks.unlock(key, lock)
+			}
+		}(worker)
+	}
+	wg.Wait()
+
+	require.False(t, violated.Load())
+	locks.mu.Lock()
+	require.Empty(t, locks.locks)
+	locks.mu.Unlock()
 }
 
 // legacyClientLockShard computes the shard used by the former lock scheme.
