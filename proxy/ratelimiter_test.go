@@ -875,6 +875,18 @@ func TestExtractRateLimitKeyUnauthenticatedIgnoresL402(t *testing.T) {
 	require.Equal(t, "ip:192.168.1.0", key)
 }
 
+// TestExtractRateLimitKeyAuthenticated makes sure a validated L402 request is
+// keyed by its token ID instead of the peer IP.
+func TestExtractRateLimitKeyAuthenticated(t *testing.T) {
+	mac, tokenID := newTestMacaroon(t)
+	req := httptest.NewRequest("GET", "/api/test", nil)
+	req.Header.Set("Authorization", authHeaderForMacaroon(t, mac))
+	ip := net.ParseIP("192.168.1.100")
+
+	key := ExtractRateLimitKey(req, ip, true)
+	require.Equal(t, "token:"+tokenID, key)
+}
+
 // TestRateLimitConfigRate tests the Rate() calculation.
 func TestRateLimitConfigRate(t *testing.T) {
 	tests := []struct {
