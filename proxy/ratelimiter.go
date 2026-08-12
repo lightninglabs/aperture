@@ -19,15 +19,14 @@ const (
 	DefaultMaxCacheSize = 10_000
 )
 
-// limiterKey is a composite key for the rate limiter cache. Using a struct
-// instead of a concatenated string saves memory because the pathPattern field
-// can reference the same underlying string across multiple keys.
+// limiterKey is a composite key for the rate limiter cache.
 type limiterKey struct {
 	// clientKey identifies the client (e.g., "ip:1.2.3.4" or "token:abc").
 	clientKey string
-	// pathPattern is the rate limit rule's PathRegexp (pointer to config's
-	// string, not a copy).
-	pathPattern string
+	// ruleIndex identifies a rule within the service configuration. The
+	// index, rather than PathRegexp, keeps rules with identical patterns
+	// independent.
+	ruleIndex int
 }
 
 // limiterEntry holds a rate.Limiter. Implements cache.Value interface.
@@ -106,18 +105,18 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 	}
 	reservations := make([]ruleReservation, 0, len(rl.configs))
 
-	for _, cfg := range rl.configs {
+	for ruleIndex, cfg := range rl.configs {
 		if !cfg.Matches(path) {
 			continue
 		}
 
-		// Create composite key: client key + path pattern for
-		// independent limiting per rule. Using a struct instead of
-		// string concatenation saves memory since pathPattern
-		// references the config's string.
+		// Create a composite key for independent limiting per rule. The
+		// rule index is intentionally part of the identity because
+		// multiple limits with different time horizons can legitimately
+		// use the same path pattern.
 		cacheKey := limiterKey{
-			clientKey:   key,
-			pathPattern: cfg.PathRegexp,
+			clientKey: key,
+			ruleIndex: ruleIndex,
 		}
 
 		limiter := rl.getOrCreateLimiter(cacheKey, cfg)

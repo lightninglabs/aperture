@@ -168,6 +168,36 @@ func TestRateLimiterMultipleRulesAllMustPass(t *testing.T) {
 	require.False(t, allowed, "should be denied by /expensive rule")
 }
 
+// TestRateLimiterDuplicatePatternsIndependent makes sure rules with identical
+// path patterns retain their own rates and bursts.
+func TestRateLimiterDuplicatePatternsIndependent(t *testing.T) {
+	lenient := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      10,
+	}
+	strict := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	lenient.compiledPathRegexp = regexp.MustCompile(lenient.PathRegexp)
+	strict.compiledPathRegexp = regexp.MustCompile(strict.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{lenient, strict},
+	)
+	req := httptest.NewRequest("GET", "/same", nil)
+
+	allowed, _ := rl.Allow(req, "test-key")
+	require.True(t, allowed)
+	allowed, _ = rl.Allow(req, "test-key")
+	require.False(t, allowed)
+	require.Equal(t, 2, rl.Size())
+}
+
 // TestRateLimiterPerKeyIsolation tests that different keys have independent
 // rate limits.
 func TestRateLimiterPerKeyIsolation(t *testing.T) {
