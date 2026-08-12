@@ -122,7 +122,10 @@ func newRateLimitTestProxy(t *testing.T, authLevel auth.Level, requests int,
 		require.NoError(t, p.Close())
 	})
 
-	return p, service, &backendCalls
+	// UpdateServices publishes an immutable prepared snapshot, so return the
+	// service owned by the proxy when a test needs to replace an internal
+	// dependency such as the pricer or freebie store.
+	return p, p.services[0], &backendCalls
 }
 
 // serveRateLimitRequest sends one request directly through the proxy.

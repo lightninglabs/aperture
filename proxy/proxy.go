@@ -146,7 +146,6 @@ func New(auth auth.Authenticator, services []*Service,
 		priorityLocalServices: priorityLocalServices,
 		localServices:         localServices,
 		authenticator:         auth,
-		services:              services,
 		blocklist:             blMap,
 	}
 	err := proxy.UpdateServices(services)
@@ -473,13 +472,22 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
 func (p *Proxy) UpdateServices(services []*Service) error {
-	err := prepareServices(services)
+	preparedServices, err := cloneServices(services)
 	if err != nil {
 		return err
 	}
 
-	certPool, err := certPool(services)
+	err = prepareServices(preparedServices)
 	if err != nil {
+		closePreparedServicePricers(preparedServices)
+
+		return err
+	}
+
+	certPool, err := certPool(preparedServices)
+	if err != nil {
+		closePreparedServicePricers(preparedServices)
+
 		return err
 	}
 	transport := &http.Transport{
@@ -493,7 +501,8 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 	p.servicesMtx.Lock()
 	defer p.servicesMtx.Unlock()
 
-	p.services = services
+	copyPreparedServiceConfig(services, preparedServices)
+	p.services = preparedServices
 
 	p.proxyBackend = &httputil.ReverseProxy{
 		Director:  p.director,
@@ -555,6 +564,21 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 	}
 
 	return nil
+}
+
+// closePreparedServicePricers releases pricers created for a service snapshot
+// that could not be published.
+func closePreparedServicePricers(services []*Service) {
+	for _, service := range services {
+		if service == nil || service.pricer == nil {
+			continue
+		}
+
+		if err := service.pricer.Close(); err != nil {
+			log.Errorf("Unable to close unpublished pricer for service "+
+				"%s: %v", service.Name, err)
+		}
+	}
 }
 
 // Close cleans up the Proxy by closing any remaining open connections.

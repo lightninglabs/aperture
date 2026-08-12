@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -162,6 +163,178 @@ type Service struct {
 	rateLimiter *RateLimiter
 }
 
+// cloneServices returns a deep copy of service configuration data. Runtime
+// state is deliberately not copied: each prepared snapshot owns its compiled
+// expressions, pricer, freebie store and rate limiter. This lets UpdateServices
+// prepare a new snapshot without mutating configuration that may still be in
+// use by an active request.
+func cloneServices(services []*Service) ([]*Service, error) {
+	clones := make([]*Service, len(services))
+	for i, service := range services {
+		if service == nil {
+			return nil, fmt.Errorf("service %d: configuration must not be nil",
+				i)
+		}
+
+		clone := *service
+		clone.Headers = cloneStringMap(service.Headers)
+		clone.Constraints = cloneStringMap(service.Constraints)
+		clone.AuthWhitelistPaths = append(
+			[]string(nil), service.AuthWhitelistPaths...,
+		)
+		clone.AuthSkipInvoiceCreationPaths = append(
+			[]string(nil), service.AuthSkipInvoiceCreationPaths...,
+		)
+
+		clone.RateLimits = make(
+			[]*RateLimitConfig, len(service.RateLimits),
+		)
+		for j, config := range service.RateLimits {
+			if config == nil {
+				continue
+			}
+
+			configClone := *config
+			configClone.compiledPathRegexp = nil
+			clone.RateLimits[j] = &configClone
+		}
+
+		clone.compiledHostRegexp = nil
+		clone.compiledPathRegexp = nil
+		clone.compiledAuthWhitelistPaths = nil
+		clone.compiledAuthSkipInvoiceCreationPaths = nil
+		clone.freebieDB = nil
+		clone.pricer = nil
+		clone.rateLimiter = nil
+
+		clones[i] = &clone
+	}
+
+	return clones, nil
+}
+
+// cloneStringMap copies a string map while preserving nil maps.
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+
+	return clone
+}
+
+// copyPreparedServiceConfig restores the caller-visible preparation effects
+// that UpdateServices historically applied in place. Runtime objects stay
+// private to the published snapshot, while successful updates still
+// materialize headers, normalize prices and make exported matching helpers work
+// on the caller's configuration. This function performs no fallible work and
+// must only be called after the prepared snapshot has passed all validation.
+func copyPreparedServiceConfig(configured, prepared []*Service) {
+	for i, preparedService := range prepared {
+		configuredService := configured[i]
+
+		copyStringMapInPlace(
+			&configuredService.Headers, preparedService.Headers,
+		)
+		if configuredService.Price != preparedService.Price {
+			configuredService.Price = preparedService.Price
+		}
+		if configuredService.Rewrite != preparedService.Rewrite {
+			configuredService.Rewrite = preparedService.Rewrite
+		}
+
+		copyCompiledRegexp(
+			&configuredService.compiledHostRegexp,
+			preparedService.compiledHostRegexp,
+		)
+		copyCompiledRegexp(
+			&configuredService.compiledPathRegexp,
+			preparedService.compiledPathRegexp,
+		)
+		copyCompiledRegexpSlice(
+			&configuredService.compiledAuthWhitelistPaths,
+			preparedService.compiledAuthWhitelistPaths,
+		)
+		copyCompiledRegexpSlice(
+			&configuredService.compiledAuthSkipInvoiceCreationPaths,
+			preparedService.compiledAuthSkipInvoiceCreationPaths,
+		)
+
+		for j, preparedRule := range preparedService.RateLimits {
+			copyCompiledRegexp(
+				&configuredService.RateLimits[j].compiledPathRegexp,
+				preparedRule.compiledPathRegexp,
+			)
+		}
+	}
+}
+
+// copyStringMapInPlace copies source into target while retaining the caller's
+// map identity. Successful service preparation historically materialized
+// header directives in that map.
+func copyStringMapInPlace(target *map[string]string, source map[string]string) {
+	if maps.Equal(*target, source) {
+		return
+	}
+	if *target == nil {
+		*target = cloneStringMap(source)
+		return
+	}
+
+	for key := range *target {
+		delete(*target, key)
+	}
+	for key, value := range source {
+		(*target)[key] = value
+	}
+}
+
+// copyCompiledRegexp avoids rewriting an unchanged caller-owned service during
+// unrelated updates. That keeps copy-back idempotent for configurations shared
+// with the admin service holder.
+func copyCompiledRegexp(target **regexp.Regexp, source *regexp.Regexp) {
+	if regexpsEqual(*target, source) {
+		return
+	}
+
+	*target = source
+}
+
+// copyCompiledRegexpSlice copies compiled patterns only when their expressions
+// changed.
+func copyCompiledRegexpSlice(target *[]*regexp.Regexp,
+	source []*regexp.Regexp) {
+
+	if len(*target) == len(source) {
+		equal := true
+		for i := range source {
+			if !regexpsEqual((*target)[i], source[i]) {
+				equal = false
+				break
+			}
+		}
+		if equal {
+			return
+		}
+	}
+
+	*target = append([]*regexp.Regexp(nil), source...)
+}
+
+// regexpsEqual reports whether two compiled expressions have equivalent source
+// patterns.
+func regexpsEqual(left, right *regexp.Regexp) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+
+	return left.String() == right.String()
+}
+
 // prepareRewrite validates and normalizes the rewrite configuration.
 func (s *Service) prepareRewrite() error {
 	if s.Rewrite.Prefix == "" {
@@ -296,17 +469,19 @@ func prepareServices(services []*Service) error {
 		}
 		service.compiledHostRegexp = compiledHostRegexp
 
-		// Compile the path regex.
+		// Compile the path regex. Assign once after successful compilation so
+		// a failed re-prepare leaves the prior compiled value intact.
+		var compiledPathRegexp *regexp.Regexp
 		if service.PathRegexp != "" {
-			compiledPathRegexp, err := regexp.Compile(
+			compiledPathRegexp, err = regexp.Compile(
 				service.PathRegexp,
 			)
 			if err != nil {
 				return fmt.Errorf("error compiling path "+
 					"regex: %w", err)
 			}
-			service.compiledPathRegexp = compiledPathRegexp
 		}
+		service.compiledPathRegexp = compiledPathRegexp
 
 		service.compiledAuthWhitelistPaths = make(
 			[]*regexp.Regexp, 0, len(service.AuthWhitelistPaths),
