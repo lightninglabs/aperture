@@ -41,9 +41,11 @@ func TestRateLimiterDoesNotConsumeFreebie(t *testing.T) {
 	// Replace the exhausted test bucket rather than depending on wall-clock
 	// refill timing. The next request should still have the second freebie
 	// available because the denied request was not tallied.
+	service.rateLimiter.removeCacheMetric()
 	service.rateLimiter = NewRateLimiter(
-		service.Name, service.RateLimits,
+		service.Name, service.RateLimits, withManagedCacheMetric(),
 	)
+	service.rateLimiter.activateCacheMetric(0)
 	serveRateLimitRequest(t, p, http.StatusOK)
 	serveRateLimitRequest(t, p, http.StatusPaymentRequired)
 	require.Equal(t, int32(2), backendCalls.Load())

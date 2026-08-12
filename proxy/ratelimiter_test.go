@@ -732,6 +732,82 @@ func TestRateLimiterDeniedMetrics(t *testing.T) {
 	)
 }
 
+// prometheusCounterValue returns the value of a counter with an exact label
+// set, or zero if the labeled metric has not been collected yet.
+func prometheusCounterValue(t *testing.T, name string,
+	wantLabels map[string]string) float64 {
+
+	t.Helper()
+
+	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range metricFamilies {
+		if family.GetName() != name {
+			continue
+		}
+
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if !mapsEqual(labels, wantLabels) {
+				continue
+			}
+
+			return metric.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+// prometheusGaugeValue returns the value of a gauge with an exact label set.
+func prometheusGaugeValue(t *testing.T, name string,
+	wantLabels map[string]string) (float64, bool) {
+
+	t.Helper()
+
+	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range metricFamilies {
+		if family.GetName() != name {
+			continue
+		}
+
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if !mapsEqual(labels, wantLabels) {
+				continue
+			}
+
+			return metric.GetGauge().GetValue(), true
+		}
+	}
+
+	return 0, false
+}
+
+// mapsEqual returns true if two string maps contain identical entries.
+func mapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+
+	return true
+}
+
 // TestRateLimiterPerKeyIsolation tests that different keys have independent
 // rate limits.
 func TestRateLimiterPerKeyIsolation(t *testing.T) {
@@ -997,49 +1073,4 @@ func TestRateLimiterTokenRefill(t *testing.T) {
 	// Should have a token now.
 	allowed, _ = rl.Allow(req, "test-key")
 	require.True(t, allowed)
-}
-
-// prometheusCounterValue returns the value of a counter with an exact label
-// set, or zero if the labeled metric has not been collected yet.
-func prometheusCounterValue(t *testing.T, name string,
-	wantLabels map[string]string) float64 {
-
-	t.Helper()
-
-	metricFamilies, err := prometheus.DefaultGatherer.Gather()
-	require.NoError(t, err)
-
-	for _, family := range metricFamilies {
-		if family.GetName() != name {
-			continue
-		}
-
-		for _, metric := range family.GetMetric() {
-			labels := make(map[string]string, len(metric.GetLabel()))
-			for _, label := range metric.GetLabel() {
-				labels[label.GetName()] = label.GetValue()
-			}
-			if !mapsEqual(labels, wantLabels) {
-				continue
-			}
-
-			return metric.GetCounter().GetValue()
-		}
-	}
-
-	return 0
-}
-
-func mapsEqual(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-
-	for key, value := range left {
-		if right[key] != value {
-			return false
-		}
-	}
-
-	return true
 }

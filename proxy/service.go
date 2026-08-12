@@ -570,6 +570,7 @@ func prepareServices(services []*Service) error {
 			// Create the rate limiter for this service.
 			service.rateLimiter = NewRateLimiter(
 				service.Name, service.RateLimits,
+				withManagedCacheMetric(),
 			)
 
 			log.Infof("Initialized rate limiter for service %s "+

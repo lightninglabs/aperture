@@ -129,6 +129,14 @@ func TestUpdateServicesCertFailureDoesNotCopyPreparedConfig(t *testing.T) {
 	})
 
 	active := p.services[0]
+	request := httptest.NewRequest("GET", "/limited", nil)
+	allowed, _ := active.rateLimiter.Allow(request, "active-key")
+	require.True(t, allowed)
+	labels := map[string]string{"service": activeService.Name}
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
 	rule := &RateLimitConfig{
 		PathRegexp: "^/candidate$",
 		Requests:   1,
@@ -150,6 +158,9 @@ func TestUpdateServicesCertFailureDoesNotCopyPreparedConfig(t *testing.T) {
 	require.Nil(t, rule.compiledPathRegexp)
 	require.Nil(t, candidate.rateLimiter)
 	require.Same(t, active, p.services[0])
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
 }
 
 // TestUpdateServicesRateLimitSnapshotConcurrent exercises the pointer-reuse
@@ -196,6 +207,198 @@ func TestUpdateServicesRateLimitSnapshotConcurrent(t *testing.T) {
 	require.Zero(t, oldLimiter.Size())
 }
 
+// TestUpdateServicesRateLimitMetricsTransactional makes sure a failed update
+// leaves both the active limiter and its cache gauge unchanged. Successful
+// replacement resets the new cache, and removing the limiter removes its
+// gauge.
+func TestUpdateServicesRateLimitMetricsTransactional(t *testing.T) {
+	rule := &RateLimitConfig{
+		PathRegexp: "^/limited$",
+		Requests:   2,
+		Per:        time.Hour,
+		Burst:      2,
+	}
+	service := newUpdateTestService(t.Name(), rule)
+
+	p, err := New(
+		auth.NewMockAuthenticator(), []*Service{service}, nil, nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Close())
+	})
+
+	labels := map[string]string{"service": service.Name}
+	active := p.services[0]
+	require.Equal(t, 0.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	request := httptest.NewRequest("GET", "/limited", nil)
+	allowed, _ := active.rateLimiter.Allow(request, "test-key")
+	require.True(t, allowed)
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	// Exercise a validation failure that occurs after the replacement rate
+	// limiter has been constructed. It must not reset the live cache gauge.
+	lateFailure := *service
+	lateFailure.DynamicPrice.Metered = true
+	require.Error(t, p.UpdateServices([]*Service{&lateFailure}))
+	require.Same(t, active, p.services[0])
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	badRule := *rule
+	badRule.PathRegexp = "["
+	badService := *service
+	badService.RateLimits = []*RateLimitConfig{&badRule}
+	require.Error(t, p.UpdateServices([]*Service{&badService}))
+	require.Same(t, active, p.services[0])
+	require.False(t, active.RateLimits[0].Matches("/other"))
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	require.NoError(t, p.UpdateServices([]*Service{service}))
+	require.Equal(t, 0.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	withoutLimits := *service
+	withoutLimits.RateLimits = nil
+	require.NoError(t, p.UpdateServices([]*Service{&withoutLimits}))
+	_, ok := prometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	)
+	require.False(t, ok)
+}
+
+// TestRateLimitCacheMetricsMultipleProxies makes sure replacing one Proxy's
+// limiter cannot delete or overwrite another active Proxy's contribution that
+// uses the same service label.
+func TestRateLimitCacheMetricsMultipleProxies(t *testing.T) {
+	serviceName := t.Name()
+	newService := func() *Service {
+		return newUpdateTestService(serviceName, &RateLimitConfig{
+			Requests: 2,
+			Per:      time.Hour,
+			Burst:    2,
+		})
+	}
+
+	firstService := newService()
+	first, err := New(
+		auth.NewMockAuthenticator(), []*Service{firstService}, nil, nil,
+	)
+	require.NoError(t, err)
+	firstClosed := false
+	t.Cleanup(func() {
+		if !firstClosed {
+			require.NoError(t, first.Close())
+		}
+	})
+
+	secondService := newService()
+	second, err := New(
+		auth.NewMockAuthenticator(), []*Service{secondService}, nil, nil,
+	)
+	require.NoError(t, err)
+	secondClosed := false
+	t.Cleanup(func() {
+		if !secondClosed {
+			require.NoError(t, second.Close())
+		}
+	})
+
+	request := httptest.NewRequest("GET", "/limited", nil)
+	allowed, _ := first.services[0].rateLimiter.Allow(request, "first-key")
+	require.True(t, allowed)
+	allowed, _ = second.services[0].rateLimiter.Allow(request, "second-key")
+	require.True(t, allowed)
+
+	labels := map[string]string{"service": serviceName}
+	require.Equal(t, 2.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	require.NoError(t, first.Close())
+	firstClosed = true
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	allowed, _ = second.services[0].rateLimiter.Allow(request, "third-key")
+	require.True(t, allowed)
+	require.Equal(t, 2.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	require.NoError(t, second.Close())
+	secondClosed = true
+	_, ok := prometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	)
+	require.False(t, ok)
+}
+
+// TestRateLimitManagedMetricsDoNotDeleteLegacyGauge makes sure Proxy snapshot
+// lifecycle operations only affect active_cache_size. The original cache_size
+// gauge remains compatible with standalone RateLimiter users.
+func TestRateLimitManagedMetricsDoNotDeleteLegacyGauge(t *testing.T) {
+	serviceName := t.Name()
+	standalone := NewRateLimiter(serviceName, []*RateLimitConfig{{
+		Requests: 2,
+		Per:      time.Hour,
+		Burst:    2,
+	}})
+	request := httptest.NewRequest("GET", "/limited", nil)
+	allowed, _ := standalone.Allow(request, "standalone-key")
+	require.True(t, allowed)
+
+	service := newUpdateTestService(serviceName, &RateLimitConfig{
+		Requests: 2,
+		Per:      time.Hour,
+		Burst:    2,
+	})
+	p, err := New(
+		auth.NewMockAuthenticator(), []*Service{service}, nil, nil,
+	)
+	require.NoError(t, err)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			require.NoError(t, p.Close())
+		}
+	})
+
+	labels := map[string]string{"service": serviceName}
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_cache_size", labels,
+	))
+	require.Equal(t, 0.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	))
+
+	require.NoError(t, p.Close())
+	closed = true
+	_, ok := prometheusGaugeValue(
+		t, "aperture_ratelimit_active_cache_size", labels,
+	)
+	require.False(t, ok)
+	require.Equal(t, 1.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_cache_size", labels,
+	))
+
+	allowed, _ = standalone.Allow(request, "standalone-key-2")
+	require.True(t, allowed)
+	require.Equal(t, 2.0, mustPrometheusGaugeValue(
+		t, "aperture_ratelimit_cache_size", labels,
+	))
+}
+
 func newUpdateTestService(name string, rule *RateLimitConfig) *Service {
 	return &Service{
 		Name:       name,
@@ -204,4 +407,15 @@ func newUpdateTestService(name string, rule *RateLimitConfig) *Service {
 		Auth:       auth.Level("off"),
 		RateLimits: []*RateLimitConfig{rule},
 	}
+}
+
+func mustPrometheusGaugeValue(t *testing.T, name string,
+	labels map[string]string) float64 {
+
+	t.Helper()
+
+	value, ok := prometheusGaugeValue(t, name, labels)
+	require.True(t, ok)
+
+	return value
 }

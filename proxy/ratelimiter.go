@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lightninglabs/aperture/l402"
@@ -217,6 +218,12 @@ type RateLimiter struct {
 
 	// serviceName is used for metrics labels.
 	serviceName string
+
+	// managedCacheMetric indicates that the limiter belongs to a published
+	// service snapshot. Managed limiters contribute to a process-wide service
+	// aggregate and are explicitly removed when their snapshot is replaced.
+	managedCacheMetric bool
+	cacheMetricActive  atomic.Bool
 }
 
 // RateLimiterOption is a functional option for configuring a RateLimiter.
@@ -232,6 +239,15 @@ func WithMaxCacheSize(size int) RateLimiterOption {
 		}
 
 		rl.maxSize = size
+	}
+}
+
+// withManagedCacheMetric marks a limiter as owned by a Proxy service snapshot.
+// Direct users of NewRateLimiter retain the original last-value gauge behavior
+// because they have no lifecycle method through which to unregister it.
+func withManagedCacheMetric() RateLimiterOption {
+	return func(rl *RateLimiter) {
+		rl.managedCacheMetric = true
 	}
 }
 
@@ -275,7 +291,6 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 // two-phase form lets callers refund capacity when a later prerequisite fails.
 func (rl *RateLimiter) reserve(r *http.Request, key string) (
 	*rateLimitAdmission, bool, time.Duration) {
-
 	path := r.URL.Path
 
 	// Find matching rules before acquiring the exact-client lock. Requests
@@ -330,8 +345,8 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 	reservations := make([]ruleReservation, 0, len(matches))
 
 	for _, match := range matches {
-		// Create a composite key for independent limiting per rule. The
-		// rule index is intentionally part of the identity because
+		// Create a composite key for independent limiting per rule.
+		// The rule index is intentionally part of the identity because
 		// multiple limits with different time horizons can legitimately
 		// use the same path pattern.
 		cacheKey := limiterKey{
@@ -358,9 +373,9 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 	for idx := range reservations {
 		rr := &reservations[idx]
 		if !rr.reservation.OK() {
-			// The request exceeds the limiter's burst. Service validation
-			// prevents this for configured rules, but keep the direct
-			// RateLimiter API fail closed.
+			// The request exceeds the limiter's burst. Service
+			// validation prevents this for configured rules, but keep
+			// the direct RateLimiter API fail closed.
 			allAllowed = false
 			rr.denied = true
 			maxWait = time.Second
@@ -390,7 +405,6 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 				recordRateLimitRuleDenied(rl.serviceName, rr)
 			}
 		}
-
 		return nil, false, maxWait
 	}
 
@@ -453,11 +467,46 @@ func (rl *RateLimiter) getOrCreateLimiter(key limiterKey,
 		rateLimitEvictions.WithLabelValues(rl.serviceName).Inc()
 	}
 
-	rateLimitCacheSize.WithLabelValues(rl.serviceName).Set(
-		float64(rl.cache.Len()),
-	)
+	rl.publishCacheSize(rl.cache.Len())
 
 	return limiter
+}
+
+// publishCacheSize records the limiter's current cache size according to its
+// ownership model.
+func (rl *RateLimiter) publishCacheSize(size int) {
+	// Preserve the original cache_size metric's last-writer behavior for API
+	// compatibility. The active_cache_size metric below provides the managed,
+	// aggregate view without allowing Proxy lifecycle operations to overwrite
+	// or delete a standalone limiter's legacy series.
+	rateLimitCacheSize.WithLabelValues(rl.serviceName).Set(float64(size))
+
+	if rl.managedCacheMetric && rl.cacheMetricActive.Load() {
+		managedRateLimitCacheMetrics.set(rl, size)
+	}
+}
+
+// activateCacheMetric starts accounting for a managed limiter after its
+// service snapshot is published.
+func (rl *RateLimiter) activateCacheMetric(size int) {
+	if !rl.managedCacheMetric {
+		return
+	}
+
+	rl.cacheMetricActive.Store(true)
+	managedRateLimitCacheMetrics.set(rl, size)
+}
+
+// removeCacheMetric removes a managed limiter from the active service
+// aggregate. It is a no-op for standalone limiters, preserving their legacy
+// metric behavior.
+func (rl *RateLimiter) removeCacheMetric() {
+	if !rl.managedCacheMetric {
+		return
+	}
+
+	rl.cacheMetricActive.Store(false)
+	managedRateLimitCacheMetrics.remove(rl)
 }
 
 // Size returns the current number of entries in the cache.

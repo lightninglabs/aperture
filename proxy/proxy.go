@@ -501,6 +501,7 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 	p.servicesMtx.Lock()
 	defer p.servicesMtx.Unlock()
 
+	oldServices := p.services
 	copyPreparedServiceConfig(services, preparedServices)
 	p.services = preparedServices
 
@@ -563,6 +564,8 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 		FlushInterval: -1,
 	}
 
+	resetRateLimitCacheMetrics(oldServices, preparedServices)
+
 	return nil
 }
 
@@ -581,6 +584,14 @@ func closePreparedServicePricers(services []*Service) {
 	}
 }
 
+// resetRateLimitCacheMetrics replaces the active limiters' contributions to the
+// process-wide cache gauge while the service write lock is held. At this point
+// all requests using the old snapshot have drained, so an old limiter cannot
+// publish another size after being removed.
+func resetRateLimitCacheMetrics(oldServices, newServices []*Service) {
+	managedRateLimitCacheMetrics.replace(oldServices, newServices)
+}
+
 // Close cleans up the Proxy by closing any remaining open connections.
 func (p *Proxy) Close() error {
 	p.servicesMtx.RLock()
@@ -588,6 +599,10 @@ func (p *Proxy) Close() error {
 
 	var returnErr error
 	for _, s := range p.services {
+		if s.rateLimiter != nil {
+			s.rateLimiter.removeCacheMetric()
+		}
+
 		if err := s.pricer.Close(); err != nil {
 			log.Errorf("error while closing the pricer of "+
 				"service %s: %v", s.Name, err)
