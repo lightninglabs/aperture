@@ -46,6 +46,73 @@ func TestPrepareServicesRateLimitValidation(t *testing.T) {
 	}
 }
 
+// TestPrepareServicesClearsRateLimiter makes sure removing all rules during a
+// service update disables a previously initialized limiter.
+func TestPrepareServicesClearsRateLimiter(t *testing.T) {
+	service := &Service{
+		Name:       "test",
+		HostRegexp: ".*",
+		RateLimits: []*RateLimitConfig{{
+			Requests: 1,
+			Per:      time.Second,
+		}},
+	}
+
+	require.NoError(t, prepareServices([]*Service{service}))
+	require.NotNil(t, service.rateLimiter)
+
+	service.RateLimits = nil
+	require.NoError(t, prepareServices([]*Service{service}))
+	require.Nil(t, service.rateLimiter)
+}
+
+// TestPrepareServicesClearsCompiledRateLimitPattern makes sure reusing a rule
+// with an empty path expression restores its match-all behavior.
+func TestPrepareServicesClearsCompiledRateLimitPattern(t *testing.T) {
+	rule := &RateLimitConfig{
+		PathRegexp: "^/one$",
+		Requests:   1,
+		Per:        time.Second,
+	}
+	service := &Service{
+		Name:       "test",
+		HostRegexp: ".*",
+		RateLimits: []*RateLimitConfig{rule},
+	}
+
+	require.NoError(t, prepareServices([]*Service{service}))
+	require.False(t, rule.Matches("/two"))
+
+	rule.PathRegexp = ""
+	require.NoError(t, prepareServices([]*Service{service}))
+	require.True(t, rule.Matches("/two"))
+}
+
+// TestPrepareServicesFailedRateLimitCompilePreservesPattern makes sure a
+// failed re-prepare does not temporarily or permanently turn a path-specific
+// rule into a match-all rule.
+func TestPrepareServicesFailedRateLimitCompilePreservesPattern(t *testing.T) {
+	rule := &RateLimitConfig{
+		PathRegexp: "^/one$",
+		Requests:   1,
+		Per:        time.Second,
+	}
+	service := &Service{
+		Name:       "test",
+		HostRegexp: ".*",
+		RateLimits: []*RateLimitConfig{rule},
+	}
+
+	require.NoError(t, prepareServices([]*Service{service}))
+	require.True(t, rule.Matches("/one"))
+	require.False(t, rule.Matches("/two"))
+
+	rule.PathRegexp = "["
+	require.Error(t, prepareServices([]*Service{service}))
+	require.True(t, rule.Matches("/one"))
+	require.False(t, rule.Matches("/two"))
+}
+
 // TestExpandHeaderEnv makes sure ${NAME} environment references in service
 // header values are expanded at startup, and that a reference to an unset
 // variable fails rather than substituting an empty string.

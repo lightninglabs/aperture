@@ -373,9 +373,12 @@ func prepareServices(services []*Service) error {
 						"negative", service.Name, i)
 				}
 
-				// Compile path regex if provided.
+				// Compile the path regex, assigning only after successful
+				// compilation. An empty expression intentionally stores nil
+				// and matches all paths.
+				var compiled *regexp.Regexp
 				if rl.PathRegexp != "" {
-					compiled, err := regexp.Compile(
+					compiled, err = regexp.Compile(
 						rl.PathRegexp,
 					)
 					if err != nil {
@@ -385,8 +388,8 @@ func prepareServices(services []*Service) error {
 							"%w", service.Name, i,
 							err)
 					}
-					rl.compiledPathRegexp = compiled
 				}
+				rl.compiledPathRegexp = compiled
 			}
 
 			// Create the rate limiter for this service.
@@ -397,6 +400,10 @@ func prepareServices(services []*Service) error {
 			log.Infof("Initialized rate limiter for service %s "+
 				"with %d rules", service.Name,
 				len(service.RateLimits))
+		} else {
+			// A Service can be reused in UpdateServices. Explicitly clear
+			// a previously initialized limiter when its rules are removed.
+			service.rateLimiter = nil
 		}
 
 		// Validate the dynamic pricer configuration, which also catches
