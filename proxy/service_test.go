@@ -3,9 +3,48 @@ package proxy
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestPrepareServicesRateLimitValidation makes sure malformed rate limit
+// entries fail startup with actionable errors.
+func TestPrepareServicesRateLimitValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *RateLimitConfig
+		errMatch string
+	}{
+		{
+			name:     "nil config",
+			config:   nil,
+			errMatch: "configuration must not be nil",
+		},
+		{
+			name: "negative burst",
+			config: &RateLimitConfig{
+				Requests: 1,
+				Per:      time.Second,
+				Burst:    -1,
+			},
+			errMatch: "burst must not be negative",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &Service{
+				Name:       "test",
+				HostRegexp: ".*",
+				RateLimits: []*RateLimitConfig{test.config},
+			}
+
+			err := prepareServices([]*Service{service})
+			require.ErrorContains(t, err, test.errMatch)
+		})
+	}
+}
 
 // TestExpandHeaderEnv makes sure ${NAME} environment references in service
 // header values are expanded at startup, and that a reference to an unset

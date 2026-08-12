@@ -14,7 +14,7 @@ type RateLimitConfig struct {
 	// Requests is the number of requests allowed per time window (Per).
 	Requests int `long:"requests" description:"Number of requests allowed per time window"`
 
-	// Per is the time window duration (e.g., 1s, 1m, 1h). Defaults to 1s.
+	// Per is the required time window duration (e.g., 1s, 1m, 1h).
 	Per time.Duration `long:"per" description:"Time window for rate limiting (e.g., 1s, 1m, 1h)"`
 
 	// Burst is the maximum number of requests that can be made in a burst,

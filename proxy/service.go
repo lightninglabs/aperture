@@ -350,6 +350,12 @@ func prepareServices(services []*Service) error {
 		// Validate and compile rate limit configurations.
 		if len(service.RateLimits) > 0 {
 			for i, rl := range service.RateLimits {
+				if rl == nil {
+					return fmt.Errorf("service %s rate "+
+						"limit %d: configuration must not "+
+						"be nil", service.Name, i)
+				}
+
 				// Validate required fields.
 				if rl.Requests <= 0 {
 					return fmt.Errorf("service %s rate "+
@@ -360,6 +366,11 @@ func prepareServices(services []*Service) error {
 					return fmt.Errorf("service %s rate "+
 						"limit %d: per duration must "+
 						"be positive", service.Name, i)
+				}
+				if rl.Burst < 0 {
+					return fmt.Errorf("service %s rate "+
+						"limit %d: burst must not be "+
+						"negative", service.Name, i)
 				}
 
 				// Compile path regex if provided.
