@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -103,6 +104,7 @@ type ruleReservation struct {
 	ruleIndex   int
 	cfg         *RateLimitConfig
 	reservation *rate.Reservation
+	denied      bool
 }
 
 // matchingRule identifies one configured rule that applies to a request.
@@ -156,6 +158,7 @@ func (a *rateLimitAdmission) Commit() {
 			rateLimitAllowed.WithLabelValues(
 				serviceName, rr.cfg.PathRegexp,
 			).Inc()
+			recordRateLimitRuleAllowed(serviceName, rr)
 		}
 	})
 }
@@ -302,6 +305,10 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 			rateLimitDenied.WithLabelValues(
 				rl.serviceName, match.cfg.PathRegexp,
 			).Inc()
+			recordRateLimitRuleDenied(rl.serviceName, ruleReservation{
+				ruleIndex: match.ruleIndex,
+				cfg:       match.cfg,
+			})
 		}
 
 		return nil, false, time.Second
@@ -348,12 +355,14 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 	var maxWait time.Duration
 	allAllowed := true
 
-	for _, rr := range reservations {
+	for idx := range reservations {
+		rr := &reservations[idx]
 		if !rr.reservation.OK() {
 			// The request exceeds the limiter's burst. Service validation
 			// prevents this for configured rules, but keep the direct
 			// RateLimiter API fail closed.
 			allAllowed = false
+			rr.denied = true
 			maxWait = time.Second
 			continue
 		}
@@ -361,6 +370,7 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 		delay := rr.reservation.DelayFrom(now)
 		if delay > 0 {
 			allAllowed = false
+			rr.denied = true
 			if delay > maxWait {
 				maxWait = delay
 			}
@@ -371,9 +381,14 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 	if !allAllowed {
 		for _, rr := range reservations {
 			rr.reservation.CancelAt(now)
+			// Preserve the original path-aggregated metric semantics:
+			// every matching rule is counted when the request is denied.
 			rateLimitDenied.WithLabelValues(
 				rl.serviceName, rr.cfg.PathRegexp,
 			).Inc()
+			if rr.denied {
+				recordRateLimitRuleDenied(rl.serviceName, rr)
+			}
 		}
 
 		return nil, false, maxWait
@@ -389,6 +404,26 @@ func (rl *RateLimiter) reserve(r *http.Request, key string) (
 		clientLock:   clientLock,
 		serviceName:  rl.serviceName,
 	}, true, 0
+}
+
+// recordRateLimitRuleAllowed records a rule-specific allowed evaluation while
+// retaining the original path-aggregated metric for compatibility.
+func recordRateLimitRuleAllowed(serviceName string, rr ruleReservation) {
+	rateLimitRuleAllowed.WithLabelValues(
+		serviceName, rr.cfg.PathRegexp, strconv.Itoa(rr.cfg.Requests),
+		rr.cfg.Per.String(),
+		strconv.Itoa(rr.cfg.EffectiveBurst()),
+	).Inc()
+}
+
+// recordRateLimitRuleDenied records a rule-specific denied evaluation while
+// retaining the original path-aggregated metric for compatibility.
+func recordRateLimitRuleDenied(serviceName string, rr ruleReservation) {
+	rateLimitRuleDenied.WithLabelValues(
+		serviceName, rr.cfg.PathRegexp, strconv.Itoa(rr.cfg.Requests),
+		rr.cfg.Per.String(),
+		strconv.Itoa(rr.cfg.EffectiveBurst()),
+	).Inc()
 }
 
 // getOrCreateLimiter retrieves an existing limiter or creates a new one.

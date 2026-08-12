@@ -623,12 +623,113 @@ func TestRateLimiterDuplicatePatternsIndependent(t *testing.T) {
 		t.Name(), []*RateLimitConfig{lenient, strict},
 	)
 	req := httptest.NewRequest("GET", "/same", nil)
+	strictLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": strict.PathRegexp,
+		"requests":     "1",
+		"per":          time.Hour.String(),
+		"burst":        "1",
+	}
+	strictDeniedBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_rule_denied_total", strictLabels,
+	)
 
 	allowed, _ := rl.Allow(req, "test-key")
 	require.True(t, allowed)
 	allowed, _ = rl.Allow(req, "test-key")
 	require.False(t, allowed)
 	require.Equal(t, 2, rl.Size())
+
+	require.Equal(
+		t, strictDeniedBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_rule_denied_total", strictLabels,
+		),
+	)
+}
+
+// TestRateLimiterDeniedMetrics makes sure the legacy path metric retains its
+// original all-matching-rules semantics, while the rule-specific metric only
+// attributes the denial to the rule that actually rejected the request.
+func TestRateLimiterDeniedMetrics(t *testing.T) {
+	global := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    2,
+	}
+	specific := &RateLimitConfig{
+		PathRegexp: "^/metric-expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	specific.compiledPathRegexp = regexp.MustCompile(specific.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{global, specific},
+	)
+	globalLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": "",
+	}
+	specificLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": specific.PathRegexp,
+	}
+	globalBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_denied_total", globalLabels,
+	)
+	specificBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_denied_total", specificLabels,
+	)
+	ruleGlobalLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": "",
+		"requests":     "1",
+		"per":          time.Hour.String(),
+		"burst":        "2",
+	}
+	ruleSpecificLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": specific.PathRegexp,
+		"requests":     "1",
+		"per":          time.Hour.String(),
+		"burst":        "1",
+	}
+	ruleGlobalBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_rule_denied_total", ruleGlobalLabels,
+	)
+	ruleSpecificBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_rule_denied_total", ruleSpecificLabels,
+	)
+	req := httptest.NewRequest("GET", "/metric-expensive", nil)
+
+	allowed, _ := rl.Allow(req, "test-key")
+	require.True(t, allowed)
+	allowed, _ = rl.Allow(req, "test-key")
+	require.False(t, allowed)
+
+	require.Equal(
+		t, globalBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_denied_total", globalLabels,
+		),
+	)
+	require.Equal(
+		t, specificBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_denied_total", specificLabels,
+		),
+	)
+	require.Equal(
+		t, ruleGlobalBefore, prometheusCounterValue(
+			t, "aperture_ratelimit_rule_denied_total",
+			ruleGlobalLabels,
+		),
+	)
+	require.Equal(
+		t, ruleSpecificBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_rule_denied_total",
+			ruleSpecificLabels,
+		),
+	)
 }
 
 // TestRateLimiterPerKeyIsolation tests that different keys have independent
