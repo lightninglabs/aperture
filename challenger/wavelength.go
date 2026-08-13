@@ -38,10 +38,9 @@ const (
 // the most effort.
 //
 // It satisfies InvoiceClient, so it drives the existing LndChallenger rather
-// than duplicating it. Only AddInvoice is reachable: the other two methods
-// exist to track invoice state, which LndChallenger only does under strict
-// verification, and this backend refuses that mode outright (see
-// NewWavelengthInvoiceClient).
+// than duplicating it. Only AddInvoice does any work: the other two methods
+// exist to track invoice state, which this backend cannot do, and it says so
+// through InvoiceTracker so the challenger knows not to ask.
 type WavelengthInvoiceClient struct {
 	// recvURL is the fully resolved endpoint invoices are requested from.
 	recvURL string
@@ -49,8 +48,10 @@ type WavelengthInvoiceClient struct {
 	client *http.Client
 }
 
-// A compile-time check that we satisfy the interface the challenger needs.
+// A compile-time check that we satisfy the interface the challenger needs, and
+// that we declare the one capability we lack.
 var _ InvoiceClient = (*WavelengthInvoiceClient)(nil)
+var _ InvoiceTracker = (*WavelengthInvoiceClient)(nil)
 
 // NewWavelengthInvoiceClient creates an invoice client against the wallet
 // daemon's HTTP/JSON gateway, given its base URL (for example
@@ -203,9 +204,19 @@ func (w *WavelengthInvoiceClient) AddInvoice(ctx context.Context,
 	}, nil
 }
 
-// ListInvoices is unreachable on this backend: the challenger only lists
-// invoices to seed its state cache under strict verification, which
-// NewWavelengthInvoiceClient refuses.
+// TracksInvoices reports that this backend cannot be asked about invoice
+// state. The wallet daemon's gateway exposes minting and nothing else, so
+// there is no way to enumerate the invoices we have handed out or to learn
+// when one of them settles.
+//
+// NOTE: This is part of the InvoiceTracker interface.
+func (w *WavelengthInvoiceClient) TracksInvoices() bool {
+	return false
+}
+
+// ListInvoices is not supported on this backend. The challenger asks for the
+// capability through InvoiceTracker before it calls this, so reaching it means
+// something bypassed that check, and an error is the right answer.
 func (w *WavelengthInvoiceClient) ListInvoices(_ context.Context,
 	_ *lnrpc.ListInvoiceRequest, _ ...grpc.CallOption) (
 	*lnrpc.ListInvoiceResponse, error) {
@@ -214,7 +225,7 @@ func (w *WavelengthInvoiceClient) ListInvoices(_ context.Context,
 		"wavelength authenticator")
 }
 
-// SubscribeInvoices is unreachable on this backend, for the same reason as
+// SubscribeInvoices is not supported on this backend, for the same reason as
 // ListInvoices.
 func (w *WavelengthInvoiceClient) SubscribeInvoices(_ context.Context,
 	_ *lnrpc.InvoiceSubscription, _ ...grpc.CallOption) (
