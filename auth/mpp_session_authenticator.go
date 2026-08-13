@@ -827,6 +827,15 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 		return nil
 	}
 
+	// Only produce receipts for session credentials, mirroring the guard
+	// in Accept. A charge credential would otherwise decode into an empty
+	// session payload and yield a receipt with no reference.
+	if cred.Challenge.Method != mpp.MethodLightning ||
+		cred.Challenge.Intent != mpp.IntentSession {
+
+		return nil
+	}
+
 	var payload mpp.SessionPayload
 	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
 		return nil

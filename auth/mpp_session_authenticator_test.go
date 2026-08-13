@@ -973,3 +973,88 @@ func TestSessionTopUpCannotOpenSecondSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(500), session.DepositSats)
 }
+
+// TestSessionOpenReceiptReference verifies that the receipt for an open
+// credential carries the deposit payment hash as its reference, which is the
+// session ID every later bearer and close will name.
+func TestSessionOpenReceiptReference(t *testing.T) {
+	auth, _, _, hmacSecret := newTestSessionAuth(t)
+	preimage, paymentHash := testPreimageAndHash(t)
+
+	challenge, sessionID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, 300,
+	)
+	h := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+
+	receiptHdr := auth.ReceiptHeader(&h, "test-service")
+	require.NotNil(t, receiptHdr)
+
+	receipt, err := mpp.ParseReceiptHeader(receiptHdr)
+	require.NoError(t, err)
+	require.Equal(t, sessionID, receipt.Reference)
+	require.Equal(t, challenge.ID, receipt.ChallengeID)
+}
+
+// TestSessionReceiptWrongIntent verifies that the session authenticator
+// declines to produce a receipt for a charge credential, leaving it for the
+// charge authenticator instead of emitting a receipt with no reference.
+func TestSessionReceiptWrongIntent(t *testing.T) {
+	auth, _, _, _ := newTestSessionAuth(t)
+	preimage, paymentHash := testPreimageAndHash(t)
+
+	challenge := testChargeChallenge(t, paymentHash, testExpiry())
+	h := buildTestCredential(t, challenge, preimage)
+
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+}
+
+// TestMultiAuthReceiptIntentDispatch reproduces the live bug where the multi
+// authenticator asked the charge authenticator for a receipt on a session
+// credential: the charge side parsed the session request as a charge request,
+// found no methodDetails, and emitted a receipt with an empty reference before
+// the session authenticator was ever consulted. With intent discrimination in
+// both providers, the open receipt must carry the deposit payment hash.
+func TestMultiAuthReceiptIntentDispatch(t *testing.T) {
+	chargeAuth, _ := newTestChargeAuth(
+		t, &mockChallenger{}, newMockInvoiceChecker(),
+	)
+	sessAuth, _, _, hmacSecret := newTestSessionAuth(t)
+	multi := NewMultiAuthenticator(chargeAuth, sessAuth)
+
+	preimage, paymentHash := testPreimageAndHash(t)
+	challenge, sessionID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, 300,
+	)
+	h := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+
+	receiptHdr := multi.ReceiptHeader(&h, "test-service")
+	require.NotNil(t, receiptHdr)
+
+	receipt, err := mpp.ParseReceiptHeader(receiptHdr)
+	require.NoError(t, err)
+	require.Equal(t, sessionID, receipt.Reference)
+
+	// The reverse direction must hold too: a charge credential through the
+	// same multi authenticator gets the charge receipt, whichever order
+	// the providers are consulted in.
+	sessFirst := NewMultiAuthenticator(sessAuth, chargeAuth)
+	chargeChallenge := testChargeChallenge(t, paymentHash, testExpiry())
+	chargeH := buildTestCredential(t, chargeChallenge, preimage)
+
+	chargeReceiptHdr := sessFirst.ReceiptHeader(&chargeH, "test-service")
+	require.NotNil(t, chargeReceiptHdr)
+
+	chargeReceipt, err := mpp.ParseReceiptHeader(chargeReceiptHdr)
+	require.NoError(t, err)
+	require.Equal(
+		t, hex.EncodeToString(paymentHash[:]), chargeReceipt.Reference,
+	)
+}

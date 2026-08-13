@@ -892,3 +892,25 @@ func TestMPPAuthenticatorNilReusablePolicyStaysStrict(t *testing.T) {
 	require.True(t, auth.Accept(&h, "metered-service"))
 	require.False(t, auth.Accept(&h, "metered-service"))
 }
+
+// TestMPPAuthenticatorReceiptWrongIntent verifies that the charge
+// authenticator declines to produce a receipt for a session credential rather
+// than misreading the session request as a charge request and emitting a
+// receipt with an empty reference.
+func TestMPPAuthenticatorReceiptWrongIntent(t *testing.T) {
+	auth, _ := newTestChargeAuth(
+		t, &mockChallenger{}, newMockInvoiceChecker(),
+	)
+	preimage, paymentHash := testPreimageAndHash(t)
+
+	challenge, _ := buildSessionChallenge(
+		t, testHMACSecret, paymentHash, 300,
+	)
+	h := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+}
