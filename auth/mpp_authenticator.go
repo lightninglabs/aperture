@@ -486,6 +486,17 @@ func (a *MPPAuthenticator) ReceiptHeader(header *http.Header,
 		return nil
 	}
 
+	// Only produce receipts for charge credentials. A session credential
+	// parses fine here too (its request JSON simply has no methodDetails),
+	// so without this guard we would emit a receipt with an empty
+	// reference and the multi authenticator would never reach the session
+	// provider that knows the real one.
+	if cred.Challenge.Method != mpp.MethodLightning ||
+		cred.Challenge.Intent != mpp.IntentCharge {
+
+		return nil
+	}
+
 	var chargeReq mpp.ChargeRequest
 	if err := mpp.DecodeRequest(
 		cred.Challenge.Request, &chargeReq,
