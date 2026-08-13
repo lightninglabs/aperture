@@ -60,6 +60,20 @@ type MPPAuthenticator struct {
 	// constructor refuses to build one.
 	chargeStore ChargeStore
 
+	// reusableChargePolicy reports whether a service treats charge
+	// credentials as re-presentable rather than single use. Nil means no
+	// service does, which is the spec's strict rule.
+	//
+	// The one deployment that wants re-presentation is a metered service.
+	// There, the payment buys a usage bundle rather than a single request,
+	// and the metering pipeline debits the bundle per request until it is
+	// exhausted, at which point the pricer refuses the request and a fresh
+	// 402 is minted. The bundle draw-down is the spend, so consuming the
+	// credential on first use would strand everything the buyer paid for
+	// beyond one request. This mirrors exactly how an L402 token behaves
+	// on the same service.
+	reusableChargePolicy func(serviceName string) bool
+
 	// pruneInterval is how often expired consumption records are swept.
 	pruneInterval time.Duration
 
@@ -137,6 +151,19 @@ func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
 
 // Start launches the background sweep that keeps the consumption record table
 // from growing without bound. It is safe to call more than once.
+// SetReusableChargePolicy installs the predicate that decides which services
+// treat charge credentials as re-presentable rather than single use. It is
+// meant to be called once, between construction and Start, with a predicate
+// naming the metered services: on those, the payment buys a bundle whose
+// draw-down is the spend, so the credential must stay presentable until the
+// pricer refuses it. Passing nil restores the strict single-use rule
+// everywhere.
+func (a *MPPAuthenticator) SetReusableChargePolicy(
+	policy func(serviceName string) bool) {
+
+	a.reusableChargePolicy = policy
+}
+
 func (a *MPPAuthenticator) Start() {
 	a.started.Do(func() {
 		a.wg.Add(1)
@@ -349,10 +376,24 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		return false
 	}
 	if !consumed {
-		log.Warnf("MPP: Refusing replayed charge credential for "+
-			"payment hash %x on service %s", paymentHash[:],
-			serviceName)
-		return false
+		// On a metered service the credential is the key to a prepaid
+		// bundle, not a single request, so a repeat presentation is
+		// the normal way the buyer spends the rest of what it paid
+		// for. The metering pipeline debits each request against the
+		// bundle and refuses when it runs dry; that draw-down, not
+		// this record, is what bounds the spend there.
+		if a.reusableChargePolicy != nil &&
+			a.reusableChargePolicy(serviceName) {
+
+			log.Debugf("MPP: Charge credential re-presented for "+
+				"payment hash %x on metered service %s",
+				paymentHash[:], serviceName)
+		} else {
+			log.Warnf("MPP: Refusing replayed charge credential "+
+				"for payment hash %x on service %s",
+				paymentHash[:], serviceName)
+			return false
+		}
 	}
 
 	log.Debugf("MPP: Charge credential accepted for service %s",

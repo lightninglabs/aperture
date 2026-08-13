@@ -1706,6 +1706,23 @@ func createProxy(cfg *Config, services []*proxy.Service,
 			return nil, nil, err
 		}
 
+		// On metered services the charge credential is the key to a
+		// prepaid usage bundle, so it stays presentable until the
+		// pricer refuses it, exactly like an L402 token. Everywhere
+		// else the spec's strict single-use rule stands.
+		meteredServices := make(map[string]struct{})
+		for _, svc := range services {
+			if svc.DynamicPrice.Enabled && svc.DynamicPrice.Metered {
+				meteredServices[svc.Name] = struct{}{}
+			}
+		}
+		if len(meteredServices) > 0 {
+			mppAuth.SetReusableChargePolicy(
+				func(serviceName string) bool {
+					_, ok := meteredServices[serviceName]
+					return ok
+				},
+			)
 		// The authenticator runs a background sweep over the records of
 		// spent payments, which the caller stops along with the rest of
 		// the proxy.
