@@ -469,6 +469,12 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// while writing the whole way through; what the timeout should kill
 	// is a stall, and the proxy pushes the deadline forward on every
 	// write to make it mean exactly that.
+	//
+	// Operators should therefore size writetimeout to the worst-case gap
+	// between writes, not to total response duration: a backend that
+	// legitimately pauses longer than the window between chunks, a
+	// reasoning model thinking silently being the canonical case, is cut
+	// off as a stall even though the client is healthy.
 	a.proxy.SetWriteDeadlineWindow(a.cfg.WriteTimeout)
 
 	handler := http.HandlerFunc(a.proxy.ServeHTTP)

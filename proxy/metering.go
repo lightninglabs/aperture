@@ -200,19 +200,50 @@ func mppChargeTokenIDFromAuthHeader(header *http.Header) (string, error) {
 	return preimage.Hash().String(), nil
 }
 
+// hasL402CredentialForm reports whether the request presents an L402
+// credential in any of the forms l402.FromHeader accepts: the Authorization
+// header's L402 or LSAT scheme, or a macaroon carried directly in the
+// Macaroon or Grpc-Metadata-Macaroon header. The presence test has to cover
+// all three, because the authenticator does: a token that authenticates
+// through one of the alternate headers but is invisible to metering would be
+// unlimited unmetered access on a metered service.
+func hasL402CredentialForm(header *http.Header) bool {
+	if hasL402SchemeHeader(header) {
+		return true
+	}
+
+	return header.Get(l402.HeaderMacaroon) != "" ||
+		header.Get(l402.HeaderMacaroonMD) != ""
+}
+
 // meteringTokenIDFromAuthHeader resolves the token ID a request's usage is
 // metered under, from whichever credential scheme the request authenticated
 // with. A request that carries no meterable credential at all returns
-// errNoMeteredCredential; a request that carries one that fails to parse
-// returns a hard error, since a malformed credential on a metered service
-// must not silently become free unmetered access.
+// errNoMeteredCredential; a request whose credential fails to parse returns
+// a hard error, since a malformed credential on a metered service must not
+// silently become free unmetered access.
+//
+// The L402 parse is attempted first and unconditionally, mirroring the
+// authenticator: l402.FromHeader reads the token from the Authorization
+// header or from the Macaroon and Grpc-Metadata-Macaroon headers, so gating
+// the parse on the Authorization scheme alone would let a paid token
+// presented through an alternate header authenticate and then walk past
+// metering. A Payment credential is consulted next, so a request that
+// genuinely authenticated through the Payment door is metered under it even
+// when a stray unparseable L402 header rides along.
 func meteringTokenIDFromAuthHeader(header *http.Header) (string, error) {
-	if hasL402SchemeHeader(header) {
-		return l402TokenIDFromAuthHeader(header)
+	tokenID, l402Err := l402TokenIDFromAuthHeader(header)
+	if l402Err == nil {
+		return tokenID, nil
 	}
 
 	if hasPaymentSchemeHeader(header) {
 		return mppChargeTokenIDFromAuthHeader(header)
+	}
+
+	if hasL402CredentialForm(header) {
+		return "", fmt.Errorf("unparseable L402 credential: %w",
+			l402Err)
 	}
 
 	return "", errNoMeteredCredential

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -964,4 +965,69 @@ func TestMPPChargeHashesFromChallengeHeader(t *testing.T) {
 
 		require.Empty(t, mppChargeHashesFromChallengeHeader(header))
 	})
+}
+
+// TestMeteringSeesEveryL402HeaderForm pins the presence test to the same
+// three header forms the authenticator reads. A paid token presented through
+// the Macaroon or Grpc-Metadata-Macaroon header authenticates exactly like
+// one in the Authorization header, so it must meter exactly like one too;
+// gating metering on the Authorization scheme alone turned the alternate
+// headers into unlimited unmetered access on a metered service.
+func TestMeteringSeesEveryL402HeaderForm(t *testing.T) {
+	t.Parallel()
+
+	// The alternate headers carry the macaroon hex-encoded with the
+	// preimage as a caveat, unlike the Authorization form's base64 plus
+	// separate preimage.
+	mac, tokenID := newTestMacaroon(t)
+
+	var preimage lntypes.Preimage
+	_, err := rand.Read(preimage[:])
+	require.NoError(t, err)
+	require.NoError(t, mac.AddFirstPartyCaveat(
+		[]byte("preimage="+preimage.String()),
+	))
+
+	macBytes, err := mac.MarshalBinary()
+	require.NoError(t, err)
+	macHex := hex.EncodeToString(macBytes)
+
+	for _, headerName := range []string{
+		"Macaroon", "Grpc-Metadata-Macaroon",
+	} {
+		t.Run(headerName, func(t *testing.T) {
+			header := make(http.Header)
+			header.Set(headerName, macHex)
+
+			got, err := meteringTokenIDFromAuthHeader(&header)
+			require.NoError(t, err)
+			require.Equal(t, tokenID, got)
+		})
+	}
+
+	t.Run("garbage in an alternate header is a hard error", func(t *testing.T) {
+		// A credential-shaped header that fails to parse must refuse
+		// the request rather than skip metering.
+		header := make(http.Header)
+		header.Set("Macaroon", "not-a-macaroon")
+
+		_, err := meteringTokenIDFromAuthHeader(&header)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errNoMeteredCredential)
+	})
+
+	t.Run("a payment credential meters despite a junk L402 header",
+		func(t *testing.T) {
+			// The request authenticated through the Payment door; a
+			// stray unparseable L402 value riding along must not
+			// turn a metered request into a refusal.
+			credHeader, hash := paymentCredentialHeader(
+				t, mpp.IntentCharge,
+			)
+			credHeader.Set("Macaroon", "not-a-macaroon")
+
+			got, err := meteringTokenIDFromAuthHeader(&credHeader)
+			require.NoError(t, err)
+			require.Equal(t, hash, got)
+		})
 }
