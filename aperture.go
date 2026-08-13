@@ -463,6 +463,14 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
+	// The write timeout is applied as a rolling idle window on proxied
+	// responses rather than a single absolute deadline. A streamed
+	// inference response routinely outlives any sane absolute timeout
+	// while writing the whole way through; what the timeout should kill
+	// is a stall, and the proxy pushes the deadline forward on every
+	// write to make it mean exactly that.
+	a.proxy.SetWriteDeadlineWindow(a.cfg.WriteTimeout)
+
 	handler := http.HandlerFunc(a.proxy.ServeHTTP)
 	a.httpsServer = &http.Server{
 		Addr:         a.cfg.ListenAddr,
@@ -1723,6 +1731,8 @@ func createProxy(cfg *Config, services []*proxy.Service,
 					return ok
 				},
 			)
+		}
+
 		// The authenticator runs a background sweep over the records of
 		// spent payments, which the caller stops along with the rest of
 		// the proxy.
