@@ -377,8 +377,22 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				"minting invoices from %v",
 				authCfg.WavelengthGateway)
 
+			// An unauthenticated gateway is a deliberate
+			// configuration on the wallet's side, and the daemon
+			// refuses it on mainnet, so say plainly which one this
+			// is rather than leaving the operator to discover it
+			// as a 500 on the first request for a paid resource.
+			if authCfg.WavelengthMacaroonPath == "" {
+				log.Warnf("No wavelengthmacaroonpath set, so " +
+					"invoice requests will carry no " +
+					"credential: this only works against " +
+					"a wallet daemon started with " +
+					"rpc.no-macaroons")
+			}
+
 			client, err := challenger.NewWavelengthInvoiceClient(
 				authCfg.WavelengthGateway, a.cfg.StrictVerify,
+				authCfg.WavelengthMacaroonPath,
 			)
 			if err != nil {
 				return fmt.Errorf("unable to create "+

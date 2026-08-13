@@ -69,6 +69,13 @@ type AuthConfig struct {
 	// no inbound liquidity in order to be paid.
 	WavelengthGateway string `long:"wavelengthgateway" description:"Base URL of a Wavelength wallet daemon's HTTP/JSON gateway to mint invoices from, e.g. http://localhost:10061"`
 
+	// WavelengthMacaroonPath is the path to the macaroon authorizing calls
+	// to that gateway. A wallet daemon requires one unless it was started
+	// with rpc.no-macaroons, which it refuses to accept on mainnet, so
+	// leaving this empty only works against a daemon deliberately running
+	// without authentication.
+	WavelengthMacaroonPath string `long:"wavelengthmacaroonpath" description:"Path to the macaroon authorizing calls to the Wavelength wallet daemon's gateway"`
+
 	TLSPath string `long:"tlspath" description:"Path to LND instance's tls certificate"`
 
 	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`

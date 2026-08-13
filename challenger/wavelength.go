@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"google.golang.org/grpc"
+	macaroon "gopkg.in/macaroon.v2"
 )
 
 const (
@@ -25,6 +27,10 @@ const (
 	// short: a wallet that has gone away should surface as a failed
 	// challenge rather than holding the request open.
 	defaultRecvTimeout = 30 * time.Second
+
+	// macaroonHeader is the HTTP field the wallet daemon's gateway
+	// forwards into the gRPC metadata it authenticates against.
+	macaroonHeader = "macaroon"
 )
 
 // WavelengthInvoiceClient mints L402 challenge invoices from a Wavelength
@@ -45,6 +51,11 @@ type WavelengthInvoiceClient struct {
 	// recvURL is the fully resolved endpoint invoices are requested from.
 	recvURL string
 
+	// macaroonHex authorizes the call, hex encoded because that is the
+	// form the daemon's gateway decodes. Empty means no credential is
+	// sent, which only reaches a daemon running with rpc.no-macaroons.
+	macaroonHex string
+
 	client *http.Client
 }
 
@@ -64,8 +75,15 @@ var _ InvoiceTracker = (*WavelengthInvoiceClient)(nil)
 // aperture believing it was verifying settlement when it was not: the failure
 // would be silent and would only show up as tokens honoured for invoices that
 // were never paid.
-func NewWavelengthInvoiceClient(gateway string,
-	strictVerify bool) (*WavelengthInvoiceClient, error) {
+//
+// macaroonPath authorizes the calls. It may be empty, which is only usable
+// against a daemon started with rpc.no-macaroons; the caller is expected to
+// say so, since from here an unauthenticated gateway is indistinguishable from
+// an operator who forgot. The file is read now rather than on each call so a
+// path that does not exist fails at start-up instead of on the first 402 a
+// real client is waiting on.
+func NewWavelengthInvoiceClient(gateway string, strictVerify bool,
+	macaroonPath string) (*WavelengthInvoiceClient, error) {
 
 	if strictVerify {
 		return nil, fmt.Errorf("strictverify is not supported with " +
@@ -92,10 +110,43 @@ func NewWavelengthInvoiceClient(gateway string,
 			gateway)
 	}
 
+	macaroonHex, err := readMacaroonHex(macaroonPath)
+	if err != nil {
+		return nil, err
+	}
+
 	return &WavelengthInvoiceClient{
-		recvURL: strings.TrimRight(parsed.String(), "/") + recvPath,
-		client:  &http.Client{Timeout: defaultRecvTimeout},
+		recvURL:     strings.TrimRight(parsed.String(), "/") + recvPath,
+		macaroonHex: macaroonHex,
+		client:      &http.Client{Timeout: defaultRecvTimeout},
 	}, nil
+}
+
+// readMacaroonHex loads a binary macaroon and returns it hex encoded, which is
+// the form the gateway decodes. An empty path returns an empty string, meaning
+// no credential will be sent.
+//
+// The bytes are parsed rather than only read, because the failure this catches
+// is pointing the option at the wrong file: a TLS certificate or a truncated
+// download hex encodes perfectly well and is rejected only later, by the
+// daemon, as an authentication failure that says nothing about the cause.
+func readMacaroonHex(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+
+	serialized, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read wavelength macaroon: %w", err)
+	}
+
+	var mac macaroon.Macaroon
+	if err := mac.UnmarshalBinary(serialized); err != nil {
+		return "", fmt.Errorf("file at %q is not a macaroon: %w",
+			path, err)
+	}
+
+	return hex.EncodeToString(serialized), nil
 }
 
 // recvRequest asks the wallet for an inbound payment of a given size.
@@ -164,6 +215,14 @@ func (w *WavelengthInvoiceClient) AddInvoice(ctx context.Context,
 		return nil, fmt.Errorf("build recv request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	// The gateway forwards this field into the gRPC metadata the daemon
+	// authenticates against. Without it a daemon running with macaroons,
+	// which is every daemon that has not been told otherwise, answers 401
+	// and the client waiting on the 402 gets a 500 instead.
+	if w.macaroonHex != "" {
+		req.Header.Set(macaroonHeader, w.macaroonHex)
+	}
 
 	resp, err := w.client.Do(req)
 	if err != nil {

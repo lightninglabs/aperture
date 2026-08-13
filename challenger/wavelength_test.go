@@ -7,11 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/stretchr/testify/require"
+	macaroon "gopkg.in/macaroon.v2"
 )
 
 const testPaymentHash = "161c5af497913d17bcba3edf886d15e4482300b5e4fceaeed0" +
@@ -49,7 +52,7 @@ func newTestWallet(t *testing.T, handler http.HandlerFunc) (
 	))
 	t.Cleanup(server.Close)
 
-	client, err := NewWavelengthInvoiceClient(server.URL, false)
+	client, err := NewWavelengthInvoiceClient(server.URL, false, "")
 	require.NoError(t, err)
 
 	return client, &lastBody
@@ -179,7 +182,7 @@ func TestWavelengthAddInvoiceFallsBackToMsat(t *testing.T) {
 func TestWavelengthRejectsStrictVerify(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewWavelengthInvoiceClient("http://localhost:10061", true)
+	_, err := NewWavelengthInvoiceClient("http://localhost:10061", true, "")
 	require.ErrorContains(t, err, "strictverify is not supported")
 }
 
@@ -191,7 +194,7 @@ func TestWavelengthRejectsBadGateway(t *testing.T) {
 	for _, gateway := range []string{
 		"", "localhost:10061", "ftp://localhost", "http://",
 	} {
-		_, err := NewWavelengthInvoiceClient(gateway, false)
+		_, err := NewWavelengthInvoiceClient(gateway, false, "")
 		require.Error(t, err, "expected %q to be refused", gateway)
 	}
 }
@@ -202,7 +205,7 @@ func TestWavelengthRejectsBadGateway(t *testing.T) {
 func TestWavelengthTrackingUnsupported(t *testing.T) {
 	t.Parallel()
 
-	client, err := NewWavelengthInvoiceClient("http://localhost:10061", false)
+	client, err := NewWavelengthInvoiceClient("http://localhost:10061", false, "")
 	require.NoError(t, err)
 
 	_, err = client.ListInvoices(
@@ -221,7 +224,7 @@ func TestWavelengthTrackingUnsupported(t *testing.T) {
 func TestWavelengthGatewayPathJoin(t *testing.T) {
 	t.Parallel()
 
-	client, err := NewWavelengthInvoiceClient("http://localhost:10061/", false)
+	client, err := NewWavelengthInvoiceClient("http://localhost:10061/", false, "")
 	require.NoError(t, err)
 	require.False(t, strings.Contains(client.recvURL, "//v1"))
 	require.True(t, strings.HasSuffix(client.recvURL, "/v1/wallet/recv"))
@@ -308,4 +311,111 @@ func TestWavelengthAddInvoicePrefersValue(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Contains(t, *body, `"amt_sat":7`)
+}
+
+// TestWavelengthSendsMacaroon checks that a configured macaroon reaches the
+// gateway on the header it forwards into gRPC metadata.
+//
+// Without it the daemon answers 401, AddInvoice fails, and the client waiting
+// for a 402 gets a 500 instead. That is the default state of a wallet daemon:
+// it serves unauthenticated only when started with rpc.no-macaroons, which it
+// refuses outright on mainnet.
+func TestWavelengthSendsMacaroon(t *testing.T) {
+	t.Parallel()
+
+	path, serialized := writeTestMacaroon(t)
+
+	var got string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Get("macaroon")
+			_, _ = w.Write([]byte(recvBody(
+				"lnbcrt1", testPaymentHash,
+			)))
+		},
+	))
+	t.Cleanup(server.Close)
+
+	client, err := NewWavelengthInvoiceClient(server.URL, false, path)
+	require.NoError(t, err)
+
+	_, err = client.AddInvoice(
+		context.Background(), &lnrpc.Invoice{Value: 11500},
+	)
+	require.NoError(t, err)
+
+	// Hex encoded, which is the form the gateway decodes.
+	require.Equal(t, hex.EncodeToString(serialized), got)
+}
+
+// TestWavelengthOmitsMacaroonWhenUnset checks that leaving the option empty
+// sends no credential at all, rather than an empty one the daemon would have
+// to interpret.
+func TestWavelengthOmitsMacaroonWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	var present bool
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, present = r.Header["Macaroon"]
+			_, _ = w.Write([]byte(recvBody(
+				"lnbcrt1", testPaymentHash,
+			)))
+		},
+	))
+	t.Cleanup(server.Close)
+
+	client, err := NewWavelengthInvoiceClient(server.URL, false, "")
+	require.NoError(t, err)
+
+	_, err = client.AddInvoice(
+		context.Background(), &lnrpc.Invoice{Value: 11500},
+	)
+	require.NoError(t, err)
+
+	require.False(t, present)
+}
+
+// TestWavelengthRejectsBadMacaroon covers the two ways the option is got
+// wrong. Both fail at construction, which is start-up, rather than on the
+// first request a paying client is waiting on.
+func TestWavelengthRejectsBadMacaroon(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewWavelengthInvoiceClient(
+		"http://localhost:10061", false,
+		filepath.Join(t.TempDir(), "absent.macaroon"),
+	)
+	require.ErrorContains(t, err, "read wavelength macaroon")
+
+	// A file that exists but is not a macaroon. Hex encoding would have
+	// accepted it happily and the daemon would have rejected it later as
+	// an authentication failure naming nothing useful.
+	notMac := filepath.Join(t.TempDir(), "tls.cert")
+	require.NoError(t, os.WriteFile(notMac, []byte("not a macaroon"), 0o600))
+
+	_, err = NewWavelengthInvoiceClient(
+		"http://localhost:10061", false, notMac,
+	)
+	require.ErrorContains(t, err, "is not a macaroon")
+}
+
+// writeTestMacaroon writes a serialized macaroon to a temp file, returning its
+// path and the bytes on disk.
+func writeTestMacaroon(t *testing.T) (string, []byte) {
+	t.Helper()
+
+	mac, err := macaroon.New(
+		[]byte("root-key"), []byte("wavelength"), "waved",
+		macaroon.LatestVersion,
+	)
+	require.NoError(t, err)
+
+	serialized, err := mac.MarshalBinary()
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "waved.macaroon")
+	require.NoError(t, os.WriteFile(path, serialized, 0o600))
+
+	return path, serialized
 }
