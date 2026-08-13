@@ -62,6 +62,20 @@ type AuthConfig struct {
 	// LndHost is the hostname of the LND instance to connect to.
 	LndHost string `long:"lndhost" description:"Hostname of the LND instance to connect to"`
 
+	// WavelengthGateway is the base URL of a Wavelength wallet daemon's
+	// HTTP/JSON gateway to mint challenge invoices from, instead of an lnd
+	// node. Invoices from that wallet are backed by an inbound swap, so a
+	// seller configured this way needs no Lightning node, no channels and
+	// no inbound liquidity in order to be paid.
+	WavelengthGateway string `long:"wavelengthgateway" description:"Base URL of a Wavelength wallet daemon's HTTP/JSON gateway to mint invoices from, e.g. http://localhost:10061"`
+
+	// WavelengthMacaroonPath is the path to the macaroon authorizing calls
+	// to that gateway. A wallet daemon requires one unless it was started
+	// with rpc.no-macaroons, which it refuses to accept on mainnet, so
+	// leaving this empty only works against a daemon deliberately running
+	// without authentication.
+	WavelengthMacaroonPath string `long:"wavelengthmacaroonpath" description:"Path to the macaroon authorizing calls to the Wavelength wallet daemon's gateway"`
+
 	TLSPath string `long:"tlspath" description:"Path to LND instance's tls certificate"`
 
 	MacDir string `long:"macdir" description:"Directory containing LND instance's macaroons"`
@@ -113,6 +127,22 @@ func (a *AuthConfig) validate() error {
 	}
 
 	switch {
+	// If WavelengthGateway is set we mint invoices from a Wavelength
+	// wallet daemon and there is no Lightning node in the picture at all.
+	case a.WavelengthGateway != "":
+		log.Info("Validating wavelength configuration")
+
+		// The lnd and lnc fields describe a node this backend does not
+		// use. Silently ignoring them would let a half-migrated config
+		// look like it was still talking to the node it names.
+		if a.LndHost != "" || a.Passphrase != "" {
+			return errors.New("lndhost and passphrase cannot be " +
+				"set when minting invoices from a wavelength " +
+				"wallet")
+		}
+
+		return nil
+
 	// If LndHost is set we connect directly to the LND node.
 	case a.LndHost != "":
 		log.Info("Validating lnd configuration")

@@ -663,18 +663,87 @@ func matchService(req *http.Request, services []*Service) (*Service, bool) {
 // Resource Sharing. These header fields are needed to signal to the browser
 // that it's ok to allow requests to sub domains, even if the JS was served from
 // the top level domain.
+//
+// This runs over the backend's own response headers on the way out, and a
+// backend that sets its own CORS headers, which any service that can also be
+// reached directly will do, would otherwise end up with two of each. What that
+// duplication means depends on the field, so the two kinds are handled
+// differently.
+//
+// Access-Control-Allow-Origin is single-valued. Two of them is not a more
+// emphatic "*", it is invalid per the fetch standard and the browser rejects
+// the response outright, so aperture's view replaces whatever was there.
+//
+// The other three are list-based fields. Per RFC 9110 repeated field lines are
+// combined with ", " and the fetch standard's "get, decode, and split" reads
+// them as one list, so a duplicate there was never invalid: it merged. Which
+// means replacing them would silently drop the backend's own entries, and a
+// backend exposing Access-Control-Expose-Headers: X-Request-Id would find that
+// header unreadable from JS the moment it moved behind aperture. So aperture's
+// entries are merged into whatever the backend already asked for.
 func addCorsHeaders(header http.Header) {
 	log.Debugf("Adding CORS headers to response.")
 
-	header.Add("Access-Control-Allow-Origin", "*")
-	header.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	header.Add("Access-Control-Expose-Headers",
-		"WWW-Authenticate, Payment-Receipt")
-	header.Add(
-		"Access-Control-Allow-Headers",
-		"Authorization, Grpc-Metadata-macaroon, "+
-			"WWW-Authenticate, Payment-Receipt",
+	header.Set("Access-Control-Allow-Origin", "*")
+
+	mergeCorsList(header, "Access-Control-Allow-Methods",
+		"GET", "POST", "OPTIONS")
+	mergeCorsList(header, "Access-Control-Expose-Headers",
+		"WWW-Authenticate", "Payment-Receipt")
+
+	// Content-Type has to be allowed for any JSON API behind the proxy. A
+	// POST carrying application/json is not a simple request, so the
+	// browser preflights it, and we answer that preflight ourselves
+	// without ever consulting the backend.
+	mergeCorsList(
+		header, "Access-Control-Allow-Headers",
+		"Content-Type", "Authorization", "Grpc-Metadata-macaroon",
+		"WWW-Authenticate", "Payment-Receipt",
 	)
+}
+
+// mergeCorsList adds the given entries to a list-based CORS header field,
+// keeping whatever the backend already put there and skipping any entry it had
+// already named. The result is written as a single field line, which is the
+// unambiguous form: repeated lines are legal here but only because every
+// reader has to join them first, and there is no reason to make them.
+//
+// Matching is case-insensitive because header names are, and a backend that
+// wrote "content-type" means the same thing we do.
+func mergeCorsList(header http.Header, field string, entries ...string) {
+	var (
+		merged []string
+		seen   = make(map[string]struct{})
+	)
+
+	add := func(entry string) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return
+		}
+
+		key := strings.ToLower(entry)
+		if _, ok := seen[key]; ok {
+			return
+		}
+
+		seen[key] = struct{}{}
+		merged = append(merged, entry)
+	}
+
+	// The backend's own entries come first, so a browser reading the list
+	// sees them in the order that service published them.
+	for _, line := range header.Values(field) {
+		for _, entry := range strings.Split(line, ",") {
+			add(entry)
+		}
+	}
+
+	for _, entry := range entries {
+		add(entry)
+	}
+
+	header.Set(field, strings.Join(merged, ", "))
 }
 
 // freshChallengeHeader mints a challenge quoting the given set of prices,

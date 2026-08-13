@@ -154,7 +154,7 @@ func (m *mockSessionStore) SettleSessionBalance(_ context.Context,
 	if !ok {
 		return 0, fmt.Errorf("session not found")
 	}
-	if s.Status != "open" {
+	if s.Status != sessionStatusOpen {
 		return 0, fmt.Errorf("session already closed")
 	}
 
@@ -182,7 +182,7 @@ func (m *mockSessionStore) CloseSession(_ context.Context,
 	if !ok {
 		return fmt.Errorf("session not found")
 	}
-	if s.Status != "open" {
+	if s.Status != sessionStatusOpen {
 		return fmt.Errorf("session already closed")
 	}
 	s.Status = "closed"
@@ -200,7 +200,7 @@ func (m *mockSessionStore) CloseSessionAndGetBalance(_ context.Context,
 	if !ok {
 		return 0, fmt.Errorf("session not found")
 	}
-	if s.Status != "open" {
+	if s.Status != sessionStatusOpen {
 		return 0, fmt.Errorf("session already closed")
 	}
 	s.Status = "closed"
