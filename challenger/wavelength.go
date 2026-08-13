@@ -133,9 +133,16 @@ func (w *WavelengthInvoiceClient) AddInvoice(ctx context.Context,
 	// The mint prices challenges in satoshis, but tolerate a millisatoshi
 	// amount rather than silently minting a zero-value invoice, which the
 	// wallet would reject with a far less obvious error.
+	//
+	// The conversion rounds up. Rounding down would hand the buyer an
+	// invoice cheaper than the price the mint just quoted, and it would do
+	// so worst where the price is smallest: 1500 msat would mint 1 sat,
+	// and any price below a full satoshi would round to nothing and fail
+	// the challenge outright. Overflow on the addition lands negative and
+	// is caught by the check below, so it fails closed.
 	amountSat := in.Value
 	if amountSat == 0 && in.ValueMsat > 0 {
-		amountSat = in.ValueMsat / 1000
+		amountSat = (in.ValueMsat + 999) / 1000
 	}
 	if amountSat <= 0 {
 		return nil, fmt.Errorf("invoice amount must be positive, got "+

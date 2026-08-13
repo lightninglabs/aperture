@@ -226,3 +226,86 @@ func TestWavelengthGatewayPathJoin(t *testing.T) {
 	require.False(t, strings.Contains(client.recvURL, "//v1"))
 	require.True(t, strings.HasSuffix(client.recvURL, "/v1/wallet/recv"))
 }
+
+// TestWavelengthAddInvoiceRoundsUp checks the millisatoshi conversion never
+// mints an invoice for less than was asked.
+//
+// The mint quotes a price and this client turns it into the whole number of
+// satoshis the wallet is asked to receive. Rounding down would sell the
+// service below the quoted price, and it would misbehave worst where it
+// matters most: a sub-satoshi price would round to nothing and fail the
+// challenge outright, which reads as a broken proxy rather than as a price the
+// wallet cannot express.
+func TestWavelengthAddInvoiceRoundsUp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		valueMsat int64
+		wantSat   int64
+	}{{
+		name:      "exact satoshi is unchanged",
+		valueMsat: 2000,
+		wantSat:   2,
+	}, {
+		name:      "partial satoshi rounds up",
+		valueMsat: 1500,
+		wantSat:   2,
+	}, {
+		name:      "one msat over rounds up",
+		valueMsat: 1001,
+		wantSat:   2,
+	}, {
+		name:      "sub satoshi price still bills a satoshi",
+		valueMsat: 1,
+		wantSat:   1,
+	}, {
+		name:      "just under a satoshi rounds up",
+		valueMsat: 999,
+		wantSat:   1,
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, body := newTestWallet(t, func(w http.ResponseWriter,
+				_ *http.Request) {
+
+				_, _ = w.Write([]byte(recvBody(
+					"lnbcrt1", testPaymentHash,
+				)))
+			})
+
+			_, err := client.AddInvoice(
+				context.Background(),
+				&lnrpc.Invoice{ValueMsat: tc.valueMsat},
+			)
+			require.NoError(t, err)
+
+			require.Contains(t, *body, fmt.Sprintf(
+				`"amt_sat":%d`, tc.wantSat,
+			))
+		})
+	}
+}
+
+// TestWavelengthAddInvoicePrefersValue checks that an amount given in satoshis
+// is used as given, rather than being recomputed from the msat field.
+func TestWavelengthAddInvoicePrefersValue(t *testing.T) {
+	t.Parallel()
+
+	client, body := newTestWallet(t, func(w http.ResponseWriter,
+		_ *http.Request) {
+
+		_, _ = w.Write([]byte(recvBody("lnbcrt1", testPaymentHash)))
+	})
+
+	_, err := client.AddInvoice(context.Background(), &lnrpc.Invoice{
+		Value:     7,
+		ValueMsat: 1500,
+	})
+	require.NoError(t, err)
+
+	require.Contains(t, *body, `"amt_sat":7`)
+}
