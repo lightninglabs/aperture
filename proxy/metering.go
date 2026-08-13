@@ -444,7 +444,7 @@ func mppChargeHashesFromChallengeHeader(header http.Header) []string {
 		return nil
 	}
 
-	var hashes []string
+	hashes := make([]string, 0, len(challenges))
 	for _, challenge := range challenges {
 		if challenge.Intent != mpp.IntentCharge {
 			continue
