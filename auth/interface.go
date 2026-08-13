@@ -63,19 +63,106 @@ type ReceiptProvider interface {
 	ReceiptHeader(*http.Header, string) http.Header
 }
 
+// CreditOutcome says what a credit attempt did to a session's deposit. A
+// settled Lightning invoice stays settled forever, so a preimage proves only
+// that the payment happened at some point, never that it has not already been
+// spent. The store is the only thing that knows the difference, and this is how
+// it reports it.
+type CreditOutcome uint8
+
+const (
+	// CreditApplied means the payment hash had never funded anything, so
+	// the deposit grew by the full amount.
+	CreditApplied CreditOutcome = iota
+
+	// CreditReplayed means the payment hash had already funded this very
+	// session, so nothing was added. This is what an honest client looks
+	// like when its top-up response was lost and it resent the request:
+	// the balance it is asking for is already there, and the right answer
+	// is to let it proceed rather than charge it a second time.
+	CreditReplayed
+
+	// CreditForeign means the payment hash had already funded a different
+	// session. Nothing was added, and no honest client does this: it is a
+	// credential paid for one session being pointed at another.
+	CreditForeign
+)
+
+// String returns a human readable name for the outcome.
+func (c CreditOutcome) String() string {
+	switch c {
+	case CreditApplied:
+		return "applied"
+
+	case CreditReplayed:
+		return "replayed"
+
+	case CreditForeign:
+		return "foreign"
+
+	default:
+		return "unknown"
+	}
+}
+
+// ChargeStore remembers which Lightning payments have already bought a request
+// under the MPP charge intent. The charge credential is otherwise entirely a
+// statement about the past: the preimage hashes to the payment hash forever,
+// the challenge HMAC is stateless by design and says nothing about whether its
+// challenge has been redeemed, and a settled invoice stays settled. Nothing in
+// the credential distinguishes its first presentation from its thousandth, so
+// this store is the only thing that can.
+type ChargeStore interface {
+	// ConsumeCharge claims the given payment hash for the request being
+	// authorized, and reports whether this call is the one that claimed it.
+	// A hash that some earlier request already claimed returns false, and
+	// the credential naming it must be refused.
+	//
+	// The claim must be atomic. Concurrent presentations of one credential
+	// must see exactly one true between them, which rules out asking
+	// whether a hash is spent and then marking it spent: both callers would
+	// read it as unspent and both would be served.
+	//
+	// The expiry is the one the challenge carried. It is recorded rather
+	// than consulted, because a challenge past its expiry is refused before
+	// the store is reached; what it is for is telling a later prune which
+	// records can no longer matter.
+	ConsumeCharge(ctx context.Context, paymentHash lntypes.Hash,
+		challengeID string, expiresAt time.Time) (bool, error)
+
+	// PruneConsumedCharges removes every record whose challenge expired
+	// before the given instant, and returns how many it removed. Without it
+	// the table grows for as long as the proxy serves traffic, which on a
+	// public proxy is a slow denial of service rather than a tidiness
+	// problem.
+	PruneConsumedCharges(ctx context.Context,
+		expiredBefore time.Time) (int64, error)
+}
+
 // SessionStore persists MPP session state for the session intent. Sessions
 // track prepaid balances that are decremented as services are consumed.
 type SessionStore interface {
-	// CreateSession creates a new session with the given initial state.
+	// CreateSession creates a new session with the given initial state,
+	// claiming the deposit payment hash for it in the same atomic step.
+	// The session is refused if that hash has already funded a session,
+	// which is what stops one deposit payment from opening a session and
+	// then being presented again as a top-up somewhere else.
 	CreateSession(ctx context.Context, session *Session) error
 
 	// GetSession returns the session with the given session ID.
 	GetSession(ctx context.Context, sessionID string) (*Session, error)
 
-	// UpdateSessionBalance atomically adds the given amount to the
-	// session's deposit balance.
-	UpdateSessionBalance(ctx context.Context, sessionID string,
-		addSats int64) error
+	// CreditSession adds the given amount to the session's deposit if and
+	// only if the given payment hash has never been credited before, and
+	// reports which of those two happened. The claim on the payment hash
+	// and the balance increment are one atomic step, so concurrent replays
+	// of the same credential credit exactly once between them.
+	//
+	// This is deliberately the only way to grow a balance. A separate "has
+	// this hash been seen" query would leave the once-only property resting
+	// on every caller remembering to ask.
+	CreditSession(ctx context.Context, sessionID string,
+		paymentHash lntypes.Hash, addSats int64) (CreditOutcome, error)
 
 	// DeductSessionBalance atomically adds the given amount to the
 	// session's spent counter. Returns an error if the deduction would
@@ -87,12 +174,86 @@ type SessionStore interface {
 	// accepted on a closed session.
 	CloseSession(ctx context.Context, sessionID string) error
 
+	// SettleSessionBalance atomically adjusts the session's spent counter
+	// by a signed amount, clamped so the spend can neither go below zero
+	// nor above the deposit, and returns the resulting spend. It is how a
+	// request charged an estimate before its response existed is
+	// reconciled against what it turned out to cost.
+	SettleSessionBalance(ctx context.Context, sessionID string,
+		deltaSats int64) (int64, error)
+
 	// CloseSessionAndGetBalance atomically closes the session and returns
 	// the remaining balance (deposit_sats - spent_sats). This prevents
 	// the TOCTOU race where a concurrent bearer request could deduct
 	// balance between a separate read and close.
 	CloseSessionAndGetBalance(ctx context.Context,
 		sessionID string) (int64, error)
+}
+
+// ChallengePrices carries the prices a fresh 402 challenge should quote. A
+// single number no longer suffices, because the intents a challenge can carry
+// ask genuinely different questions of the pricer: L402 and the MPP charge
+// intent quote a whole one-shot purchase, which for a metered service is a
+// token bundle, while the MPP session intent quotes the cost of one request
+// drawn against a prepaid balance. Quoting a bundle price as a session's
+// per-unit amount would make every bearer request cost as much as a bundle.
+type ChallengePrices struct {
+	// Charge is the price in satoshis of a single one-shot purchase. It is
+	// what the L402 and MPP charge challenges quote, and it is the value
+	// the plain FreshChallengeHeader receives.
+	Charge int64
+
+	// SessionUnit is the estimated price in satoshis of one request served
+	// against a prepaid session. Zero means no session-aware price was
+	// available, and the session challenge falls back to Charge.
+	SessionUnit int64
+
+	// SessionDeposit is the deposit in satoshis to ask for when opening a
+	// session. Zero leaves the deposit to the authenticator's configured
+	// deposit multiplier.
+	SessionDeposit int64
+}
+
+// PricedChallenger is an optional interface an Authenticator implements when
+// the challenge it mints depends on more than one price. Authenticators that
+// do not implement it are driven through FreshChallengeHeader with the charge
+// price, which is what they have always received.
+type PricedChallenger interface {
+	// FreshChallengeHeaderWithPrices returns a challenge header quoting the
+	// given set of prices.
+	FreshChallengeHeaderWithPrices(serviceName string,
+		prices ChallengePrices) (http.Header, error)
+}
+
+// SessionSettler is an optional interface an Authenticator implements when it
+// holds prepaid session balances that are drawn down per request.
+//
+// It exists because the two halves of metered session pricing sit on opposite
+// sides of the authenticator's boundary. An Authenticator only ever sees
+// request headers, so it cannot ask a pricer what the request in hand should
+// cost, and it never sees a response at all, so it cannot learn what the
+// request did cost. The proxy sees both, but the balance lives behind the
+// authenticator's session store. This interface is the narrow seam between
+// them: the proxy costs a completed request and hands the reconciliation back
+// to whoever owns the balance.
+type SessionSettler interface {
+	// BearerSessionID returns the session a bearer credential in the header
+	// draws against, along with the amount that credential's challenge
+	// quoted and that the authenticator has already deducted. It reports
+	// false for a header that is not a bearer credential the implementation
+	// itself would accept.
+	//
+	// The implementation must re-verify the credential rather than trust
+	// that authentication already passed. A request can carry credentials
+	// for several schemes at once, and only one of them needs to have been
+	// the one that authenticated it.
+	BearerSessionID(ctx context.Context, header *http.Header) (
+		sessionID string, chargedSats int64, ok bool)
+
+	// SettleSessionRequest reconciles a request that was charged
+	// chargedSats against the actualSats it turned out to cost.
+	SettleSessionRequest(ctx context.Context, sessionID string,
+		chargedSats, actualSats int64) error
 }
 
 // Session represents an MPP prepaid session. The session is identified by the

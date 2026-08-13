@@ -23,11 +23,16 @@ import (
 type mockSessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
+
+	// credits records which session each already-credited payment hash
+	// funded, mirroring the unique index the durable store relies on.
+	credits map[lntypes.Hash]string
 }
 
 func newMockSessionStore() *mockSessionStore {
 	return &mockSessionStore{
 		sessions: make(map[string]*Session),
+		credits:  make(map[lntypes.Hash]string),
 	}
 }
 
@@ -40,10 +45,15 @@ func (m *mockSessionStore) CreateSession(_ context.Context,
 	if _, exists := m.sessions[session.SessionID]; exists {
 		return fmt.Errorf("session already exists")
 	}
+	if owner, spent := m.credits[session.PaymentHash]; spent {
+		return fmt.Errorf("deposit payment hash already credited to "+
+			"session %s", owner)
+	}
 	s := *session
 	s.CreatedAt = time.Now()
 	s.UpdatedAt = time.Now()
 	m.sessions[session.SessionID] = &s
+	m.credits[session.PaymentHash] = session.SessionID
 	return nil
 }
 
@@ -61,19 +71,56 @@ func (m *mockSessionStore) GetSession(_ context.Context,
 	return &cp, nil
 }
 
-func (m *mockSessionStore) UpdateSessionBalance(_ context.Context,
-	sessionID string, addSats int64) error {
+// CreditSession mirrors the durable store: the payment hash is claimed and the
+// deposit grown under one lock, so a replay can never observe the hash as
+// unspent and credit it a second time.
+func (m *mockSessionStore) CreditSession(_ context.Context, sessionID string,
+	paymentHash lntypes.Hash, addSats int64) (CreditOutcome, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if addSats <= 0 {
+		return CreditApplied, fmt.Errorf("credit must be positive, "+
+			"got %d", addSats)
+	}
+
+	if owner, spent := m.credits[paymentHash]; spent {
+		if owner == sessionID {
+			return CreditReplayed, nil
+		}
+
+		return CreditForeign, nil
+	}
+
 	s, ok := m.sessions[sessionID]
 	if !ok {
-		return fmt.Errorf("session not found")
+		return CreditApplied, fmt.Errorf("session not found")
 	}
+	if s.Status != sessionStatusOpen {
+		return CreditApplied, fmt.Errorf("session already closed")
+	}
+
+	m.credits[paymentHash] = sessionID
 	s.DepositSats += addSats
 	s.UpdatedAt = time.Now()
-	return nil
+
+	return CreditApplied, nil
+}
+
+// creditOwner returns the session a payment hash was credited to.
+func (m *mockSessionStore) creditOwner(t *testing.T,
+	paymentHash lntypes.Hash) string {
+
+	t.Helper()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	owner, ok := m.credits[paymentHash]
+	require.True(t, ok)
+
+	return owner
 }
 
 func (m *mockSessionStore) DeductSessionBalance(_ context.Context,
@@ -92,6 +139,37 @@ func (m *mockSessionStore) DeductSessionBalance(_ context.Context,
 	s.SpentSats += amount
 	s.UpdatedAt = time.Now()
 	return nil
+}
+
+// SettleSessionBalance mirrors the durable store: the spend moves by a signed
+// amount and is clamped to the range the deposit allows, so an under-estimate
+// settles to at most the whole balance rather than driving it negative.
+func (m *mockSessionStore) SettleSessionBalance(_ context.Context,
+	sessionID string, deltaSats int64) (int64, error) {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return 0, fmt.Errorf("session not found")
+	}
+	if s.Status != "open" {
+		return 0, fmt.Errorf("session already closed")
+	}
+
+	spent := s.SpentSats + deltaSats
+	switch {
+	case spent < 0:
+		spent = 0
+	case spent > s.DepositSats:
+		spent = s.DepositSats
+	}
+
+	s.SpentSats = spent
+	s.UpdatedAt = time.Now()
+
+	return spent, nil
 }
 
 func (m *mockSessionStore) CloseSession(_ context.Context,
@@ -136,6 +214,10 @@ type mockPaymentSender struct {
 	mu       sync.Mutex
 	payments []sentPayment
 	err      error
+
+	// block, when set, holds the send open until it is closed, so a test
+	// can read a receipt while the refund is still routing.
+	block chan struct{}
 }
 
 type sentPayment struct {
@@ -145,6 +227,10 @@ type sentPayment struct {
 
 func (m *mockPaymentSender) SendPayment(_ context.Context, invoice string,
 	amtSats int64) (string, error) {
+
+	if m.block != nil {
+		<-m.block
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -690,4 +776,200 @@ func TestSessionConcurrentBearerAccept(t *testing.T) {
 	require.Equal(t, int64(10000), session.DepositSats)
 	require.Equal(t, int64(100), session.SpentSats)
 	require.True(t, session.SpentSats <= session.DepositSats)
+}
+
+// openTestSession opens a session through the authenticator and returns its ID
+// along with the challenge and preimage that opened it.
+func openTestSession(t *testing.T, auth *MPPSessionAuthenticator,
+	hmacSecret []byte, depositSats int64) (string, mpp.ChallengeEcho,
+	lntypes.Preimage) {
+
+	t.Helper()
+
+	preimage, paymentHash := testPreimageAndHash(t)
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+	challenge, sessionID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, depositSats,
+	)
+	openPayload := &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	}
+	openH := buildSessionCredential(t, challenge, openPayload)
+	require.True(t, auth.Accept(&openH, "test-service"))
+
+	return sessionID, challenge, preimage
+}
+
+// buildTopUp mints a settled top-up challenge and returns the credential that
+// spends it, along with its payment hash.
+func buildTopUp(t *testing.T, auth *MPPSessionAuthenticator,
+	hmacSecret []byte, sessionID string, topUpSats int64) (http.Header,
+	lntypes.Hash) {
+
+	t.Helper()
+
+	preimage, paymentHash := testPreimageAndHash(t)
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+	challenge, _ := buildSessionChallenge(
+		t, hmacSecret, paymentHash, topUpSats,
+	)
+	payload := &mpp.SessionPayload{
+		Action:        mpp.SessionActionTopUp,
+		SessionID:     sessionID,
+		TopUpPreimage: hex.EncodeToString(preimage[:]),
+	}
+
+	return buildSessionCredential(t, challenge, payload), paymentHash
+}
+
+// TestSessionTopUpReplayCreditsOnce asserts that resending an identical top-up
+// credential adds nothing after the first time. Every check the credential has
+// to pass is a fact about the payment rather than about the request: the
+// preimage hashes to the payment hash forever, the challenge HMAC is stateless,
+// and a settled invoice never stops being settled. So one paid invoice, resent,
+// used to mint balance without bound.
+//
+// The retry is still accepted rather than refused. An honest client whose
+// top-up response was lost resends exactly this, and answering with a fresh
+// challenge would have it pay a second invoice for a top-up it already has.
+func TestSessionTopUpReplayCreditsOnce(t *testing.T) {
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+
+	sessionID, _, _ := openTestSession(t, auth, hmacSecret, 300)
+	topUpH, _ := buildTopUp(t, auth, hmacSecret, sessionID, 200)
+
+	require.True(t, auth.Accept(&topUpH, "test-service"))
+
+	session, err := store.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(500), session.DepositSats)
+
+	// Replay the identical credential. It is accepted as a retry, and the
+	// balance does not move.
+	for i := 0; i < 5; i++ {
+		require.True(t, auth.Accept(&topUpH, "test-service"))
+
+		session, err = store.GetSession(context.Background(), sessionID)
+		require.NoError(t, err)
+		require.Equal(t, int64(500), session.DepositSats)
+	}
+
+	// A genuinely new top-up still credits, so the guard has not simply
+	// turned top-ups off.
+	secondH, _ := buildTopUp(t, auth, hmacSecret, sessionID, 700)
+	require.True(t, auth.Accept(&secondH, "test-service"))
+
+	session, err = store.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1200), session.DepositSats)
+}
+
+// TestSessionTopUpForeignHashRefused asserts that a top-up already credited to
+// one session cannot be re-presented against another. Nothing in a credential
+// binds it to a session in a way the challenge HMAC covers: the session ID
+// rides in the payload, so pointing a spent top-up at a second session costs
+// the buyer only the edit.
+func TestSessionTopUpForeignHashRefused(t *testing.T) {
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+
+	firstID, _, _ := openTestSession(t, auth, hmacSecret, 300)
+	secondID, _, _ := openTestSession(t, auth, hmacSecret, 400)
+
+	topUpH, topUpHash := buildTopUp(t, auth, hmacSecret, firstID, 200)
+	require.True(t, auth.Accept(&topUpH, "test-service"))
+
+	// Rebuild the same credential naming the other session. The challenge
+	// and preimage are untouched, only the payload's session ID differs.
+	cred, err := mpp.ParseCredential(&topUpH)
+	require.NoError(t, err)
+
+	var payload mpp.SessionPayload
+	require.NoError(t, json.Unmarshal(cred.Payload, &payload))
+	payload.SessionID = secondID
+
+	foreignH := buildSessionCredential(t, cred.Challenge, &payload)
+
+	// Unlike a replay against its own session, this is refused outright.
+	require.False(t, auth.Accept(&foreignH, "test-service"))
+
+	first, err := store.GetSession(context.Background(), firstID)
+	require.NoError(t, err)
+	require.Equal(t, int64(500), first.DepositSats)
+
+	second, err := store.GetSession(context.Background(), secondID)
+	require.NoError(t, err)
+	require.Equal(t, int64(400), second.DepositSats)
+
+	require.Equal(t, firstID, store.creditOwner(t, topUpHash))
+}
+
+// TestSessionDepositCannotBeReplayedAsTopUp asserts that the deposit which
+// opened a session cannot be handed back as a top-up on it. A session challenge
+// says nothing about which action it is for, since the action lives in the
+// payload the HMAC does not cover, so the credential that opens a session is
+// also a well-formed top-up credential for it. Re-presenting it doubled the
+// deposit for the price of one payment.
+func TestSessionDepositCannotBeReplayedAsTopUp(t *testing.T) {
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+
+	sessionID, challenge, preimage := openTestSession(
+		t, auth, hmacSecret, 300,
+	)
+
+	replayPayload := &mpp.SessionPayload{
+		Action:        mpp.SessionActionTopUp,
+		SessionID:     sessionID,
+		TopUpPreimage: hex.EncodeToString(preimage[:]),
+	}
+	replayH := buildSessionCredential(t, challenge, replayPayload)
+
+	require.True(t, auth.Accept(&replayH, "test-service"))
+
+	session, err := store.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(300), session.DepositSats)
+}
+
+// TestSessionTopUpCannotOpenSecondSession asserts the mirror image: a payment
+// already credited as a top-up cannot then be used to open a session of its
+// own. The same challenge serves both actions, so without the deposit and the
+// top-up drawing on one record of spent payments, a buyer could pay one invoice
+// and end up with a topped-up session and a fresh one besides.
+func TestSessionTopUpCannotOpenSecondSession(t *testing.T) {
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+
+	sessionID, _, _ := openTestSession(t, auth, hmacSecret, 300)
+
+	// Mint a top-up, but keep the preimage so it can be replayed as an
+	// open.
+	preimage, paymentHash := testPreimageAndHash(t)
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+	challenge, topUpID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, 200,
+	)
+	topUpH := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionTopUp,
+		SessionID:     sessionID,
+		TopUpPreimage: hex.EncodeToString(preimage[:]),
+	})
+	require.True(t, auth.Accept(&topUpH, "test-service"))
+
+	openH := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+	require.False(t, auth.Accept(&openH, "test-service"))
+
+	_, err := store.GetSession(context.Background(), topUpID)
+	require.Error(t, err)
+
+	session, err := store.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, int64(500), session.DepositSats)
 }

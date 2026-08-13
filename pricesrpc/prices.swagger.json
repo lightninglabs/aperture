@@ -114,6 +114,72 @@
         ]
       }
     },
+    "/v1/aperture/session/quote": {
+      "post": {
+        "summary": "QuoteSession prices a single request drawn against a prepaid MPP session\nbalance. GetPrice quotes a whole one-shot purchase, which for a metered\npricer is a token bundle; this quotes the estimated cost of the one\nrequest in hand. That estimate is what a session challenge advertises as\nits per-unit amount and what aperture deducts from the session balance\nbefore proxying.",
+        "operationId": "Prices_QuoteSession",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pricesrpcQuoteSessionResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pricesrpcQuoteSessionRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Prices"
+        ]
+      }
+    },
+    "/v1/aperture/session/settle": {
+      "post": {
+        "summary": "SettleSession costs a response that was served against a session balance\nand returns what the request should actually have cost, derived from the\ncaptured response excerpt in the same way ReportUsage derives a debit.\nAperture already deducted an estimate before proxying, so it reconciles\nthe difference against the session's balance. Unlike ReportUsage, the\nbalance itself lives in aperture rather than in the pricer: the pricer\ncosts, aperture holds and moves the funds.",
+        "operationId": "Prices_SettleSession",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/pricesrpcSettleSessionResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/pricesrpcSettleSessionRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Prices"
+        ]
+      }
+    },
     "/v1/aperture/usage": {
       "post": {
         "summary": "ReportUsage is invoked once the response for an authorized request has\ncompleted (or aborted). The pricer performs the cost analysis on the\ncaptured response excerpt (for example the trailing usage object of an\nSSE stream) and debits the token's balance.",
@@ -242,6 +308,42 @@
         }
       }
     },
+    "pricesrpcQuoteSessionRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The URL path of the request."
+        },
+        "http_request_text": {
+          "type": "string",
+          "description": "The full HTTP request serialized as text."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The name of the aperture service the request is for."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session the request will be served against. Empty when the quote is\nfor a fresh challenge, which is minted before any session exists."
+        }
+      }
+    },
+    "pricesrpcQuoteSessionResponse": {
+      "type": "object",
+      "properties": {
+        "unit_price_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "The estimated cost in satoshis of serving one request of this shape.\nThis is the per-unit amount a session challenge advertises and the\namount deducted from the session balance before proxying."
+        },
+        "deposit_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "The deposit in satoshis to ask for when opening a fresh session. Zero\nleaves the deposit to aperture's configured deposit multiplier."
+        }
+      }
+    },
     "pricesrpcReportUsageRequest": {
       "type": "object",
       "properties": {
@@ -298,6 +400,64 @@
           "type": "string",
           "format": "int64",
           "description": "The remaining balance of the token in satoshis. Informational."
+        }
+      }
+    },
+    "pricesrpcSettleSessionRequest": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "The session the request was served against."
+        },
+        "path": {
+          "type": "string",
+          "description": "The URL path of the request."
+        },
+        "service_name": {
+          "type": "string",
+          "description": "The name of the aperture service the request was for."
+        },
+        "http_status": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The HTTP status code the backend responded with."
+        },
+        "content_type": {
+          "type": "string",
+          "description": "The Content-Type of the backend response."
+        },
+        "content_encoding": {
+          "type": "string",
+          "description": "The Content-Encoding the backend responded with. A non-identity value\nmeans the captured tail is compressed and could not be costed."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "Whether the response body was read to completion."
+        },
+        "response_tail": {
+          "type": "string",
+          "format": "byte",
+          "description": "A capped tail of the response body. For SSE streams this contains the\ntrailing chunks, including any final usage object."
+        },
+        "estimate_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "The estimate in satoshis aperture already deducted from the session\nbalance before proxying this request."
+        },
+        "http_request_text": {
+          "type": "string",
+          "description": "The full HTTP request serialized as text. A session books no model the\nway an L402 token bundle does, so the request is echoed back here for\nthe pricer to resolve the model it must be costed at."
+        }
+      }
+    },
+    "pricesrpcSettleSessionResponse": {
+      "type": "object",
+      "properties": {
+        "cost_sats": {
+          "type": "string",
+          "format": "int64",
+          "description": "What the request actually cost, in satoshis. Aperture reconciles this\nagainst the estimate it already deducted, charging the shortfall or\ngiving back the excess."
         }
       }
     },

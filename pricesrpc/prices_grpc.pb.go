@@ -35,6 +35,21 @@ type PricesClient interface {
 	// captured response excerpt (for example the trailing usage object of an
 	// SSE stream) and debits the token's balance.
 	ReportUsage(ctx context.Context, in *ReportUsageRequest, opts ...grpc.CallOption) (*ReportUsageResponse, error)
+	// QuoteSession prices a single request drawn against a prepaid MPP session
+	// balance. GetPrice quotes a whole one-shot purchase, which for a metered
+	// pricer is a token bundle; this quotes the estimated cost of the one
+	// request in hand. That estimate is what a session challenge advertises as
+	// its per-unit amount and what aperture deducts from the session balance
+	// before proxying.
+	QuoteSession(ctx context.Context, in *QuoteSessionRequest, opts ...grpc.CallOption) (*QuoteSessionResponse, error)
+	// SettleSession costs a response that was served against a session balance
+	// and returns what the request should actually have cost, derived from the
+	// captured response excerpt in the same way ReportUsage derives a debit.
+	// Aperture already deducted an estimate before proxying, so it reconciles
+	// the difference against the session's balance. Unlike ReportUsage, the
+	// balance itself lives in aperture rather than in the pricer: the pricer
+	// costs, aperture holds and moves the funds.
+	SettleSession(ctx context.Context, in *SettleSessionRequest, opts ...grpc.CallOption) (*SettleSessionResponse, error)
 }
 
 type pricesClient struct {
@@ -81,6 +96,24 @@ func (c *pricesClient) ReportUsage(ctx context.Context, in *ReportUsageRequest, 
 	return out, nil
 }
 
+func (c *pricesClient) QuoteSession(ctx context.Context, in *QuoteSessionRequest, opts ...grpc.CallOption) (*QuoteSessionResponse, error) {
+	out := new(QuoteSessionResponse)
+	err := c.cc.Invoke(ctx, "/pricesrpc.Prices/QuoteSession", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pricesClient) SettleSession(ctx context.Context, in *SettleSessionRequest, opts ...grpc.CallOption) (*SettleSessionResponse, error) {
+	out := new(SettleSessionResponse)
+	err := c.cc.Invoke(ctx, "/pricesrpc.Prices/SettleSession", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PricesServer is the server API for Prices service.
 // All implementations must embed UnimplementedPricesServer
 // for forward compatibility
@@ -102,6 +135,21 @@ type PricesServer interface {
 	// captured response excerpt (for example the trailing usage object of an
 	// SSE stream) and debits the token's balance.
 	ReportUsage(context.Context, *ReportUsageRequest) (*ReportUsageResponse, error)
+	// QuoteSession prices a single request drawn against a prepaid MPP session
+	// balance. GetPrice quotes a whole one-shot purchase, which for a metered
+	// pricer is a token bundle; this quotes the estimated cost of the one
+	// request in hand. That estimate is what a session challenge advertises as
+	// its per-unit amount and what aperture deducts from the session balance
+	// before proxying.
+	QuoteSession(context.Context, *QuoteSessionRequest) (*QuoteSessionResponse, error)
+	// SettleSession costs a response that was served against a session balance
+	// and returns what the request should actually have cost, derived from the
+	// captured response excerpt in the same way ReportUsage derives a debit.
+	// Aperture already deducted an estimate before proxying, so it reconciles
+	// the difference against the session's balance. Unlike ReportUsage, the
+	// balance itself lives in aperture rather than in the pricer: the pricer
+	// costs, aperture holds and moves the funds.
+	SettleSession(context.Context, *SettleSessionRequest) (*SettleSessionResponse, error)
 	mustEmbedUnimplementedPricesServer()
 }
 
@@ -120,6 +168,12 @@ func (UnimplementedPricesServer) AuthorizeRequest(context.Context, *AuthorizeReq
 }
 func (UnimplementedPricesServer) ReportUsage(context.Context, *ReportUsageRequest) (*ReportUsageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportUsage not implemented")
+}
+func (UnimplementedPricesServer) QuoteSession(context.Context, *QuoteSessionRequest) (*QuoteSessionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QuoteSession not implemented")
+}
+func (UnimplementedPricesServer) SettleSession(context.Context, *SettleSessionRequest) (*SettleSessionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SettleSession not implemented")
 }
 func (UnimplementedPricesServer) mustEmbedUnimplementedPricesServer() {}
 
@@ -206,6 +260,42 @@ func _Prices_ReportUsage_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Prices_QuoteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QuoteSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PricesServer).QuoteSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/pricesrpc.Prices/QuoteSession",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PricesServer).QuoteSession(ctx, req.(*QuoteSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Prices_SettleSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SettleSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PricesServer).SettleSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/pricesrpc.Prices/SettleSession",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PricesServer).SettleSession(ctx, req.(*SettleSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Prices_ServiceDesc is the grpc.ServiceDesc for Prices service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +318,14 @@ var Prices_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportUsage",
 			Handler:    _Prices_ReportUsage_Handler,
+		},
+		{
+			MethodName: "QuoteSession",
+			Handler:    _Prices_QuoteSession_Handler,
+		},
+		{
+			MethodName: "SettleSession",
+			Handler:    _Prices_SettleSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

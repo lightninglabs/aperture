@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -39,6 +40,8 @@ type MultiAuthenticator struct {
 // Compile-time interface checks.
 var _ Authenticator = (*MultiAuthenticator)(nil)
 var _ ReceiptProvider = (*MultiAuthenticator)(nil)
+var _ PricedChallenger = (*MultiAuthenticator)(nil)
+var _ SessionSettler = (*MultiAuthenticator)(nil)
 
 // NewMultiAuthenticator creates a new MultiAuthenticator that tries each
 // authenticator in order.
@@ -107,13 +110,38 @@ func schemeMatches(a Authenticator, scheme string) bool {
 func (m *MultiAuthenticator) FreshChallengeHeader(serviceName string,
 	servicePrice int64) (http.Header, error) {
 
+	return m.FreshChallengeHeaderWithPrices(serviceName, ChallengePrices{
+		Charge: servicePrice,
+	})
+}
+
+// FreshChallengeHeaderWithPrices returns merged challenge headers from all
+// wrapped authenticators, giving each the price for the question it actually
+// asks. An authenticator that only knows the one-shot charge price receives it
+// through the plain FreshChallengeHeader, exactly as before.
+//
+// NOTE: This is part of the PricedChallenger interface.
+func (m *MultiAuthenticator) FreshChallengeHeaderWithPrices(serviceName string,
+	prices ChallengePrices) (http.Header, error) {
+
 	merged := make(http.Header)
 	var numErrors int
 
 	for _, auth := range m.authenticators {
-		header, err := auth.FreshChallengeHeader(
-			serviceName, servicePrice,
+		var (
+			header http.Header
+			err    error
 		)
+
+		if priced, ok := auth.(PricedChallenger); ok {
+			header, err = priced.FreshChallengeHeaderWithPrices(
+				serviceName, prices,
+			)
+		} else {
+			header, err = auth.FreshChallengeHeader(
+				serviceName, prices.Charge,
+			)
+		}
 		if err != nil {
 			log.Errorf("MultiAuth: challenge generation "+
 				"failed for authenticator: %v", err)
@@ -169,4 +197,60 @@ func (m *MultiAuthenticator) ReceiptHeader(header *http.Header,
 	}
 
 	return nil
+}
+
+// BearerSessionID asks each wrapped authenticator that holds session balances
+// whether the header is a bearer credential it recognizes, and returns the
+// first answer.
+//
+// NOTE: This is part of the SessionSettler interface.
+func (m *MultiAuthenticator) BearerSessionID(ctx context.Context,
+	header *http.Header) (string, int64, bool) {
+
+	for _, auth := range m.authenticators {
+		settler, ok := auth.(SessionSettler)
+		if !ok {
+			continue
+		}
+
+		sessionID, charged, ok := settler.BearerSessionID(ctx, header)
+		if ok {
+			return sessionID, charged, true
+		}
+	}
+
+	return "", 0, false
+}
+
+// SettleSessionRequest hands the reconciliation to every wrapped authenticator
+// that holds session balances. A settler that does not know the session
+// reports an error, which is why the first success wins rather than the first
+// attempt.
+//
+// NOTE: This is part of the SessionSettler interface.
+func (m *MultiAuthenticator) SettleSessionRequest(ctx context.Context,
+	sessionID string, chargedSats, actualSats int64) error {
+
+	var lastErr error
+	for _, auth := range m.authenticators {
+		settler, ok := auth.(SessionSettler)
+		if !ok {
+			continue
+		}
+
+		err := settler.SettleSessionRequest(
+			ctx, sessionID, chargedSats, actualSats,
+		)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return fmt.Errorf("no authenticator holds session %s", sessionID)
 }

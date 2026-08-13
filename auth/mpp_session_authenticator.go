@@ -77,7 +77,7 @@ type MPPSessionAuthenticator struct {
 type closeResult struct {
 	sessionID    string
 	refundSats   int64
-	refundStatus string // "succeeded", "failed", or "skipped"
+	refundStatus string
 }
 
 // Size returns the size of the close result for the LRU cache. Each entry
@@ -97,6 +97,8 @@ const (
 // Compile-time interface checks.
 var _ Authenticator = (*MPPSessionAuthenticator)(nil)
 var _ ReceiptProvider = (*MPPSessionAuthenticator)(nil)
+var _ PricedChallenger = (*MPPSessionAuthenticator)(nil)
+var _ SessionSettler = (*MPPSessionAuthenticator)(nil)
 
 // MPPSessionConfig holds the configuration for the session authenticator.
 type MPPSessionConfig struct {
@@ -303,7 +305,11 @@ func (a *MPPSessionAuthenticator) handleOpen(ctx context.Context,
 		}
 	}
 
-	// Create the session.
+	// Create the session. The store claims the deposit payment hash as part
+	// of the same write, which is what keeps this deposit from being
+	// re-presented later as a top-up: the session ID colliding on a
+	// repeated open is not on its own enough, since the action a credential
+	// names lives in the payload the challenge HMAC does not cover.
 	sessionID := hex.EncodeToString(paymentHash[:])
 	session := &Session{
 		SessionID:     sessionID,
@@ -506,17 +512,59 @@ func (a *MPPSessionAuthenticator) handleTopUp(ctx context.Context,
 		}
 	}
 
-	// Atomically add to session balance.
-	if err := a.sessionStore.UpdateSessionBalance(
-		ctx, payload.SessionID, topUpSats,
-	); err != nil {
-		log.Errorf("MPP Session: Failed to update balance: %v", err)
+	// Credit the balance, but only if this payment has not been credited
+	// already. Everything checked so far is a property of the payment
+	// rather than of this request: the preimage hashes to the payment hash
+	// forever, the challenge HMAC is stateless by design, and a settled
+	// invoice stays settled. None of it can tell a first presentation of a
+	// credential from its thousandth, so the store is where the once-only
+	// property has to live, in the same transaction as the balance change.
+	outcome, err := a.sessionStore.CreditSession(
+		ctx, payload.SessionID, topUpHash, topUpSats,
+	)
+	if err != nil {
+		log.Errorf("MPP Session: Failed to credit topUp: %v", err)
 		return false
 	}
 
-	log.Infof("MPP Session: TopUp %d sats to session %s",
-		topUpSats, payload.SessionID)
-	return true
+	switch outcome {
+	case CreditApplied:
+		log.Infof("MPP Session: TopUp %d sats to session %s",
+			topUpSats, payload.SessionID)
+
+		return true
+
+	case CreditReplayed:
+		// This payment already funded this session. An honest client
+		// whose top-up response was lost resends the identical
+		// credential, and the balance it is asking for is already
+		// there, so the request proceeds: refusing it would push the
+		// client towards paying a second invoice for a top-up it has
+		// had all along. It is also what a deliberate replay looks
+		// like, which costs the seller nothing, because no satoshis
+		// move either way.
+		log.Infof("MPP Session: TopUp payment %v was already credited "+
+			"to session %s, treating as a retry and crediting "+
+			"nothing further", topUpHash, payload.SessionID)
+
+		return true
+
+	case CreditForeign:
+		// The payment behind this credential funded some other
+		// session. No honest client does that, so it is refused rather
+		// than waved through.
+		log.Warnf("MPP Session: Refusing topUp of session %s: payment "+
+			"%v has already been credited to a different session",
+			payload.SessionID, topUpHash)
+
+		return false
+
+	default:
+		log.Errorf("MPP Session: Unknown credit outcome %d for "+
+			"session %s", outcome, payload.SessionID)
+
+		return false
+	}
 }
 
 // handleClose verifies a close action credential and initiates the refund.
@@ -587,17 +635,42 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 		return false
 	}
 
+	// A session closed with nothing left needs no refund and gets no
+	// attempt, which the spec spells "skipped". Caching it up front also
+	// means the common case never reads the in-flight status below.
+	if refundSats == 0 {
+		_, _ = a.closeResults.Put(payload.SessionID, &closeResult{
+			sessionID:    payload.SessionID,
+			refundSats:   0,
+			refundStatus: mpp.RefundStatusSkipped,
+		})
+
+		log.Infof("MPP Session: Closed session %s with nothing to "+
+			"refund", payload.SessionID)
+
+		return true
+	}
+
 	// Cache an initial close result for ReceiptHeader immediately so the
-	// HTTP response can proceed. The refund runs asynchronously.
+	// HTTP response can proceed. The refund runs asynchronously, so this is
+	// the status a receipt written before the payment resolves carries.
+	//
+	// It is deliberately the pessimistic one. The spec admits only three
+	// values, none of which means "still trying", and of those only
+	// "failed" is safe to be wrong about: a receipt that claimed success
+	// for a payment still in flight would tell the buyer their money is
+	// back when it may never arrive. The buyer keeps the return invoice
+	// either way, so a refund that lands after the receipt costs them
+	// nothing, while a receipt that lies costs them the ability to notice.
 	_, _ = a.closeResults.Put(payload.SessionID, &closeResult{
 		sessionID:    payload.SessionID,
 		refundSats:   refundSats,
-		refundStatus: "pending",
+		refundStatus: mpp.RefundStatusFailed,
 	})
 
 	// Fire the refund asynchronously so the close response isn't blocked
 	// by LN payment routing (which can take many seconds).
-	if refundSats > 0 && a.paymentSender != nil {
+	if a.paymentSender != nil {
 		go func() {
 			// Use a dedicated context with a generous timeout
 			// for payment routing, independent of the HTTP
@@ -612,13 +685,13 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 				refundSats,
 			)
 
-			status := "succeeded"
+			status := mpp.RefundStatusSucceeded
 			if err != nil {
 				log.Errorf("MPP Session: Refund failed "+
 					"for session %s (%d sats): %v",
 					payload.SessionID, refundSats,
 					err)
-				status = "failed"
+				status = mpp.RefundStatusFailed
 			} else {
 				log.Infof("MPP Session: Refunded %d "+
 					"sats to session %s",
@@ -634,19 +707,13 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 				},
 			)
 		}()
-	} else if refundSats > 0 {
-		// PaymentSender not configured, can't refund.
+	} else {
+		// PaymentSender not configured, can't refund. The cached
+		// status is already "failed", which is the truthful answer: the
+		// buyer's balance is held by the server with no way out.
 		log.Warnf("MPP Session: No payment sender configured, "+
 			"cannot refund %d sats for session %s",
 			refundSats, payload.SessionID)
-
-		_, _ = a.closeResults.Put(
-			payload.SessionID, &closeResult{
-				sessionID:    payload.SessionID,
-				refundSats:   refundSats,
-				refundStatus: "failed",
-			},
-		)
 	}
 
 	log.Infof("MPP Session: Closed session %s (refund=%d sats)",
@@ -661,6 +728,30 @@ func (a *MPPSessionAuthenticator) handleClose(ctx context.Context,
 func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 	servicePrice int64) (http.Header, error) {
 
+	return a.FreshChallengeHeaderWithPrices(serviceName, ChallengePrices{
+		Charge: servicePrice,
+	})
+}
+
+// FreshChallengeHeaderWithPrices returns a WWW-Authenticate: Payment header
+// containing a session challenge priced with the session-aware quote when one
+// is available.
+//
+// The unit price a session advertises is the estimated cost of one request, not
+// the price of a one-shot purchase. On a metered service those differ by orders
+// of magnitude, since a one-shot purchase buys a whole token bundle, so quoting
+// the charge price here would make every bearer request cost a bundle and empty
+// the deposit on its first call.
+//
+// NOTE: This is part of the PricedChallenger interface.
+func (a *MPPSessionAuthenticator) FreshChallengeHeaderWithPrices(
+	serviceName string, prices ChallengePrices) (http.Header, error) {
+
+	servicePrice := prices.SessionUnit
+	if servicePrice <= 0 {
+		servicePrice = prices.Charge
+	}
+
 	// Compute deposit amount with overflow check.
 	mult := int64(a.depositMultiplier)
 	if servicePrice > 0 && mult > math.MaxInt64/servicePrice {
@@ -668,6 +759,13 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeader(serviceName string,
 			"price=%d multiplier=%d", servicePrice, mult)
 	}
 	depositSats := servicePrice * mult
+
+	// A pricer that has an opinion about the deposit overrides the
+	// multiplier, since it is the one that knows how many requests a
+	// session needs to hold to be worth opening.
+	if prices.SessionDeposit > 0 {
+		depositSats = prices.SessionDeposit
+	}
 
 	// Create a deposit invoice.
 	paymentRequest, paymentHash, err := a.challenger.NewChallenge(
@@ -796,6 +894,112 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 	}
 
 	return receiptHeader
+}
+
+// BearerSessionID returns the session a bearer credential in the header draws
+// against, along with the per-unit amount its challenge quoted, which is what
+// handleBearer has already deducted from the balance.
+//
+// The credential is verified here rather than assumed good, even though Accept
+// has already run. A request can carry credentials for several schemes at once
+// and only one of them needs to have been the one that authenticated it, so a
+// caller holding a valid L402 token could otherwise attach an unverified
+// session credential naming somebody else's session and have this request's
+// cost settled against that stranger's balance. Re-running the checks costs one
+// HMAC and one session read, which is cheap next to being able to spend another
+// buyer's deposit.
+//
+// NOTE: This is part of the SessionSettler interface.
+func (a *MPPSessionAuthenticator) BearerSessionID(ctx context.Context,
+	header *http.Header) (string, int64, bool) {
+
+	cred, err := mpp.ParseCredential(header)
+	if err != nil {
+		return "", 0, false
+	}
+
+	if cred.Challenge.Method != mpp.MethodLightning ||
+		cred.Challenge.Intent != mpp.IntentSession {
+
+		return "", 0, false
+	}
+
+	// The challenge has to be one this server minted, since the amount that
+	// was deducted is read out of it.
+	params := cred.Challenge.ToChallengeParams()
+	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
+		return "", 0, false
+	}
+
+	var payload mpp.SessionPayload
+	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
+		return "", 0, false
+	}
+
+	if payload.Action != mpp.SessionActionBearer ||
+		payload.SessionID == "" || payload.Preimage == "" {
+
+		return "", 0, false
+	}
+
+	var sessReq mpp.SessionRequest
+	if err := mpp.DecodeRequest(cred.Challenge.Request, &sessReq); err != nil {
+		return "", 0, false
+	}
+
+	charged, err := strconv.ParseInt(sessReq.Amount, 10, 64)
+	if err != nil || charged < 0 {
+		return "", 0, false
+	}
+
+	// The session ID rides in the payload, which the challenge HMAC does
+	// not cover, so possession of the deposit preimage is what ties this
+	// credential to that session. It is the same proof handleBearer
+	// demands.
+	session, err := a.sessionStore.GetSession(ctx, payload.SessionID)
+	if err != nil || session.Status != sessionStatusOpen {
+		return "", 0, false
+	}
+
+	preimage, err := lntypes.MakePreimageFromStr(payload.Preimage)
+	if err != nil || !preimage.Matches(session.PaymentHash) {
+		return "", 0, false
+	}
+
+	return payload.SessionID, charged, true
+}
+
+// SettleSessionRequest reconciles a request that was charged chargedSats at
+// bearer time against the actualSats its completed response turned out to cost.
+//
+// This is the second half of post-hoc reconciliation, which is the accounting
+// model sessions use deliberately. The alternative, reserving a worst case at
+// request time and releasing the remainder, never overspends but makes the
+// buyer's displayed balance lurch downward for the length of every request.
+// Reconciling instead leaves the balance transiently optimistic between the
+// start of a request and the end of its response, and the most that optimism
+// can cost the seller is the difference on a single in-flight request.
+//
+// NOTE: This is part of the SessionSettler interface.
+func (a *MPPSessionAuthenticator) SettleSessionRequest(ctx context.Context,
+	sessionID string, chargedSats, actualSats int64) error {
+
+	delta := actualSats - chargedSats
+	if delta == 0 {
+		return nil
+	}
+
+	spent, err := a.sessionStore.SettleSessionBalance(ctx, sessionID, delta)
+	if err != nil {
+		return fmt.Errorf("unable to settle session %s: %w", sessionID,
+			err)
+	}
+
+	log.Debugf("MPP Session: Settled session %s by %d sats (charged %d, "+
+		"cost %d), spend now %d", sessionID, delta, chargedSats,
+		actualSats, spent)
+
+	return nil
 }
 
 // networkToChainParams converts a network name string to the corresponding
