@@ -92,12 +92,10 @@ type fakeSessionSettler struct {
 	settlements chan settlement
 }
 
-func newFakeSessionSettler(sessionID string,
-	charged int64) *fakeSessionSettler {
-
+func newFakeSessionSettler() *fakeSessionSettler {
 	return &fakeSessionSettler{
-		sessionID:   sessionID,
-		charged:     charged,
+		sessionID:   "session-abc",
+		charged:     7,
 		present:     true,
 		settlements: make(chan settlement, 1),
 	}
@@ -228,7 +226,7 @@ func TestCheckSessionMeteringAnnotates(t *testing.T) {
 	t.Parallel()
 
 	fake := newFakeSessionPricer()
-	settler := newFakeSessionSettler("session-abc", 7)
+	settler := newFakeSessionSettler()
 
 	p := &Proxy{authenticator: settler}
 	target := newSessionService(fake)
@@ -292,7 +290,7 @@ func TestCheckSessionMeteringSkips(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			settler := newFakeSessionSettler("session-abc", 7)
+			settler := newFakeSessionSettler()
 			p := &Proxy{authenticator: settler}
 			target := newSessionService(newFakeSessionPricer())
 			tc.setup(p, target, settler)
@@ -378,7 +376,7 @@ func TestSessionSettlementOnCompletedResponse(t *testing.T) {
 	fake := newFakeSessionPricer()
 	fake.cost = 19
 
-	settler := newFakeSessionSettler("session-abc", 7)
+	settler := newFakeSessionSettler()
 	res := sessionResponse(
 		t, sessionInfo(fake, settler), http.StatusOK,
 		"data: {\"usage\":{\"total_tokens\":40}}\n\ndata: [DONE]\n\n",
@@ -389,6 +387,7 @@ func TestSessionSettlementOnCompletedResponse(t *testing.T) {
 	drained, err := io.ReadAll(res.Body)
 	require.NoError(t, err)
 	require.Contains(t, string(drained), "[DONE]")
+	require.NoError(t, res.Body.Close())
 
 	usage := requireSettlement(t, fake)
 	require.Equal(t, "session-abc", usage.SessionID)
@@ -415,7 +414,7 @@ func TestSessionSettlementOnAbortedResponse(t *testing.T) {
 	fake := newFakeSessionPricer()
 	fake.cost = 3
 
-	settler := newFakeSessionSettler("session-abc", 7)
+	settler := newFakeSessionSettler()
 	res := sessionResponse(
 		t, sessionInfo(fake, settler), http.StatusOK,
 		"data: {\"choices\":[]}\n\n",
@@ -442,7 +441,7 @@ func TestSessionSettlementIsExactlyOnce(t *testing.T) {
 	fake := newFakeSessionPricer()
 	fake.cost = 5
 
-	settler := newFakeSessionSettler("session-abc", 7)
+	settler := newFakeSessionSettler()
 	res := sessionResponse(
 		t, sessionInfo(fake, settler), http.StatusOK, "data: [DONE]\n\n",
 	)
@@ -481,7 +480,7 @@ func TestSessionSettlementLeavesEstimateOnPricerFailure(t *testing.T) {
 			fake := newFakeSessionPricer()
 			fake.settleErr = status.Error(code, "no")
 
-			settler := newFakeSessionSettler("session-abc", 7)
+			settler := newFakeSessionSettler()
 			res := sessionResponse(
 				t, sessionInfo(fake, settler), http.StatusOK,
 				"data: [DONE]\n\n",
@@ -490,6 +489,7 @@ func TestSessionSettlementLeavesEstimateOnPricerFailure(t *testing.T) {
 			attachSessionObserver(res)
 			_, err := io.ReadAll(res.Body)
 			require.NoError(t, err)
+			require.NoError(t, res.Body.Close())
 
 			requireSettlement(t, fake)
 
@@ -511,11 +511,14 @@ func TestSessionObserverSkipsProtocolUpgrade(t *testing.T) {
 	t.Parallel()
 
 	fake := newFakeSessionPricer()
-	settler := newFakeSessionSettler("session-abc", 7)
+	settler := newFakeSessionSettler()
 
 	res := sessionResponse(
 		t, sessionInfo(fake, settler), http.StatusSwitchingProtocols, "",
 	)
+	t.Cleanup(func() {
+		require.NoError(t, res.Body.Close())
+	})
 
 	attachSessionObserver(res)
 
