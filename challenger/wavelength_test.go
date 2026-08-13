@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,8 +35,13 @@ func newTestWallet(t *testing.T, handler http.HandlerFunc) (
 	var lastBody string
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			buf := make([]byte, r.ContentLength)
-			_, _ = r.Body.Read(buf)
+			// Read to EOF rather than issuing one Read into a
+			// ContentLength-sized buffer. A single Read may return
+			// a short prefix, which would make the assertions on
+			// this body fail intermittently, and a chunked request
+			// reports a ContentLength of -1, which would panic the
+			// handler goroutine on the make.
+			buf, _ := io.ReadAll(r.Body)
 			lastBody = string(buf)
 
 			handler(w, r)
