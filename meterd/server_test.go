@@ -697,3 +697,142 @@ func TestServerReservationEcho(t *testing.T) {
 	require.True(t, authorize().Allowed)
 	require.True(t, authorize().Allowed)
 }
+
+// TestServerSettlesAbandonedStreamAtEstimate verifies that an incomplete,
+// successful streamed response whose tail carries bytes but no usage object
+// is settled at the reservation estimate rather than for free.
+//
+// The usage object arrives in a stream's final chunk, so a client that walks
+// away mid-generation discards it, and with it the bill for every token the
+// upstream already produced. The estimate is what the request itself asked
+// for, so the buyer never pays past its own stated ceiling.
+func TestServerSettlesAbandonedStreamAtEstimate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	statePath := filepath.Join(t.TempDir(), "state.json")
+
+	// The request below carries no max_tokens, so the reservation falls
+	// back to the configured default estimate; that fallback is exactly
+	// what an abandoned stream settles at, so give it a real value.
+	cfg := testConfig(statePath)
+	cfg.EstimatedTokens = 200
+	client := newTestClient(t, cfg)
+
+	const (
+		path    = "/v1/chat/completions"
+		tokenID = "abandoned-stream-token"
+	)
+	reqText := chatRequestText("gpt-test")
+
+	// Book and authorize a bundle the usual way. The authorization
+	// reserves the default estimate, which is what the abandoned stream
+	// settles at.
+	priceResp, err := client.GetPrice(ctx, &pricesrpc.GetPriceRequest{
+		Path:            path,
+		HttpRequestText: reqText,
+	})
+	require.NoError(t, err)
+
+	_, err = client.ChallengeMinted(ctx, &pricesrpc.ChallengeMintedRequest{
+		Path:            path,
+		HttpRequestText: reqText,
+		TokenId:         tokenID,
+		PriceSats:       priceResp.PriceSats,
+		ServiceName:     "llm",
+	})
+	require.NoError(t, err)
+
+	authResp, err := client.AuthorizeRequest(
+		ctx, &pricesrpc.AuthorizeRequestRequest{
+			Path:            path,
+			HttpRequestText: reqText,
+			TokenId:         tokenID,
+			ServiceName:     "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, authResp.Allowed)
+
+	// The tail a walked-away stream leaves behind: content chunks, no
+	// usage object, no [DONE].
+	abandonedTail := sseChunk(
+		`{"choices":[{"delta":{"content":"hi"}}],"usage":null}`,
+	) + sseChunk(
+		`{"choices":[{"delta":{"content":" there"}}],"usage":null}`,
+	)
+
+	usageResp, err := client.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
+		TokenId:          tokenID,
+		Path:             path,
+		ServiceName:      "llm",
+		HttpStatus:       200,
+		ContentType:      sseContentType,
+		Complete:         false,
+		ResponseTail:     []byte(abandonedTail),
+		ReservedEstimate: authResp.ReservedEstimate,
+	})
+	require.NoError(t, err)
+
+	// The settle debits exactly the reservation: at the test rates the
+	// estimate's blended value in sats, and not zero.
+	require.NotZero(t, usageResp.DebitedSats)
+	require.Less(t, usageResp.RemainingSats, priceResp.PriceSats)
+
+	t.Run("no bytes costs nothing", func(t *testing.T) {
+		resp, err := client.ReportUsage(
+			ctx, &pricesrpc.ReportUsageRequest{
+				TokenId:          tokenID,
+				Path:             path,
+				ServiceName:      "llm",
+				HttpStatus:       200,
+				ContentType:      sseContentType,
+				Complete:         false,
+				ResponseTail:     nil,
+				ReservedEstimate: authResp.ReservedEstimate,
+			},
+		)
+		require.NoError(t, err)
+		require.Zero(t, resp.DebitedSats)
+	})
+
+	t.Run("failed response costs nothing", func(t *testing.T) {
+		resp, err := client.ReportUsage(
+			ctx, &pricesrpc.ReportUsageRequest{
+				TokenId:          tokenID,
+				Path:             path,
+				ServiceName:      "llm",
+				HttpStatus:       502,
+				ContentType:      sseContentType,
+				Complete:         false,
+				ResponseTail:     []byte(abandonedTail),
+				ReservedEstimate: authResp.ReservedEstimate,
+			},
+		)
+		require.NoError(t, err)
+		require.Zero(t, resp.DebitedSats)
+	})
+
+	t.Run("complete stream with usage is unaffected", func(t *testing.T) {
+		completeTail := sseChunk(
+			`{"choices":[],"usage":{"prompt_tokens":10,`+
+				`"completion_tokens":10,"total_tokens":20}}`,
+		) + sseChunk(`[DONE]`)
+
+		resp, err := client.ReportUsage(
+			ctx, &pricesrpc.ReportUsageRequest{
+				TokenId:          tokenID,
+				Path:             path,
+				ServiceName:      "llm",
+				HttpStatus:       200,
+				ContentType:      sseContentType,
+				Complete:         true,
+				ResponseTail:     []byte(completeTail),
+				ReservedEstimate: authResp.ReservedEstimate,
+			},
+		)
+		require.NoError(t, err)
+		// 10*1000 + 10*2000 = 30000 msat = 30 sats.
+		require.EqualValues(t, 30, resp.DebitedSats)
+	})
+}
