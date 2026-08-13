@@ -1726,10 +1726,9 @@ func createProxy(cfg *Config, services []*proxy.Service,
 		}
 		if len(meteredServices) > 0 {
 			mppAuth.SetReusableChargePolicy(
-				func(serviceName string) bool {
-					_, ok := meteredServices[serviceName]
-					return ok
-				},
+				reusableChargePolicyForServices(
+					meteredServices,
+				),
 			)
 		}
 
@@ -2017,4 +2016,30 @@ func allowCORS(handler http.Handler, origins []string) http.Handler {
 		// chain of handlers.
 		handler.ServeHTTP(w, r)
 	})
+}
+
+// reusableChargePolicyForServices builds the predicate deciding which
+// resource names may re-present a charge credential.
+//
+// The authenticator is handed the resource name, which for a dynamically
+// priced service is the service name with the request path appended
+// (Service.ResourceName), so a metered service is recognized by prefix
+// rather than equality: "inference" covers "inference/v1/chat/completions".
+// The separator is required so a service named "inference" does not
+// accidentally cover one named "inference2".
+func reusableChargePolicyForServices(
+	metered map[string]struct{}) func(string) bool {
+
+	return func(resourceName string) bool {
+		for name := range metered {
+			if resourceName == name {
+				return true
+			}
+			if strings.HasPrefix(resourceName, name+"/") {
+				return true
+			}
+		}
+
+		return false
+	}
 }
