@@ -499,6 +499,20 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
+	// The write timeout is applied as a rolling idle window on proxied
+	// responses rather than a single absolute deadline. A streamed
+	// inference response routinely outlives any sane absolute timeout
+	// while writing the whole way through; what the timeout should kill
+	// is a stall, and the proxy pushes the deadline forward on every
+	// write to make it mean exactly that.
+	//
+	// Operators should therefore size writetimeout to the worst-case gap
+	// between writes, not to total response duration: a backend that
+	// legitimately pauses longer than the window between chunks, a
+	// reasoning model thinking silently being the canonical case, is cut
+	// off as a stall even though the client is healthy.
+	a.proxy.SetWriteDeadlineWindow(a.cfg.WriteTimeout)
+
 	handler := http.HandlerFunc(a.proxy.ServeHTTP)
 	a.httpsServer = &http.Server{
 		Addr:         a.cfg.ListenAddr,
@@ -1742,6 +1756,24 @@ func createProxy(cfg *Config, services []*proxy.Service,
 			return nil, nil, err
 		}
 
+		// On metered services the charge credential is the key to a
+		// prepaid usage bundle, so it stays presentable until the
+		// pricer refuses it, exactly like an L402 token. Everywhere
+		// else the spec's strict single-use rule stands.
+		meteredServices := make(map[string]struct{})
+		for _, svc := range services {
+			if svc.DynamicPrice.Enabled && svc.DynamicPrice.Metered {
+				meteredServices[svc.Name] = struct{}{}
+			}
+		}
+		if len(meteredServices) > 0 {
+			mppAuth.SetReusableChargePolicy(
+				reusableChargePolicyForServices(
+					meteredServices,
+				),
+			)
+		}
+
 		// The authenticator runs a background sweep over the records of
 		// spent payments, which the caller stops along with the rest of
 		// the proxy.
@@ -2026,4 +2058,30 @@ func allowCORS(handler http.Handler, origins []string) http.Handler {
 		// chain of handlers.
 		handler.ServeHTTP(w, r)
 	})
+}
+
+// reusableChargePolicyForServices builds the predicate deciding which
+// resource names may re-present a charge credential.
+//
+// The authenticator is handed the resource name, which for a dynamically
+// priced service is the service name with the request path appended
+// (Service.ResourceName), so a metered service is recognized by prefix
+// rather than equality: "inference" covers "inference/v1/chat/completions".
+// The separator is required so a service named "inference" does not
+// accidentally cover one named "inference2".
+func reusableChargePolicyForServices(
+	metered map[string]struct{}) func(string) bool {
+
+	return func(resourceName string) bool {
+		for name := range metered {
+			if resourceName == name {
+				return true
+			}
+			if strings.HasPrefix(resourceName, name+"/") {
+				return true
+			}
+		}
+
+		return false
+	}
 }

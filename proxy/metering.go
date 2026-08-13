@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,9 +15,17 @@ import (
 	"time"
 
 	"github.com/lightninglabs/aperture/l402"
+	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/aperture/pricer"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
 )
+
+// errNoMeteredCredential marks a request that carries no credential the
+// metering pipeline can attribute usage to. Such a request is simply not
+// metered here: it is either unauthenticated, or authenticated under a scheme
+// with its own draw-down accounting, like an MPP session.
+var errNoMeteredCredential = errors.New("no meterable credential on request")
 
 // meteringContextKey is the request context key under which the metering
 // information for an authorized request is stored, so the response modifier
@@ -136,6 +146,109 @@ func l402TokenIDFromAuthHeader(header *http.Header) (string, error) {
 	return identifier.TokenID.String(), nil
 }
 
+// hasPaymentSchemeHeader reports whether the request carries an Authorization
+// header value using the Payment (MPP) scheme. RFC 9110 makes the auth-scheme
+// token case-insensitive, so match it that way.
+func hasPaymentSchemeHeader(header *http.Header) bool {
+	for _, value := range header.Values(l402.HeaderAuthorization) {
+		scheme, _, _ := strings.Cut(value, " ")
+		if strings.EqualFold(scheme, mpp.AuthScheme) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mppChargeTokenIDFromAuthHeader extracts the metering token ID from a
+// Payment charge credential on a request that already passed authentication.
+//
+// The ID is the hex payment hash of the invoice the credential paid, derived
+// from the preimage in the payload. That is the same value the challenge's
+// request carried in methodDetails.paymentHash and the same key the bundle
+// was booked under at mint time, so a charge presented through the Payment
+// door draws down the very bundle its payment purchased. Deriving it from the
+// preimage rather than trusting the echoed request means the ID is backed by
+// the proof of payment itself; the authenticator has already checked the two
+// agree.
+//
+// A session credential yields errNoMeteredCredential: sessions have their own
+// draw-down accounting through the session pricer and must not be double
+// metered here.
+func mppChargeTokenIDFromAuthHeader(header *http.Header) (string, error) {
+	cred, err := mpp.ParseCredential(header)
+	if err != nil {
+		return "", fmt.Errorf("parsing payment credential: %w", err)
+	}
+
+	if cred.Challenge.Intent != mpp.IntentCharge {
+		return "", fmt.Errorf("%w: payment intent %q has its own "+
+			"accounting", errNoMeteredCredential,
+			cred.Challenge.Intent)
+	}
+
+	var payload mpp.ChargePayload
+	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
+		return "", fmt.Errorf("decoding charge payload: %w", err)
+	}
+
+	preimage, err := lntypes.MakePreimageFromStr(payload.Preimage)
+	if err != nil {
+		return "", fmt.Errorf("invalid charge preimage: %w", err)
+	}
+
+	return preimage.Hash().String(), nil
+}
+
+// hasL402CredentialForm reports whether the request presents an L402
+// credential in any of the forms l402.FromHeader accepts: the Authorization
+// header's L402 or LSAT scheme, or a macaroon carried directly in the
+// Macaroon or Grpc-Metadata-Macaroon header. The presence test has to cover
+// all three, because the authenticator does: a token that authenticates
+// through one of the alternate headers but is invisible to metering would be
+// unlimited unmetered access on a metered service.
+func hasL402CredentialForm(header *http.Header) bool {
+	if hasL402SchemeHeader(header) {
+		return true
+	}
+
+	return header.Get(l402.HeaderMacaroon) != "" ||
+		header.Get(l402.HeaderMacaroonMD) != ""
+}
+
+// meteringTokenIDFromAuthHeader resolves the token ID a request's usage is
+// metered under, from whichever credential scheme the request authenticated
+// with. A request that carries no meterable credential at all returns
+// errNoMeteredCredential; a request whose credential fails to parse returns
+// a hard error, since a malformed credential on a metered service must not
+// silently become free unmetered access.
+//
+// The L402 parse is attempted first and unconditionally, mirroring the
+// authenticator: l402.FromHeader reads the token from the Authorization
+// header or from the Macaroon and Grpc-Metadata-Macaroon headers, so gating
+// the parse on the Authorization scheme alone would let a paid token
+// presented through an alternate header authenticate and then walk past
+// metering. A Payment credential is consulted next, so a request that
+// genuinely authenticated through the Payment door is metered under it even
+// when a stray unparseable L402 header rides along.
+func meteringTokenIDFromAuthHeader(header *http.Header) (string, error) {
+	tokenID, l402Err := l402TokenIDFromAuthHeader(header)
+	if l402Err == nil {
+		return tokenID, nil
+	}
+
+	if hasPaymentSchemeHeader(header) {
+		return mppChargeTokenIDFromAuthHeader(header)
+	}
+
+	if hasL402CredentialForm(header) {
+		return "", fmt.Errorf("unparseable L402 credential: %w",
+			l402Err)
+	}
+
+	return "", errNoMeteredCredential
+}
+
 // l402TokenIDFromChallengeHeader extracts the L402 token ID from the macaroon
 // embedded in a freshly minted WWW-Authenticate challenge header.
 func l402TokenIDFromChallengeHeader(header http.Header) (string, error) {
@@ -184,30 +297,30 @@ func (p *Proxy) checkMeteredAccess(w http.ResponseWriter, r *http.Request,
 		return r, true
 	}
 
-	// Only requests carrying an L402 token are metered through the
-	// pricer. Requests authenticated through other schemes (for example
-	// MPP sessions) have their own draw-down accounting.
-	tokenID, err := l402TokenIDFromAuthHeader(&r.Header)
-	if err != nil {
-		// A request with no L402-scheme header at all simply is not
-		// metered here and passes through. But a header that does carry
-		// the L402 scheme yet fails to parse must not silently become
-		// free unmetered access on a metered service.
-		if hasL402SchemeHeader(&r.Header) {
-			log.Errorf("Metered request carries an unparseable "+
-				"L402 token: %v", err)
-			sendDirectResponse(
-				w, r, http.StatusInternalServerError,
-				"malformed L402 token",
-			)
-
-			return r, false
-		}
-
-		log.Tracef("Metering skipped, no L402 token on request: %v",
-			err)
+	// Requests carrying an L402 token or a Payment (MPP) charge
+	// credential are metered through the pricer. Requests authenticated
+	// through other schemes (for example MPP sessions) have their own
+	// draw-down accounting.
+	tokenID, err := meteringTokenIDFromAuthHeader(&r.Header)
+	switch {
+	// A request with no meterable credential at all simply is not metered
+	// here and passes through.
+	case errors.Is(err, errNoMeteredCredential):
+		log.Tracef("Metering skipped: %v", err)
 
 		return r, true
+
+	// A header that does carry a meterable scheme yet fails to parse must
+	// not silently become free unmetered access on a metered service.
+	case err != nil:
+		log.Errorf("Metered request carries an unparseable "+
+			"credential: %v", err)
+		sendDirectResponse(
+			w, r, http.StatusInternalServerError,
+			"malformed credential",
+		)
+
+		return r, false
 	}
 
 	result, err := mp.AuthorizeRequest(
@@ -301,7 +414,66 @@ func notifyChallengeMinted(r *http.Request, target *Service,
 			"challenge for token %s: %w", tokenID, err)
 	}
 
+	// The same 402 may also carry Payment (MPP) charge offers, each minted
+	// from its own invoice. Book those too, keyed by the invoice's payment
+	// hash, which is the identity a charge credential proves with its
+	// preimage at request time. Whichever offer the client pays is the
+	// bundle that gets drawn down; the sibling bookings are never
+	// activated and expire unused, which the pricer already handles.
+	for _, hash := range mppChargeHashesFromChallengeHeader(header) {
+		err = mp.ChallengeMinted(r.Context(), r, hash, target.Name,
+			price)
+		if err != nil {
+			return fmt.Errorf("error notifying pricer of minted "+
+				"payment challenge for token %s: %w", hash,
+				err)
+		}
+	}
+
 	return nil
+}
+
+// mppChargeHashesFromChallengeHeader extracts the payment hashes of every
+// well-formed Payment charge offer in a freshly minted WWW-Authenticate
+// header. A header with no Payment offers, which is every header when MPP is
+// disabled, yields an empty slice.
+func mppChargeHashesFromChallengeHeader(header http.Header) []string {
+	challenges, err := mpp.ParseChallengeHeaders(header)
+	if err != nil {
+		// No Payment offer in the header at all.
+		return nil
+	}
+
+	hashes := make([]string, 0, len(challenges))
+	for _, challenge := range challenges {
+		if challenge.Intent != mpp.IntentCharge {
+			continue
+		}
+
+		var chargeReq mpp.ChargeRequest
+		err := mpp.DecodeRequest(challenge.Request, &chargeReq)
+		if err != nil {
+			log.Warnf("Skipping metering booking for undecodable "+
+				"payment charge offer: %v", err)
+			continue
+		}
+
+		// Normalize through lntypes so the booked key is byte for
+		// byte the one the credential's preimage will derive.
+		hash, err := lntypes.MakeHashFromStr(
+			chargeReq.MethodDetails.PaymentHash,
+		)
+		if err != nil {
+			log.Warnf("Skipping metering booking for payment "+
+				"charge offer with invalid payment hash: %v",
+				err)
+			continue
+		}
+
+		hashes = append(hashes, hash.String())
+	}
+
+	return hashes
 }
 
 // attachUsageObserver wraps the response body of a metered request so the
