@@ -180,7 +180,8 @@ unauthenticated requests.
   regular expressions.
 * **Multiple rules**: All matching rules are evaluated; if any rule denies the
   request, it is rejected. This allows layering global and endpoint-specific
-  limits.
+  limits, or multiple time horizons for the same path expression. A rejected
+  request does not consume capacity from any matching rule.
 * **Protocol-aware responses**: Returns HTTP 429 with `Retry-After` header for
   REST requests, and gRPC `ResourceExhausted` status for gRPC requests.
 
@@ -228,3 +229,29 @@ request is rejected. This allows clients to make quick bursts of requests (up to
 | `requests` | Number of requests allowed per time window. | Yes |
 | `per` | Time window duration (e.g., `1s`, `1m`, `1h`). | Yes |
 | `burst` | Maximum burst size. Defaults to `requests` if not set. | No |
+
+### Enforcement Scope
+
+Rate limiting is an in-process abuse control rather than a distributed quota:
+
+* Each Aperture process keeps independent buckets. Deploying multiple replicas
+  multiplies the effective allowance unless requests use consistent routing.
+* Buckets are held in an LRU cache that defaults to 10,000 entries. Buckets are
+  not persisted. Restarting Aperture, updating a service, or evicting a
+  client-rule entry creates a fresh bucket with full burst capacity. Each
+  matching rule consumes one cache entry per client. A request that matches
+  more rules than the configured cache capacity is rejected because its state
+  cannot be retained safely.
+* Limits are per client; a rule without `pathregexp` covers every path but is
+  still not an aggregate limit shared by all clients.
+* Authenticated L402 requests are keyed by token ID. Auth-whitelisted,
+  authentication-disabled, zero-priced, and other unauthenticated requests are
+  keyed by the masked direct peer IP. Payment/MPP credentials currently also
+  fall back to that IP key.
+* Aperture uses the connection's direct peer address and does not trust
+  forwarded-IP headers. Deployments behind a load balancer should preserve the
+  original source address or account for clients sharing the load balancer's
+  bucket.
+* Authentication is validated before the authenticated token bucket is
+  checked. The limiter protects backend request handling, but does not bound
+  authentication or challenge-generation work.

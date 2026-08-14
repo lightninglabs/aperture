@@ -248,7 +248,6 @@ func New(auth auth.Authenticator, services []*Service,
 		priorityLocalServices: priorityLocalServices,
 		localServices:         localServices,
 		authenticator:         auth,
-		services:              services,
 		blocklist:             blMap,
 	}
 	err := proxy.UpdateServices(services)
@@ -355,23 +354,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// accordingly.
 	authLevel := target.AuthRequired(r)
 
-	// checkRateLimit is a helper that checks rate limits after determining
-	// the authentication status. This ensures we only use L402 token IDs
-	// for authenticated requests, preventing DoS via garbage tokens.
-	checkRateLimit := func(authenticated bool) bool {
+	// reserveRateLimit provisionally admits a request. Most paths commit
+	// immediately through checkRateLimit; the freebie path can cancel the
+	// admission if updating its quota store fails.
+	reserveRateLimit := func(authenticated bool) (*rateLimitAdmission, bool) {
 		if target.rateLimiter == nil {
-			return true
+			return nil, true
 		}
 		key := ExtractRateLimitKey(r, remoteIP, authenticated)
-		allowed, retryAfter := target.rateLimiter.Allow(r, key)
+		admission, allowed, retryAfter := target.rateLimiter.reserve(r, key)
 		if !allowed {
-			prefixLog.Infof("Rate limit exceeded for key %s, "+
-				"retry after %v", key, retryAfter)
+			prefixLog.Infof("Rate limit exceeded, retry after %v",
+				retryAfter)
 			addCorsHeaders(w.Header())
 			sendRateLimitResponse(w, r, retryAfter)
 		}
 
-		return allowed
+		return admission, allowed
+	}
+
+	// checkRateLimit is a helper that checks rate limits after determining
+	// the authentication status. This ensures we only use L402 token IDs
+	// for authenticated requests, preventing DoS via garbage tokens.
+	checkRateLimit := func(authenticated bool) bool {
+		admission, allowed := reserveRateLimit(authenticated)
+		if !allowed {
+			return false
+		}
+
+		admission.Commit()
+
+		return true
 	}
 
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
@@ -410,8 +423,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// If the price returned is zero, then break out of the
-			// switch statement and allow access to the service.
+			// switch statement and allow access to the service. The
+			// request is unauthenticated, so rate limit it by IP first.
 			if price == 0 {
+				if !checkRateLimit(false) {
+					return
+				}
+
 				break
 			}
 
@@ -482,10 +500,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-				// If the price returned is zero, then break
-				// out of the switch statement and allow access
-				// to the service.
+				// If the price returned is zero, then break out of
+				// the switch statement and allow access to the
+				// service. The request is unauthenticated, so rate
+				// limit it by IP first.
 				if price == 0 {
+					if !checkRateLimit(false) {
+						return
+					}
+
 					break
 				}
 
@@ -494,7 +517,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				)
 				return
 			}
-			_, err = target.freebieDB.TallyFreebie(r, remoteIP)
+			// Provisionally reserve rate-limit capacity before tallying the
+			// freebie so a rejected request does not consume both quotas. Keep
+			// the defensive cancellation in this short-lived function so the
+			// admission isn't retained across the backend response.
+			var allowed bool
+			allowed, err = func() (bool, error) {
+				admission, allowed := reserveRateLimit(false)
+				if !allowed {
+					return false, nil
+				}
+				defer admission.Cancel()
+
+				_, err := target.freebieDB.TallyFreebie(r, remoteIP)
+				if err != nil {
+					return false, err
+				}
+
+				admission.Commit()
+
+				return true, nil
+			}()
 			if err != nil {
 				prefixLog.Errorf("Error updating freebie db: "+
 					"%v", err)
@@ -504,11 +547,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				)
 				return
 			}
-
-			// Unauthenticated freebie user, rate limit by IP.
-			if !checkRateLimit(false) {
+			if !allowed {
 				return
 			}
+
 		} else {
 			// Authenticated user on freebie path. Inject receipt
 			// headers and apply rate limit by L402 token.
@@ -549,13 +591,22 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
 func (p *Proxy) UpdateServices(services []*Service) error {
-	err := prepareServices(services)
+	preparedServices, err := cloneServices(services)
 	if err != nil {
 		return err
 	}
 
-	certPool, err := certPool(services)
+	err = prepareServices(preparedServices)
 	if err != nil {
+		closePreparedServicePricers(preparedServices)
+
+		return err
+	}
+
+	certPool, err := certPool(preparedServices)
+	if err != nil {
+		closePreparedServicePricers(preparedServices)
+
 		return err
 	}
 	transport := &http.Transport{
@@ -569,7 +620,9 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 	p.servicesMtx.Lock()
 	defer p.servicesMtx.Unlock()
 
-	p.services = services
+	oldServices := p.services
+	copyPreparedServiceConfig(services, preparedServices)
+	p.services = preparedServices
 
 	p.proxyBackend = &httputil.ReverseProxy{
 		Director:  p.director,
@@ -635,7 +688,32 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 		FlushInterval: -1,
 	}
 
+	resetRateLimitCacheMetrics(oldServices, preparedServices)
+
 	return nil
+}
+
+// closePreparedServicePricers releases pricers created for a service snapshot
+// that could not be published.
+func closePreparedServicePricers(services []*Service) {
+	for _, service := range services {
+		if service == nil || service.pricer == nil {
+			continue
+		}
+
+		if err := service.pricer.Close(); err != nil {
+			log.Errorf("Unable to close unpublished pricer for service "+
+				"%s: %v", service.Name, err)
+		}
+	}
+}
+
+// resetRateLimitCacheMetrics replaces the active limiters' contributions to the
+// process-wide cache gauge while the service write lock is held. At this point
+// all requests using the old snapshot have drained, so an old limiter cannot
+// publish another size after being removed.
+func resetRateLimitCacheMetrics(oldServices, newServices []*Service) {
+	managedRateLimitCacheMetrics.replace(oldServices, newServices)
 }
 
 // Close cleans up the Proxy by closing any remaining open connections.
@@ -645,6 +723,10 @@ func (p *Proxy) Close() error {
 
 	var returnErr error
 	for _, s := range p.services {
+		if s.rateLimiter != nil {
+			s.rateLimiter.removeCacheMetric()
+		}
+
 		if err := s.pricer.Close(); err != nil {
 			log.Errorf("error while closing the pricer of "+
 				"service %s: %v", s.Name, err)
