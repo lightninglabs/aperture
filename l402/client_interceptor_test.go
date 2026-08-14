@@ -26,7 +26,7 @@ type interceptTestCase struct {
 	resetCb             func(addL402 bool)
 	expectLndCall       bool
 	expectSecondLndCall bool
-	sendPaymentCb       func(*testing.T, test.PaymentChannelMessage)
+	sendPaymentCb       func(*testing.T, test.RouterPaymentChannelMessage)
 	trackPaymentCb      func(*testing.T, test.TrackPaymentMessage)
 	expectToken         bool
 	expectInterceptErr  string
@@ -103,17 +103,18 @@ var (
 		},
 		expectLndCall: true,
 		sendPaymentCb: func(t *testing.T,
-			msg test.PaymentChannelMessage) {
+			msg test.RouterPaymentChannelMessage) {
 
 			require.Len(t, callMD, 0)
 
 			// The next call to the "backend" shouldn't return an
 			// error.
 			resetBackend(nil, []string{})
-			msg.Done <- lndclient.PaymentResult{
+			msg.Updates <- lndclient.PaymentStatus{
+				State:    lnrpc.Payment_SUCCEEDED,
 				Preimage: paidPreimage,
-				PaidAmt:  123,
-				PaidFee:  345,
+				Value:    123_000,
+				Fee:      345_000,
 			}
 		},
 		trackPaymentCb: func(t *testing.T,
@@ -149,7 +150,7 @@ var (
 		},
 		expectLndCall: true,
 		sendPaymentCb: func(t *testing.T,
-			msg test.PaymentChannelMessage) {
+			msg test.RouterPaymentChannelMessage) {
 
 			t.Fatal("didn't expect call to sendPayment")
 		},
@@ -181,17 +182,18 @@ var (
 		expectLndCall:       true,
 		expectSecondLndCall: true,
 		sendPaymentCb: func(t *testing.T,
-			msg test.PaymentChannelMessage) {
+			msg test.RouterPaymentChannelMessage) {
 
 			require.Len(t, callMD, 0)
 
 			// The next call to the "backend" shouldn't return an
 			// error.
 			resetBackend(nil, []string{})
-			msg.Done <- lndclient.PaymentResult{
+			msg.Updates <- lndclient.PaymentStatus{
+				State:    lnrpc.Payment_SUCCEEDED,
 				Preimage: paidPreimage,
-				PaidAmt:  123,
-				PaidFee:  345,
+				Value:    123_000,
+				Fee:      345_000,
 			}
 		},
 		trackPaymentCb: func(t *testing.T,
@@ -361,7 +363,7 @@ func testInterceptor(t *testing.T, tc interceptTestCase, addL402 bool,
 	// Simulate payment related calls to lnd, if there are any expected.
 	if tc.expectLndCall {
 		select {
-		case payment := <-lnd.SendPaymentChannel:
+		case payment := <-lnd.RouterSendPaymentChannel:
 			tc.sendPaymentCb(t, payment)
 
 		case track := <-lnd.TrackPaymentChannel:
@@ -373,7 +375,7 @@ func testInterceptor(t *testing.T, tc interceptTestCase, addL402 bool,
 	}
 	if tc.expectSecondLndCall {
 		select {
-		case payment := <-lnd.SendPaymentChannel:
+		case payment := <-lnd.RouterSendPaymentChannel:
 			tc.sendPaymentCb(t, payment)
 
 		case track := <-lnd.TrackPaymentChannel:

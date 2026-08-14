@@ -388,31 +388,55 @@ func (i *ClientInterceptor) payL402Token(ctx context.Context, md *metadata.MD) (
 	}
 
 	// Pay invoice now and wait for the result to arrive or the main context
-	// being canceled.
+	// being canceled. The payment is dispatched through lnd's router
+	// subserver (SendPaymentV2), as the legacy SendPaymentSync RPC that
+	// was used previously is deprecated and payments made through it can
+	// fail to initiate on recent lnd versions.
 	payCtx, cancel := context.WithTimeout(ctx, PaymentTimeout)
 	defer cancel()
-	respChan := i.lnd.Client.PayInvoice(
-		payCtx, invoiceStr, i.maxFee, nil,
+	payStatusChan, payErrChan, err := i.lnd.Router.SendPayment(
+		payCtx, lndclient.SendPaymentRequest{
+			Invoice: invoiceStr,
+			MaxFee:  i.maxFee,
+			Timeout: PaymentTimeout,
+		},
 	)
-	select {
-	case result := <-respChan:
-		if result.Err != nil {
-			return nil, result.Err
+	if err != nil {
+		return nil, fmt.Errorf("unable to dispatch payment: %v", err)
+	}
+
+	for {
+		select {
+		case result := <-payStatusChan:
+			switch result.State {
+			// The payment was successful, we have all the
+			// information we need and can return the fully paid
+			// token.
+			case lnrpc.Payment_SUCCEEDED:
+				token.Preimage = result.Preimage
+				token.AmountPaid = result.Value
+				token.RoutingFeePaid = result.Fee
+				return token, i.store.StoreToken(token)
+
+			case lnrpc.Payment_FAILED:
+				return nil, fmt.Errorf("payment failed: %v",
+					result.FailureReason)
+
+			// Any other state means the payment is still in
+			// flight, we keep waiting for a terminal update.
+			}
+
+		case err := <-payErrChan:
+			return nil, fmt.Errorf("error paying invoice: %v", err)
+
+		case <-payCtx.Done():
+			return nil, fmt.Errorf("payment timed out. try again "+
+				"to track payment. %s", manualRetryHint)
+
+		case <-ctx.Done():
+			return nil, fmt.Errorf("parent context canceled. try "+
+				"again to track payment. %s", manualRetryHint)
 		}
-		token.Preimage = result.Preimage
-		token.AmountPaid = lnwire.NewMSatFromSatoshis(result.PaidAmt)
-		token.RoutingFeePaid = lnwire.NewMSatFromSatoshis(
-			result.PaidFee,
-		)
-		return token, i.store.StoreToken(token)
-
-	case <-payCtx.Done():
-		return nil, fmt.Errorf("payment timed out. try again to track "+
-			"payment. %s", manualRetryHint)
-
-	case <-ctx.Done():
-		return nil, fmt.Errorf("parent context canceled. try again to"+
-			"track payment. %s", manualRetryHint)
 	}
 }
 
