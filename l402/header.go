@@ -42,7 +42,13 @@ var (
 //
 // If only the macaroon is sent in header 2 or three then it is expected to have
 // a caveat with the preimage attached to it.
-func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, error) {
+//
+// The returned discharge macaroons will be non-nil when the binary-encoded
+// macaroon data contains more than one macaroon (as per the macaroon.Slice
+// convention, the first is the root macaroon and the rest are discharges for
+// its third-party caveats).
+func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage,
+	[]*macaroon.Macaroon, error) {
 	var authHeader string
 
 	switch {
@@ -63,32 +69,50 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		}
 
 		if len(matches) != 4 {
-			return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
-				"auth header format: %s", authHeader)
+			return nil, lntypes.Preimage{}, nil,
+				fmt.Errorf("invalid auth header "+
+					"format: %s", authHeader)
 		}
 
 		// Decode the content of the two parts of the header value.
 		macBase64, preimageHex := matches[2], matches[3]
 		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
-				"decode of macaroon failed: %v", err)
+			return nil, lntypes.Preimage{}, nil,
+				fmt.Errorf("base64 decode of macaroon "+
+					"failed: %v", err)
 		}
-		mac := &macaroon.Macaroon{}
-		err = mac.UnmarshalBinary(macBytes)
-		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
-				"unmarshal macaroon: %v", err)
+
+		// Use Slice to unmarshal so we can extract discharge
+		// macaroons if present. By convention the first macaroon
+		// is the root and the rest are discharges.
+		var slice macaroon.Slice
+		if err := slice.UnmarshalBinary(macBytes); err != nil {
+			return nil, lntypes.Preimage{}, nil,
+				fmt.Errorf("unable to unmarshal "+
+					"macaroon: %v", err)
 		}
+		if len(slice) == 0 {
+			return nil, lntypes.Preimage{}, nil,
+				fmt.Errorf("no macaroon found in " +
+					"auth header")
+		}
+		mac := slice[0]
+		var discharges []*macaroon.Macaroon
+		if len(slice) > 1 {
+			discharges = slice[1:]
+		}
+
 		preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("hex "+
-				"decode of preimage failed: %v", err)
+			return nil, lntypes.Preimage{}, nil,
+				fmt.Errorf("hex decode of preimage "+
+					"failed: %v", err)
 		}
 
 		// All done, we don't need to extract anything from the
 		// macaroon since the preimage was presented separately.
-		return mac, preimage, nil
+		return mac, preimage, discharges, nil
 
 	// Header field 2: Contains only the macaroon.
 	case header.Get(HeaderMacaroonMD) != "":
@@ -99,43 +123,60 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		authHeader = header.Get(HeaderMacaroon)
 
 	default:
-		return nil, lntypes.Preimage{}, fmt.Errorf("no auth header " +
-			"provided")
+		return nil, lntypes.Preimage{}, nil, fmt.Errorf(
+			"no auth header provided",
+		)
 	}
 
 	// For case 2 and 3, we need to actually unmarshal the macaroon to
-	// extract the preimage.
+	// extract the preimage. Use Slice to support discharge macaroons.
 	macBytes, err := hex.DecodeString(authHeader)
 	if err != nil {
-		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
-			"macaroon failed: %v", err)
+		return nil, lntypes.Preimage{}, nil, fmt.Errorf("hex decode "+
+			"of macaroon failed: %v", err)
 	}
-	mac := &macaroon.Macaroon{}
-	err = mac.UnmarshalBinary(macBytes)
-	if err != nil {
-		return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
+	var slice macaroon.Slice
+	if err := slice.UnmarshalBinary(macBytes); err != nil {
+		return nil, lntypes.Preimage{}, nil, fmt.Errorf("unable to "+
 			"unmarshal macaroon: %v", err)
 	}
+	if len(slice) == 0 {
+		return nil, lntypes.Preimage{}, nil, fmt.Errorf(
+			"no macaroon found in header",
+		)
+	}
+	mac := slice[0]
+	var discharges []*macaroon.Macaroon
+	if len(slice) > 1 {
+		discharges = slice[1:]
+	}
+
 	preimageHex, ok := HasCaveat(mac, PreimageKey)
 	if !ok {
-		return nil, lntypes.Preimage{}, errors.New("preimage caveat " +
-			"not found")
+		return nil, lntypes.Preimage{}, nil, errors.New(
+			"preimage caveat not found",
+		)
 	}
 	preimage, err := lntypes.MakePreimageFromStr(preimageHex)
 	if err != nil {
-		return nil, lntypes.Preimage{}, fmt.Errorf("hex decode of "+
-			"preimage failed: %v", err)
+		return nil, lntypes.Preimage{}, nil, fmt.Errorf("hex decode "+
+			"of preimage failed: %v", err)
 	}
 
-	return mac, preimage, nil
+	return mac, preimage, discharges, nil
 }
 
 // SetHeader sets the provided authentication elements as the default/standard
-// HTTP header for the L402 protocol.
+// HTTP header for the L402 protocol. If discharges are provided, they are
+// serialized alongside the root macaroon using the macaroon.Slice convention.
 func SetHeader(header *http.Header, mac *macaroon.Macaroon,
-	preimage fmt.Stringer) error {
+	preimage fmt.Stringer, discharges []*macaroon.Macaroon) error {
 
-	macBytes, err := mac.MarshalBinary()
+	// Build a Slice with the root macaroon first, followed by any
+	// discharge macaroons, then serialize.
+	slice := macaroon.Slice{mac}
+	slice = append(slice, discharges...)
+	macBytes, err := slice.MarshalBinary()
 	if err != nil {
 		return err
 	}

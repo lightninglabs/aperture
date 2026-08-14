@@ -297,6 +297,10 @@ type VerificationParams struct {
 	// TargetService is the target service a user of an L402 is attempting
 	// to access.
 	TargetService string
+
+	// Discharges is an optional set of discharge macaroons that should be
+	// provided when verifying a macaroon with third-party caveats.
+	Discharges []*macaroon.Macaroon
 }
 
 // VerifyL402 attempts to verify an L402 with the given parameters.
@@ -321,7 +325,9 @@ func (m *Mint) VerifyL402(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	rawCaveats, err := params.Macaroon.VerifySignature(secret[:], nil)
+	rawCaveats, err := params.Macaroon.VerifySignature(
+		secret[:], params.Discharges,
+	)
 	if err != nil {
 		return err
 	}
