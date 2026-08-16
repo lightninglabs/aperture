@@ -151,33 +151,41 @@ func getAdminClient() (adminrpc.AdminClient, func(), error) {
 	case flags.insecure:
 		transportCreds = grpcInsecure.NewCredentials()
 
-	case flags.tlsCert != "":
+	default:
+		// Try loading the TLS certificate from the configured
+		// path. When the file exists we pin to it; otherwise we
+		// fall through to the system certificate pool (e.g. for
+		// Let's Encrypt certs on a remote server).
 		certPath := expandPath(flags.tlsCert)
 		certBytes, err := os.ReadFile(certPath)
-		if err != nil {
+
+		switch {
+		case err == nil:
+			certPool := x509.NewCertPool()
+			if !certPool.AppendCertsFromPEM(certBytes) {
+				return nil, nil, ErrConnectionWrap(
+					fmt.Errorf("unable to parse "+
+						"TLS cert"),
+				)
+			}
+
+			transportCreds = credentials.NewTLS(&tls.Config{
+				RootCAs:    certPool,
+				MinVersion: tls.VersionTLS12,
+			})
+
+		case os.IsNotExist(err):
+			// Certificate not found at the default path,
+			// fall through to system cert pool.
+			transportCreds = credentials.NewTLS(&tls.Config{
+				MinVersion: tls.VersionTLS12,
+			})
+
+		default:
 			return nil, nil, ErrConnectionWrap(fmt.Errorf(
 				"unable to read TLS cert: %w", err,
 			))
 		}
-
-		certPool := x509.NewCertPool()
-		if !certPool.AppendCertsFromPEM(certBytes) {
-			return nil, nil, ErrConnectionWrap(fmt.Errorf(
-				"unable to parse TLS cert",
-			))
-		}
-
-		transportCreds = credentials.NewTLS(&tls.Config{
-			RootCAs:    certPool,
-			MinVersion: tls.VersionTLS12,
-		})
-
-	default:
-		// Use system certificate pool for publicly trusted
-		// certs (e.g. Let's Encrypt).
-		transportCreds = credentials.NewTLS(&tls.Config{
-			MinVersion: tls.VersionTLS12,
-		})
 	}
 
 	opts := []grpc.DialOption{
