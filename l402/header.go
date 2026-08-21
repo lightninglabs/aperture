@@ -1,12 +1,14 @@
 package l402
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/lightningnetwork/lnd/lntypes"
 	"gopkg.in/macaroon.v2"
@@ -27,7 +29,17 @@ const (
 )
 
 var (
-	authRegex        = regexp.MustCompile("(LSAT|L402) (.*?):([a-f0-9]{64})")
+	// authRegex matches the supported Authorization credential format:
+	//
+	//     (LSAT / L402) 1*SP base64(macaroon) ":" 1*HEXDIG
+	//
+	// The L402 specification also allows multiple comma-separated
+	// macaroons. Aperture currently supports exactly one macaroon per
+	// credential.
+	authRegex = regexp.MustCompile(
+		"^(?i:(LSAT|L402))[ ]+([A-Za-z0-9+/=]+):" +
+			"([0-9a-fA-F]+)$",
+	)
 	authFormatLegacy = "LSAT %s:%s"
 	authFormat       = "L402 %s:%s"
 )
@@ -49,41 +61,66 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 	// Header field 1 contains the macaroon and the preimage as distinct
 	// values separated by a colon.
 	case header.Get(HeaderAuthorization) != "":
-		// Parse the content of the header field and check that it is in
-		// the correct format.
-		var matches []string
+		var (
+			mac         *macaroon.Macaroon
+			macBytes    []byte
+			preimage    lntypes.Preimage
+			seenSchemes = make(map[string]struct{}, 2)
+		)
+
 		authHeaders := header.Values(HeaderAuthorization)
 		for _, authHeader := range authHeaders {
 			log.Debugf("Trying to authorize with header value "+
 				"[%s].", authHeader)
-			matches = authRegex.FindStringSubmatch(authHeader)
+			matches := authRegex.FindStringSubmatch(authHeader)
 			if len(matches) != 4 {
-				continue
+				return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
+					"auth header format: %s", authHeader)
 			}
-		}
 
-		if len(matches) != 4 {
-			return nil, lntypes.Preimage{}, fmt.Errorf("invalid "+
-				"auth header format: %s", authHeader)
-		}
+			scheme, macBase64, preimageHex := strings.ToUpper(matches[1]),
+				matches[2], matches[3]
+			if _, ok := seenSchemes[scheme]; ok {
+				return nil, lntypes.Preimage{}, fmt.Errorf(
+					"duplicate %s auth header", scheme,
+				)
+			}
+			seenSchemes[scheme] = struct{}{}
 
-		// Decode the content of the two parts of the header value.
-		macBase64, preimageHex := matches[2], matches[3]
-		macBytes, err := base64.StdEncoding.DecodeString(macBase64)
-		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
-				"decode of macaroon failed: %v", err)
-		}
-		mac := &macaroon.Macaroon{}
-		err = mac.UnmarshalBinary(macBytes)
-		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
-				"unmarshal macaroon: %v", err)
-		}
-		preimage, err := lntypes.MakePreimageFromStr(preimageHex)
-		if err != nil {
-			return nil, lntypes.Preimage{}, fmt.Errorf("hex "+
-				"decode of preimage failed: %v", err)
+			currentMacBytes, err := base64.StdEncoding.DecodeString(
+				macBase64,
+			)
+			if err != nil {
+				return nil, lntypes.Preimage{}, fmt.Errorf("base64 "+
+					"decode of macaroon failed: %v", err)
+			}
+
+			currentMac := &macaroon.Macaroon{}
+			err = currentMac.UnmarshalBinary(currentMacBytes)
+			if err != nil {
+				return nil, lntypes.Preimage{}, fmt.Errorf("unable to "+
+					"unmarshal macaroon: %v", err)
+			}
+
+			currentPreimage, err := lntypes.MakePreimageFromStr(
+				preimageHex,
+			)
+			if err != nil {
+				return nil, lntypes.Preimage{}, fmt.Errorf("hex "+
+					"decode of preimage failed: %v", err)
+			}
+
+			if mac == nil {
+				mac = currentMac
+				macBytes = currentMacBytes
+				preimage = currentPreimage
+			} else if !bytes.Equal(macBytes, currentMacBytes) ||
+				preimage != currentPreimage {
+
+				return nil, lntypes.Preimage{}, errors.New(
+					"authorization credentials do not match",
+				)
+			}
 		}
 
 		// All done, we don't need to extract anything from the
