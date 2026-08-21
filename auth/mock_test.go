@@ -2,6 +2,8 @@ package auth_test
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
@@ -13,6 +15,7 @@ import (
 )
 
 type mockMint struct {
+	rejectMacaroonHex string
 }
 
 var _ auth.Minter = (*mockMint)(nil)
@@ -24,6 +27,16 @@ func (m *mockMint) MintL402(_ context.Context,
 }
 
 func (m *mockMint) VerifyL402(_ context.Context, p *mint.VerificationParams) error {
+	if m.rejectMacaroonHex != "" {
+		macBytes, err := p.Macaroon.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		if hex.EncodeToString(macBytes) == m.rejectMacaroonHex {
+			return errors.New("macaroon rejected")
+		}
+	}
+
 	return nil
 }
 
