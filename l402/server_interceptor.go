@@ -92,10 +92,13 @@ func tokenFromContext(ctx context.Context) (*TokenID, error) {
 	}
 	log.Debugf("Auth header present in request: %s",
 		md.Get(HeaderAuthorization))
-	macaroon, _, err := FromHeader(header)
+	macaroons, _, err := FromHeader(header)
 	if err != nil {
 		return nil, fmt.Errorf("auth header extraction failed: %v", err)
 	}
+
+	// TODO: Be able to accept multiple macaroons
+	macaroon := macaroons[0]
 
 	// If there is an L402, decode and add it to the context.
 	identifier, err := DecodeIdentifier(bytes.NewBuffer(macaroon.Id()))
