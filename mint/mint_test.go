@@ -151,12 +151,17 @@ func TestTamperedL402(t *testing.T) {
 		t.Fatalf("unable to verify L402: %v", err)
 	}
 
-	// Create a tampered L402 from the valid one.
+	// Create a tampered L402 from the valid one. Flip the last byte of
+	// the signature rather than overwriting it with a fixed value: the
+	// signature is effectively random, so a fixed overwrite has a 1/256
+	// chance of writing back the same byte it started with, making the
+	// tamper a no-op and this test flaky. XOR guarantees the byte always
+	// changes regardless of its original value.
 	macBytes, err := mac.MarshalBinary()
 	if err != nil {
 		t.Fatalf("unable to serialize macaroon: %v", err)
 	}
-	macBytes[len(macBytes)-1] = 0x00
+	macBytes[len(macBytes)-1] ^= 0xFF
 	var tampered macaroon.Macaroon
 	if err := tampered.UnmarshalBinary(macBytes); err != nil {
 		t.Fatalf("unable to deserialize macaroon: %v", err)
