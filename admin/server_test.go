@@ -328,6 +328,125 @@ func TestDeleteService(t *testing.T) {
 	require.Contains(t, err.Error(), "not found")
 }
 
+// TestConcurrentServiceMutations checks that a service mutation waits for one
+// that is still applying its change instead of reading the service list
+// underneath it, so that no change is lost.
+func TestConcurrentServiceMutations(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	services := []*proxy.Service{
+		{
+			Name:     "test-svc",
+			Address:  "localhost:8080",
+			Protocol: "http",
+			Price:    100,
+		},
+		{
+			Name:     "old-svc",
+			Address:  "localhost:8081",
+			Protocol: "http",
+			Price:    100,
+		},
+	}
+
+	// Report every read of the service list, and hold the first update
+	// until the test releases it.
+	listed := make(chan struct{}, 1)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var holdFirst sync.Once
+	s := NewServer(ServerConfig{
+		Services: func() []*proxy.Service {
+			select {
+			case listed <- struct{}{}:
+			default:
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			cpy := make([]*proxy.Service, len(services))
+			copy(cpy, services)
+			return cpy
+		},
+		UpdateServices: func(updated []*proxy.Service) error {
+			holdFirst.Do(func() {
+				close(entered)
+				<-release
+			})
+
+			mu.Lock()
+			defer mu.Unlock()
+			services = updated
+			return nil
+		},
+	})
+
+	// Start a create and hold it after it has read the list.
+	createErr := make(chan error, 1)
+	go func() {
+		_, err := s.CreateService(context.Background(),
+			&adminrpc.CreateServiceRequest{
+				Name:       "new-svc",
+				Address:    "localhost:9999",
+				PathRegexp: "^/api/new/.*",
+				Price:      300,
+			},
+		)
+		createErr <- err
+	}()
+	<-entered
+	<-listed
+
+	// Start an update and a delete while the create is still applying
+	// its change.
+	price := int64(200)
+	otherErrs := make(chan error, 2)
+	go func() {
+		_, err := s.UpdateService(context.Background(),
+			&adminrpc.UpdateServiceRequest{
+				Name:  "test-svc",
+				Price: &price,
+			},
+		)
+		otherErrs <- err
+	}()
+	go func() {
+		_, err := s.DeleteService(context.Background(),
+			&adminrpc.DeleteServiceRequest{Name: "old-svc"},
+		)
+		otherErrs <- err
+	}()
+
+	// Neither may read the list before the create has finished, or it
+	// would work from a list without the new service.
+	select {
+	case <-listed:
+		t.Error("a mutation read the service list while another " +
+			"was still applying its change")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, <-createErr)
+	require.NoError(t, <-otherErrs)
+	require.NoError(t, <-otherErrs)
+
+	// All three changes must survive.
+	resp, err := s.ListServices(
+		context.Background(), &adminrpc.ListServicesRequest{},
+	)
+	require.NoError(t, err)
+	prices := make(map[string]int64)
+	for _, svc := range resp.Services {
+		prices[svc.Name] = svc.Price
+	}
+	require.Equal(t, map[string]int64{
+		"test-svc": 200,
+		"new-svc":  300,
+	}, prices)
+}
+
 func TestListTransactionsNoStore(t *testing.T) {
 	t.Parallel()
 
