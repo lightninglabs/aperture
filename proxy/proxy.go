@@ -555,6 +555,11 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 		}
 
 		scheme = auth.AuthSchemeL402
+		if target.DynamicPrice.Enabled {
+			resourceName = publicResourceName(
+				header, target.Name, resourceName,
+			)
+		}
 
 		// A direct authenticator cannot select a different scheme, so
 		// public requests require an L402 authenticator.
@@ -572,6 +577,40 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 	}
 
 	return p.authenticator.Accept(header, resourceName)
+}
+
+// publicResourceName returns a signed resource candidate from the same service.
+// Authentication still verifies the macaroon against the returned resource
+// before any identity is trusted.
+//
+// A dynamic-price resource is named after its service followed by the request
+// path. ValidateServiceName keeps slashes out of service names, so a name that
+// equals this service's name, or starts with it and a slash, cannot have been
+// issued by any other service. Without that rule a token name could be
+// ambiguous between this service and another, and neither this check nor the
+// fallback, which is the requested resource itself, could tell them apart.
+func publicResourceName(header *http.Header, serviceName,
+	fallback string) string {
+
+	mac, _, err := l402.FromHeader(header)
+	if err != nil {
+		return fallback
+	}
+	services, err := l402.ServicesFromMacaroon(mac)
+	if err != nil {
+		return fallback
+	}
+
+	resourcePrefix := serviceName + "/"
+	for _, service := range services {
+		if service.Name == serviceName ||
+			strings.HasPrefix(service.Name, resourcePrefix) {
+
+			return service.Name
+		}
+	}
+
+	return fallback
 }
 
 // UpdateServices re-configures the proxy to use a new set of backend services.

@@ -79,6 +79,9 @@ func TestPublicAuthenticationValidation(t *testing.T) {
 		unsettled        bool
 		expired          bool
 		otherService     bool
+		dynamic          bool
+		protected        bool
+		tokenService     string
 		wantIdentity     bool
 		wantInvoiceCalls int
 	}{
@@ -86,6 +89,27 @@ func TestPublicAuthenticationValidation(t *testing.T) {
 			name:             "valid paid token",
 			wantIdentity:     true,
 			wantInvoiceCalls: 1,
+		},
+		{
+			name:             "valid dynamic resource token",
+			dynamic:          true,
+			wantIdentity:     true,
+			wantInvoiceCalls: 1,
+		},
+		{
+			name:      "dynamic token cannot authorize another resource",
+			dynamic:   true,
+			protected: true,
+		},
+		{
+			name:         "dynamic token for another service",
+			dynamic:      true,
+			tokenService: "another-service",
+		},
+		{
+			name:         "dynamic token sharing a name prefix",
+			dynamic:      true,
+			tokenService: serviceName + "x/paid",
 		},
 		{
 			name:   "forged token claiming the same identity",
@@ -125,6 +149,12 @@ func TestPublicAuthenticationValidation(t *testing.T) {
 			require.NoError(t, err)
 
 			allowedService := serviceName
+			if test.dynamic {
+				allowedService += "/paid"
+			}
+			if test.tokenService != "" {
+				allowedService = test.tokenService
+			}
 			if test.otherService {
 				allowedService = "another-service"
 			}
@@ -139,7 +169,7 @@ func TestPublicAuthenticationValidation(t *testing.T) {
 			}
 			require.NoError(t, l402.AddFirstPartyCaveats(
 				mac, services,
-				l402.NewTimeoutCaveat(serviceName, timeout, now),
+				l402.NewTimeoutCaveat(allowedService, timeout, now),
 			))
 
 			checker := &publicValidationInvoiceChecker{
@@ -191,6 +221,17 @@ func TestPublicAuthenticationValidation(t *testing.T) {
 				Price:              1,
 				AuthWhitelistPaths: []string{"^/quote$"},
 			}
+			if test.protected {
+				service.AuthWhitelistPaths = nil
+				service.AuthSkipInvoiceCreationPaths = []string{
+					"^/quote$",
+				}
+			}
+			service.DynamicPrice.Enabled = test.dynamic
+			service.DynamicPrice.Insecure = test.dynamic
+			if test.dynamic {
+				service.DynamicPrice.GRPCAddress = "unused"
+			}
 			p, err := proxy.New(
 				authenticator, []*proxy.Service{service}, nil, nil,
 			)
@@ -210,6 +251,14 @@ func TestPublicAuthenticationValidation(t *testing.T) {
 			))
 			response := httptest.NewRecorder()
 			p.ServeHTTP(response, req)
+
+			if test.protected {
+				require.Equal(
+					t, http.StatusUnauthorized, response.Code,
+				)
+				require.Empty(t, seen)
+				return
+			}
 
 			require.Equal(t, http.StatusNoContent, response.Code)
 			require.Empty(t, response.Header().Values("WWW-Authenticate"))

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/macaroon.v2"
 )
 
 const (
@@ -124,6 +126,17 @@ func decodeServicesCaveatValue(s string) ([]Service, error) {
 	}
 
 	return services, nil
+}
+
+// ServicesFromMacaroon returns the services in the macaroon's final services
+// caveat. The macaroon must still be verified before these values are trusted.
+func ServicesFromMacaroon(mac *macaroon.Macaroon) ([]Service, error) {
+	value, ok := HasCaveat(mac, CondServices)
+	if !ok {
+		return nil, ErrNoServices
+	}
+
+	return decodeServicesCaveatValue(value)
 }
 
 // NewCapabilitiesCaveat creates a new capabilities caveat for the given

@@ -3,6 +3,9 @@ package l402
 import (
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"gopkg.in/macaroon.v2"
 )
 
 // TestServicesCaveatSerialization ensures that we can properly encode/decode
@@ -79,4 +82,30 @@ func TestServicesCaveatSerialization(t *testing.T) {
 			return
 		}
 	}
+}
+
+// TestServicesFromMacaroon checks that the final services caveat is returned.
+func TestServicesFromMacaroon(t *testing.T) {
+	t.Parallel()
+
+	mac, err := macaroon.New(
+		[]byte("root key"), []byte("id"), "test",
+		macaroon.LatestVersion,
+	)
+	require.NoError(t, err)
+
+	_, err = ServicesFromMacaroon(mac)
+	require.ErrorIs(t, err, ErrNoServices)
+
+	first, err := NewServicesCaveat(
+		Service{Name: "one"}, Service{Name: "two"},
+	)
+	require.NoError(t, err)
+	last, err := NewServicesCaveat(Service{Name: "two"})
+	require.NoError(t, err)
+	require.NoError(t, AddFirstPartyCaveats(mac, first, last))
+
+	services, err := ServicesFromMacaroon(mac)
+	require.NoError(t, err)
+	require.Equal(t, []Service{{Name: "two"}}, services)
 }

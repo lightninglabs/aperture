@@ -55,7 +55,10 @@ removes client-supplied `Grpc-Metadata-Authorization`; grpc-gateway would
 otherwise translate it into unvalidated `authorization` metadata.
 
 Public paths only validate L402. They do not execute MPP payment actions,
-issue payment challenges, or incur metered charges.
+issue payment challenges, or incur metered charges. For dynamically priced
+services, a valid token for another resource in the same service can establish
+identity on a public path. Protected paths still require a token for the exact
+resource.
 
 Credential cleanup removes the entire `Authorization` header, including Bearer
 and Basic values. Use service-level `auth: "off"` when the backend owns
