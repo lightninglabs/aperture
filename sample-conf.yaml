@@ -246,6 +246,7 @@ services:
 
     # Paths that allow anonymous requests. L402 authentication is checked;
     # failures remove Authorization and both macaroon headers before forwarding.
+    # Grpc-Metadata-Authorization is always removed when auth is enabled.
     # Public requests never execute MPP payment actions.
     # Service-level auth: "off" bypasses this validation and removal.
     authwhitelistpaths:

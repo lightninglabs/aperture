@@ -37,6 +37,11 @@ const (
 	hdrGrpcStatus  = "Grpc-Status"
 	hdrGrpcMessage = "Grpc-Message"
 	hdrTypeGrpc    = "application/grpc"
+
+	// grpcMetadataAuthorization is a client-supplied header that grpc-gateway
+	// surfaces to backends as authorization metadata, which Aperture does not
+	// validate.
+	grpcMetadataAuthorization = "Grpc-Metadata-Authorization"
 )
 
 // LocalService is an interface that describes a service that is handled
@@ -515,12 +520,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Requests admitted without authentication must not carry an unverified
-	// identity to the backend. Explicit auth off leaves headers untouched.
-	if authEnabled && !acceptAuth {
-		r.Header.Del(l402.HeaderAuthorization)
-		r.Header.Del(l402.HeaderMacaroon)
-		r.Header.Del(l402.HeaderMacaroonMD)
+	if authEnabled {
+		// grpc-gateway maps this alias to authorization metadata. Always
+		// remove the client value because Aperture does not validate it.
+		r.Header.Del(grpcMetadataAuthorization)
+
+		// Requests admitted without authentication must not carry an
+		// unverified identity to the backend.
+		if !acceptAuth {
+			r.Header.Del(l402.HeaderAuthorization)
+			r.Header.Del(l402.HeaderMacaroon)
+			r.Header.Del(l402.HeaderMacaroonMD)
+		}
 	}
 
 	// If we got here, it means everything is OK to pass the request to the

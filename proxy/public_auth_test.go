@@ -588,6 +588,94 @@ func TestPublicPathServiceSettings(t *testing.T) {
 	})
 }
 
+// TestGrpcMetadataAuthorization checks that clients cannot bypass Aperture's
+// authentication through grpc-gateway's metadata header mapping.
+func TestGrpcMetadataAuthorization(t *testing.T) {
+	valid := newPublicAuthToken(t, 1)
+	const clientValue = "L402 forged"
+
+	tests := []struct {
+		name       string
+		auth       auth.Level
+		path       string
+		valid      bool
+		configured string
+		want       string
+	}{
+		{
+			name: "anonymous public request",
+			auth: "on",
+			path: "/public",
+		},
+		{
+			name:  "authenticated public request",
+			auth:  "on",
+			path:  "/public",
+			valid: true,
+		},
+		{
+			name:  "authenticated protected request",
+			auth:  "on",
+			path:  "/protected",
+			valid: true,
+		},
+		{
+			name: "authentication off",
+			auth: "off",
+			path: "/public",
+			want: clientValue,
+		},
+		{
+			name:       "configured backend credential",
+			auth:       "on",
+			path:       "/public",
+			configured: "Bearer trusted",
+			want:       "Bearer trusted",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := &publicAuthRecorder{
+				scheme: auth.AuthSchemeL402,
+				accepted: map[l402.TokenID]bool{
+					valid.id: true,
+				},
+			}
+			service := &Service{
+				Auth: test.auth,
+				AuthWhitelistPaths: []string{
+					"^/public$",
+				},
+				AuthSkipInvoiceCreationPaths: []string{
+					"^/protected$",
+				},
+			}
+			if test.configured != "" {
+				service.Headers = map[string]string{
+					grpcMetadataAuthorization: test.configured,
+				}
+			}
+			p, received := newPublicAuthProxy(t, service, a)
+
+			header := make(http.Header)
+			if test.valid {
+				header = valid.header.Clone()
+			}
+			header.Set(grpcMetadataAuthorization, clientValue)
+			response := servePublicAuthRequest(
+				p, test.path, "192.0.2.1", header,
+			)
+			require.Equal(t, http.StatusNoContent, response.Code)
+			forwarded := <-received
+			require.Equal(
+				t, test.want,
+				forwarded.Header.Get(grpcMetadataAuthorization),
+			)
+		})
+	}
+}
+
 // TestAnonymousFallbackCredentials checks that free requests reached after
 // failed authentication cannot carry an unverified identity to the backend.
 func TestAnonymousFallbackCredentials(t *testing.T) {

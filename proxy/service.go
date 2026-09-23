@@ -125,7 +125,8 @@ type Service struct {
 	// are matched against the path of the URL of a request. If the request
 	// URL matches, L402 authentication is checked but not required. Failed
 	// authentication removes Authorization and both macaroon headers before
-	// forwarding. Explicit service-level Auth "off" bypasses these checks.
+	// forwarding. Grpc-Metadata-Authorization is always removed when auth is
+	// enabled. Explicit service-level Auth "off" bypasses these checks.
 	// E.g. the path for a gRPC call looks like this:
 	// /package_name.ServiceName/MethodName
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`

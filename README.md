@@ -50,7 +50,9 @@ L402 authentication is checked but not required. Successful requests retain
 the usual header-forwarding behavior. If authentication fails, Aperture removes
 `Authorization`, `Macaroon`, and `Grpc-Metadata-Macaroon` before forwarding the
 request anonymously. The same cleanup applies to anonymous freebie and
-zero-price fallbacks.
+zero-price fallbacks. On services with authentication enabled, Aperture always
+removes client-supplied `Grpc-Metadata-Authorization`; grpc-gateway would
+otherwise translate it into unvalidated `authorization` metadata.
 
 Public paths only validate L402. They do not execute MPP payment actions,
 issue payment challenges, or incur metered charges.
