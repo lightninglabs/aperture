@@ -522,8 +522,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	default:
-		// Auth is off, rate limit by IP for unauthenticated access.
-		if !checkRateLimit(false) {
+		// Verified public requests use token limits. Anonymous requests
+		// and explicit service-level auth off continue to use IP limits.
+		if !checkRateLimit(acceptAuth) {
 			return
 		}
 	}

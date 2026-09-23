@@ -254,6 +254,9 @@ unauthenticated requests.
 Anonymous requests still obey IP-based limits when the pricer returns zero,
 including after a service's freebie allowance is exhausted.
 
+On whitelisted paths, verified L402 tokens get their own rate-limit bucket.
+Anonymous requests and services with `auth: "off"` keep IP-based limits.
+
 ### Features
 
 * **Token bucket algorithm**: Allows controlled bursting while maintaining a
