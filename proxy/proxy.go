@@ -261,6 +261,8 @@ func New(auth auth.Authenticator, services []*Service,
 
 // ServeHTTP checks a client's headers for appropriate authorization and either
 // returns a challenge or forwards their request to the target backend service.
+//
+//nolint:gocyclo
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse and log the remote IP address. We also need the parsed IP
 	// address for the freebie count.
@@ -374,18 +376,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return allowed
 	}
 
+	// Explicit auth off bypasses validation. Whitelisted requests only
+	// validate L402 identity, without executing MPP payment actions.
+	authEnabled := target.Auth.IsOn() || target.Auth.IsFreebie()
+	acceptAuth := authEnabled && p.acceptForService(
+		&r.Header, resourceName, target, authLevel.IsOff(),
+	)
+
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
 	switch {
 	case authLevel.IsOn():
-		// Determine if the header contains the authentication
-		// required for the given resource. The call to Accept is
-		// called in each case body rather than outside the switch so
-		// as to avoid calling this possibly expensive call for static
-		// resources. If the service specifies an auth scheme, only
-		// authenticators matching that scheme are tried.
-		acceptAuth := p.acceptForService(
-			&r.Header, resourceName, target,
-		)
 		if !acceptAuth {
 			if skipInvoiceCreation {
 				addCorsHeaders(w.Header())
@@ -453,9 +453,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		acceptAuth := p.acceptForService(
-			&r.Header, resourceName, target,
-		)
 		if !acceptAuth {
 			// Check and consume together so concurrent requests
 			// cannot claim the same remaining freebie.
@@ -518,6 +515,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Requests admitted without authentication must not carry an unverified
+	// identity to the backend. Explicit auth off leaves headers untouched.
+	if authEnabled && !acceptAuth {
+		r.Header.Del(l402.HeaderAuthorization)
+		r.Header.Del(l402.HeaderMacaroon)
+		r.Header.Del(l402.HeaderMacaroonMD)
+	}
+
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
 	p.proxyBackend.ServeHTTP(w, r)
@@ -526,13 +531,32 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // acceptForService checks authentication, respecting the service's per-service
 // AuthScheme setting. If the authenticator is a MultiAuthenticator and the
 // service has an AuthScheme set, only matching sub-authenticators are tried.
+// Public requests only check L402 credentials.
 func (p *Proxy) acceptForService(header *http.Header, resourceName string,
-	target *Service) bool {
+	target *Service, public bool) bool {
+
+	scheme := target.AuthScheme
+	if public {
+		// Machine Payments Protocol (MPP) authentication can consume a
+		// payment or debit a session, so it cannot validate public requests.
+		if scheme == auth.AuthSchemeMPP {
+			return false
+		}
+
+		scheme = auth.AuthSchemeL402
+
+		// A direct authenticator cannot select a different scheme, so
+		// public requests require an L402 authenticator.
+		tagged, ok := p.authenticator.(auth.SchemeTagged)
+		if ok && tagged.Scheme() != auth.AuthSchemeL402 {
+			return false
+		}
+	}
 
 	multi, ok := p.authenticator.(*auth.MultiAuthenticator)
-	if ok && target.AuthScheme != "" {
+	if ok && scheme != "" {
 		return multi.AcceptForScheme(
-			header, resourceName, target.AuthScheme,
+			header, resourceName, scheme,
 		)
 	}
 

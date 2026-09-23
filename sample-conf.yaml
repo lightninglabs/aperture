@@ -244,7 +244,10 @@ services:
     # dynamicprice.enabled is set to true.
     price: 0
 
-    # A list of regular expressions for path that are free of charge.
+    # Paths that allow anonymous requests. L402 authentication is checked;
+    # failures remove Authorization and both macaroon headers before forwarding.
+    # Public requests never execute MPP payment actions.
+    # Service-level auth: "off" bypasses this validation and removal.
     authwhitelistpaths:
       - '^/freebieservice.*$'
 

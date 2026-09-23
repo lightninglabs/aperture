@@ -123,9 +123,10 @@ type Service struct {
 
 	// AuthWhitelistPaths is an optional list of regular expressions that
 	// are matched against the path of the URL of a request. If the request
-	// URL matches any of those regular expressions, the call is treated as
-	// if Auth was set to "off". This allows certain RPC methods to not
-	// require an L402 token. E.g. the path for a gRPC call looks like this:
+	// URL matches, L402 authentication is checked but not required. Failed
+	// authentication removes Authorization and both macaroon headers before
+	// forwarding. Explicit service-level Auth "off" bypasses these checks.
+	// E.g. the path for a gRPC call looks like this:
 	// /package_name.ServiceName/MethodName
 	AuthWhitelistPaths []string `long:"authwhitelistpaths" description:"List of regular expressions for paths that don't require authentication'"`
 

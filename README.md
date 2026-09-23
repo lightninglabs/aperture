@@ -43,6 +43,22 @@ must be `sqlite` or `postgres`; etcd is refused at startup.
 
 [mpp]: https://datatracker.ietf.org/doc/draft-httpauth-payment/
 
+## Public paths
+
+`authwhitelistpaths` allows anonymous access within an authenticated service.
+L402 authentication is checked but not required. Successful requests retain
+the usual header-forwarding behavior. If authentication fails, Aperture removes
+`Authorization`, `Macaroon`, and `Grpc-Metadata-Macaroon` before forwarding the
+request anonymously. The same cleanup applies to anonymous freebie and
+zero-price fallbacks.
+
+Public paths only validate L402. They do not execute MPP payment actions,
+issue payment challenges, or incur metered charges.
+
+Credential cleanup removes the entire `Authorization` header, including Bearer
+and Basic values. Use service-level `auth: "off"` when the backend owns
+authentication; that setting bypasses both validation and credential removal.
+
 ## Metered pricing
 
 Aperture can sell one request per payment, or it can sell a prepaid bundle of
