@@ -318,7 +318,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Take a read lock to get a consistent snapshot of services and the
 	// proxy backend. This is held for the duration of request handling
-	// so that UpdateServices does not swap them mid-flight.
+	// so that UpdateServices does not swap or re-prepare them mid-flight.
 	p.servicesMtx.RLock()
 	defer p.servicesMtx.RUnlock()
 
@@ -549,6 +549,13 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
 func (p *Proxy) UpdateServices(services []*Service) error {
+	// Hold the write lock while preparing, not just while swapping.
+	// Callers such as the admin API pass back the *Service values that
+	// in-flight requests are still reading, and prepareServices rewrites
+	// them in place (compiled regexps, rate limiter, pricer, header map).
+	p.servicesMtx.Lock()
+	defer p.servicesMtx.Unlock()
+
 	err := prepareServices(services)
 	if err != nil {
 		return err
@@ -565,9 +572,6 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 			InsecureSkipVerify: true,
 		},
 	}
-
-	p.servicesMtx.Lock()
-	defer p.servicesMtx.Unlock()
 
 	p.services = services
 
