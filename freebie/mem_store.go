@@ -3,36 +3,46 @@ package freebie
 import (
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/lightninglabs/aperture/netutil"
 )
 
+// Count is the number of free requests allowed or consumed.
 type Count uint16
 
+// memStore tracks free requests by masked IP address in memory.
 type memStore struct {
-	numFreebies    Count
+	// mu protects freebieCounter and keeps each check-and-increment atomic.
+	mu sync.Mutex
+
+	// numFreebies is the per-mask allowance, fixed when the store is
+	// created.
+	numFreebies Count
+
+	// freebieCounter records the number of requests consumed by each mask.
 	freebieCounter map[string]Count
 }
 
+// getKey groups addresses that share the same masked IP.
 func (m *memStore) getKey(ip net.IP) string {
 	return netutil.MaskIP(ip).String()
 }
 
-func (m *memStore) currentCount(ip net.IP) Count {
-	counter, ok := m.freebieCounter[m.getKey(ip)]
-	if !ok {
-		return 0
+// TakeFreebie consumes one free request if the masked IP has allowance left.
+// The lock covers both the check and increment so concurrent requests cannot
+// exceed the allowance.
+func (m *memStore) TakeFreebie(_ *http.Request, ip net.IP) (bool, error) {
+	key := m.getKey(ip)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.freebieCounter[key] >= m.numFreebies {
+		return false, nil
 	}
-	return counter
-}
 
-func (m *memStore) CanPass(r *http.Request, ip net.IP) (bool, error) {
-	return m.currentCount(ip) < m.numFreebies, nil
-}
-
-func (m *memStore) TallyFreebie(r *http.Request, ip net.IP) (bool, error) {
-	counter := m.currentCount(ip) + 1
-	m.freebieCounter[m.getKey(ip)] = counter
+	m.freebieCounter[key]++
 	return true, nil
 }
 
