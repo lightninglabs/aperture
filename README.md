@@ -251,6 +251,9 @@ algorithm. Rate limits are configured per service and applied based on the
 client's L402 token ID for authenticated requests, or IP address for
 unauthenticated requests.
 
+Anonymous requests still obey IP-based limits when the pricer returns zero,
+including after a service's freebie allowance is exhausted.
+
 ### Features
 
 * **Token bucket algorithm**: Allows controlled bursting while maintaining a

@@ -417,6 +417,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// If the price returned is zero, then break out of the
 			// switch statement and allow access to the service.
 			if price == 0 {
+				if !checkRateLimit(false) {
+					return
+				}
+
 				break
 			}
 
@@ -490,6 +494,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// out of the switch statement and allow access
 				// to the service.
 				if price == 0 {
+					if !checkRateLimit(false) {
+						return
+					}
+
 					break
 				}
 
