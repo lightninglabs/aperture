@@ -29,9 +29,9 @@ func TestProxyConcurrentFreebies(t *testing.T) {
 	backendURL, err := url.Parse(backend.URL)
 	require.NoError(t, err)
 
-	// Cover a burst of writes, contention for the last freebie, and an
-	// allowance of zero. Each subtest gets a fresh store.
-	for _, limit := range []int{32, 1, 0} {
+	// Cover a burst of writes and contention for the last freebie. Each
+	// subtest gets a fresh store.
+	for _, limit := range []int{32, 1} {
 		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
 			level := auth.Level(fmt.Sprintf("freebie %d", limit))
 			services := []*proxy.Service{{

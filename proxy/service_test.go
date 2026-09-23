@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/lightninglabs/aperture/auth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,6 +84,21 @@ func TestPrepareServicesHeaderEnv(t *testing.T) {
 	require.ErrorContains(
 		t, prepareServices([]*Service{missing}),
 		"APERTURE_TEST_UNSET",
+	)
+}
+
+// TestPrepareServicesAuthLevel checks that service authentication levels are
+// normalized and rejected consistently for every configuration source.
+func TestPrepareServicesAuthLevel(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{Name: "test", Auth: "ON"}
+	require.NoError(t, prepareServices([]*Service{service}))
+	require.Equal(t, auth.Level("on"), service.Auth)
+
+	service = &Service{Name: "test", Auth: "none"}
+	require.ErrorContains(
+		t, prepareServices([]*Service{service}), "invalid auth level",
 	)
 }
 

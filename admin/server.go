@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -1001,29 +999,6 @@ func stringToAuthScheme(s string) adminrpc.AuthScheme {
 // validateAuthLevel checks that an auth string is a valid auth.Level value
 // and returns the normalized (lowercased) form.
 func validateAuthLevel(s string) (string, error) {
-	lower := strings.ToLower(s)
-
-	switch {
-	case lower == "on" || lower == "off" || lower == "true" ||
-		lower == "false" || lower == "":
-
-		return lower, nil
-
-	case strings.HasPrefix(lower, "freebie "):
-		parts := strings.SplitN(lower, " ", 2)
-		if len(parts) != 2 {
-			return "", fmt.Errorf("invalid auth format, use " +
-				"'freebie N'")
-		}
-		n, err := strconv.Atoi(parts[1])
-		if err != nil || n <= 0 {
-			return "", fmt.Errorf("invalid freebie count, must " +
-				"be a positive integer")
-		}
-		return lower, nil
-
-	default:
-		return "", fmt.Errorf("invalid auth level %q, must be "+
-			"'on', 'off', or 'freebie N'", s)
-	}
+	level, err := auth.ParseLevel(s)
+	return string(level), err
 }

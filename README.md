@@ -108,6 +108,11 @@ Changes that need attention when upgrading from an earlier version:
   fails on such a service, including one stored in the database, where the
   admin API cannot rename it once Aperture refuses to start. Rename it before
   upgrading.
+* A service's `auth` value must be `on`, `off`, `true`, `false`, or
+  `freebie N` with N from 1 to 65535; anything else now fails startup. An
+  unrecognized value such as `no` used to make the service free. The admin
+  API used to accept and store a larger freebie count, so correct such a value
+  before upgrading.
 
 ## Admin API
 

@@ -253,6 +253,18 @@ func prepareServices(services []*Service) error {
 			return err
 		}
 
+		authLevel, err := auth.ParseLevel(string(service.Auth))
+		if err != nil {
+			return fmt.Errorf("service %q: %w", service.Name, err)
+		}
+
+		// Every update prepares the live services again while the
+		// admin API may be reading them, so leave an already
+		// normalized level untouched.
+		if authLevel != service.Auth {
+			service.Auth = authLevel
+		}
+
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
 			service.freebieDB = freebie.NewMemIPMaskStore(
@@ -304,7 +316,7 @@ func prepareServices(services []*Service) error {
 			}
 		}
 
-		err := service.prepareRewrite()
+		err = service.prepareRewrite()
 		if err != nil {
 			return err
 		}
