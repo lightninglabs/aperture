@@ -471,6 +471,9 @@ const testClientKey = "test-key"
 // tokensLeft returns the number of tokens currently available in the bucket
 // of the given rule for testClientKey.
 func tokensLeft(rl *RateLimiter, cfg *RateLimitConfig) float64 {
+	rl.cacheMu.Lock()
+	defer rl.cacheMu.Unlock()
+
 	limiter := rl.getOrCreateLimiter(limiterKey{
 		clientKey:   testClientKey,
 		pathPattern: cfg.PathRegexp,
