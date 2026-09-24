@@ -97,6 +97,14 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 
 	path := r.URL.Path
 
+	// Use a single timestamp for every reservation, delay check and
+	// cancellation below. CancelAt only refunds a reservation whose time
+	// to act is not before the cancellation time. For a reservation that
+	// can proceed immediately, that is the reservation time itself, so
+	// cancelling with a later time.Now() would silently keep the token
+	// consumed.
+	now := time.Now()
+
 	// Collect all matching configs and their reservations. We need to check
 	// all rules before consuming any tokens, so that if any rule denies we
 	// can cancel all reservations.
@@ -121,7 +129,7 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 		}
 
 		limiter := rl.getOrCreateLimiter(cacheKey, cfg)
-		reservation := limiter.Reserve()
+		reservation := limiter.ReserveN(now, 1)
 
 		reservations = append(reservations, ruleReservation{
 			cfg:         cfg,
@@ -149,7 +157,7 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 			break
 		}
 
-		delay := rr.reservation.Delay()
+		delay := rr.reservation.DelayFrom(now)
 		if delay > 0 {
 			allAllowed = false
 			if delay > maxWait {
@@ -161,7 +169,7 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 	// If any rule denied, cancel all reservations and return denied.
 	if !allAllowed {
 		for _, rr := range reservations {
-			rr.reservation.Cancel()
+			rr.reservation.CancelAt(now)
 			rateLimitDenied.WithLabelValues(
 				rl.serviceName, rr.cfg.PathRegexp,
 			).Inc()
