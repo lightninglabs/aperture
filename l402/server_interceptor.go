@@ -92,7 +92,7 @@ func tokenFromContext(ctx context.Context) (*TokenID, error) {
 	}
 	log.Debugf("Auth header present in request: %s",
 		md.Get(HeaderAuthorization))
-	macaroon, _, err := FromHeader(header)
+	macaroon, _, _, err := FromHeader(header)
 	if err != nil {
 		return nil, fmt.Errorf("auth header extraction failed: %v", err)
 	}
