@@ -40,11 +40,11 @@ const (
 type SqliteConfig struct {
 	// SkipMigrations if true, then all the tables will be created on start
 	// up if they don't already exist.
-	SkipMigrations bool `long:"skipmigrations" description:"Skip applying migrations on startup."`
+	SkipMigrations bool `long:"skipmigrations" yaml:"skipmigrations" description:"Skip applying migrations on startup."`
 
 	// DatabaseFileName is the full file path where the database file can be
 	// found.
-	DatabaseFileName string `long:"dbfile" description:"The full path to the database."`
+	DatabaseFileName string `long:"dbfile" yaml:"dbfile" description:"The full path to the database."`
 }
 
 // SqliteStore is a database store implementation that uses a sqlite backend.
