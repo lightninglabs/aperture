@@ -99,6 +99,16 @@ changes under streaming, and the configuration reference.
 * Start aperture without any command line parameters (`./aperture`), all configuration
   is done in the `~/.aperture/aperture.yaml` file.
 
+## Upgrading
+
+Changes that need attention when upgrading from an earlier version:
+
+* Service names can no longer contain `/`, because a dynamic-price service
+  names each resource by appending the request path to its own name. Startup
+  fails on such a service, including one stored in the database, where the
+  admin API cannot rename it once Aperture refuses to start. Rename it before
+  upgrading.
+
 ## Admin API
 
 Aperture ships with an optional gRPC and REST admin API for managing services

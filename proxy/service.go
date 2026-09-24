@@ -49,7 +49,8 @@ type RewriteConfig struct {
 // Service generically specifies configuration data for backend services to the
 // Aperture proxy.
 type Service struct {
-	// Name is the name of the L402-enabled service.
+	// Name is the name of the L402-enabled service. It must not contain a
+	// slash; see ValidateServiceName.
 	Name string `long:"name" description:"Name of the L402-enabled service"`
 
 	// TLSCertPath is the optional path to the service's TLS certificate.
@@ -200,6 +201,19 @@ func (s *Service) ResourceName(resourcePath string) string {
 	return s.Name
 }
 
+// ValidateServiceName checks that a service name cannot collide with the
+// per-resource token namespace of another service. ResourceName appends the
+// request path to the name of a dynamic-price service, so a name containing a
+// slash could overlap the names another service issues tokens under.
+func ValidateServiceName(name string) error {
+	if strings.Contains(name, "/") {
+		return fmt.Errorf("invalid service name %q, must not contain "+
+			"'/'", name)
+	}
+
+	return nil
+}
+
 // AuthRequired determines the auth level required for a given request.
 func (s *Service) AuthRequired(r *http.Request) auth.Level {
 	// Does the request match any whitelist entry?
@@ -231,8 +245,14 @@ func (s *Service) SkipInvoiceCreation(r *http.Request) bool {
 
 // prepareServices prepares the backend service configurations to be used by the
 // proxy.
+//
+//nolint:gocyclo
 func prepareServices(services []*Service) error {
 	for _, service := range services {
+		if err := ValidateServiceName(service.Name); err != nil {
+			return err
+		}
+
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {
 			service.freebieDB = freebie.NewMemIPMaskStore(

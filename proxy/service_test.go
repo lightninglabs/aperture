@@ -86,6 +86,20 @@ func TestPrepareServicesHeaderEnv(t *testing.T) {
 	)
 }
 
+// TestPrepareServicesName checks that a service name which could share token
+// names with another service's dynamic-price resources is rejected.
+func TestPrepareServicesName(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{Name: "svc-admin"}
+	require.NoError(t, prepareServices([]*Service{service}))
+
+	service = &Service{Name: "svc/admin"}
+	require.ErrorContains(
+		t, prepareServices([]*Service{service}), "invalid service name",
+	)
+}
+
 // TestDirectorOverwritesClientHeaders makes sure a configured service header
 // replaces the client's value outright rather than being appended after it. A
 // client's own Authorization (the L402 header itself) must not shadow the

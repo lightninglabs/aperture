@@ -189,7 +189,9 @@ etcd:
 # avoid YAML parsing errors!
 services:
     # The identifying name of the service. This will also be used to identify
-    # which capabilities caveat (if any) corresponds to the service.
+    # which capabilities caveat (if any) corresponds to the service. It must
+    # not contain '/', since dynamic-price tokens name each resource as the
+    # service name followed by the request path.
   - name: "service1"
 
     # The regular expression used to match the service host.

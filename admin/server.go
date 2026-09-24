@@ -200,6 +200,12 @@ func (s *Server) CreateService(ctx context.Context,
 			codes.InvalidArgument, "name is required",
 		)
 	}
+
+	// The proxy would refuse this name too, but only as an internal error
+	// while applying the new service list.
+	if err := proxy.ValidateServiceName(req.Name); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	if req.Address == "" {
 		return nil, status.Error(
 			codes.InvalidArgument, "address is required",
