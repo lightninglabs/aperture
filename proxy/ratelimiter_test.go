@@ -6,9 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,9 +57,15 @@ func TestRateLimiterNoMatchingRules(t *testing.T) {
 	// Request to non-matching path should always be allowed.
 	for i := 0; i < 100; i++ {
 		req := httptest.NewRequest("GET", "/other/path", nil)
-		allowed, _ := rl.Allow(req, "test-key")
+		allowed, _ := rl.Allow(req, fmt.Sprintf("test-key-%d", i))
 		require.True(t, allowed, "non-matching request should be allowed")
 	}
+
+	// Non-matching traffic must not allocate cache entries or keyed locks.
+	require.Zero(t, rl.Size())
+	rl.clientLocks.mu.Lock()
+	require.Nil(t, rl.clientLocks.locks)
+	rl.clientLocks.mu.Unlock()
 }
 
 // TestRateLimiterLRUEviction tests that the LRU cache evicts old entries.
@@ -80,6 +90,69 @@ func TestRateLimiterLRUEviction(t *testing.T) {
 
 	// Cache should be at max size.
 	require.Equal(t, 5, rl.Size())
+}
+
+// TestRateLimiterUndersizedCacheFailsClosed makes sure an admission larger than
+// the explicit cache bound cannot refresh its burst by evicting its own rules.
+func TestRateLimiterUndersizedCacheFailsClosed(t *testing.T) {
+	first := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	second := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	first.compiledPathRegexp = regexp.MustCompile(first.PathRegexp)
+	second.compiledPathRegexp = regexp.MustCompile(second.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{first, second},
+		WithMaxCacheSize(1),
+	)
+	require.Equal(t, 1, rl.maxSize)
+	req := httptest.NewRequest("GET", "/same", nil)
+
+	allowed, retryAfter := rl.Allow(req, "test-key")
+	require.False(t, allowed)
+	require.Equal(t, time.Second, retryAfter)
+	require.Zero(t, rl.Size())
+
+	// The decision remains fail-closed rather than receiving a fresh burst on
+	// every subsequent request.
+	allowed, _ = rl.Allow(req, "test-key")
+	require.False(t, allowed)
+}
+
+// TestRateLimiterCacheSizeOptions makes sure the public option remains an
+// actual upper bound, including its zero-cache behavior.
+func TestRateLimiterCacheSizeOptions(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		cfg := &RateLimitConfig{
+			Requests: 1,
+			Per:      time.Hour,
+			Burst:    1,
+		}
+		rl := NewRateLimiter(
+			t.Name(), []*RateLimitConfig{cfg}, WithMaxCacheSize(size),
+		)
+		require.Zero(t, rl.maxSize)
+
+		req := httptest.NewRequest("GET", "/limited", nil)
+		allowed, _ := rl.Allow(req, "test-key")
+		require.False(t, allowed)
+		require.Zero(t, rl.Size())
+	}
+
+	configs := []*RateLimitConfig{{}, {}, {}}
+	rl := NewRateLimiter(
+		t.Name(), configs, WithMaxCacheSize(len(configs)-1),
+	)
+	require.Equal(t, len(configs)-1, rl.maxSize)
 }
 
 // TestRateLimiterPathMatching tests that different path patterns have
@@ -168,6 +241,573 @@ func TestRateLimiterMultipleRulesAllMustPass(t *testing.T) {
 	require.False(t, allowed, "should be denied by /expensive rule")
 }
 
+// TestRateLimiterDeniedRuleDoesNotConsumeAllowedRule makes sure a request
+// denied by one rule does not consume capacity from another matching rule.
+func TestRateLimiterDeniedRuleDoesNotConsumeAllowedRule(t *testing.T) {
+	global := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    2,
+	}
+	specific := &RateLimitConfig{
+		PathRegexp: "^/expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	specific.compiledPathRegexp = regexp.MustCompile(specific.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{global, specific},
+	)
+	expensive := httptest.NewRequest("GET", "/expensive", nil)
+	other := httptest.NewRequest("GET", "/other", nil)
+
+	allowed, _ := rl.Allow(expensive, "test-key")
+	require.True(t, allowed)
+
+	allowed, _ = rl.Allow(expensive, "test-key")
+	require.False(t, allowed)
+
+	// The rejected expensive request must not spend the second global
+	// token, so an unrelated path still has capacity.
+	allowed, _ = rl.Allow(other, "test-key")
+	require.True(t, allowed)
+}
+
+// TestRateLimiterConcurrentMultipleRulesAtomic makes sure concurrent requests
+// for one client cannot partially consume a set of matching rules.
+func TestRateLimiterConcurrentMultipleRulesAtomic(t *testing.T) {
+	global := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    20,
+	}
+	specific := &RateLimitConfig{
+		PathRegexp: "^/concurrent-expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	specific.compiledPathRegexp = regexp.MustCompile(specific.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{global, specific},
+	)
+	var allowedCount atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(
+				"GET", "/concurrent-expensive", nil,
+			)
+			allowed, _ := rl.Allow(req, "test-key")
+			if allowed {
+				allowedCount.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(1), allowedCount.Load())
+
+	// Only the one successful request should have consumed global
+	// capacity, leaving 19 tokens for paths that do not match the strict
+	// rule.
+	other := httptest.NewRequest("GET", "/other", nil)
+	for range 19 {
+		allowed, _ := rl.Allow(other, "test-key")
+		require.True(t, allowed)
+	}
+	allowed, _ := rl.Allow(other, "test-key")
+	require.False(t, allowed)
+}
+
+// TestRateLimiterProvisionalAdmissionsAreIsolatedByClient makes sure an
+// admission held open for one client does not block an unrelated client. The
+// keys deliberately collide under the former 256-shard FNV lock scheme.
+func TestRateLimiterProvisionalAdmissionsAreIsolatedByClient(t *testing.T) {
+	cfg := &RateLimitConfig{
+		Requests: 10,
+		Per:      time.Hour,
+		Burst:    10,
+	}
+	rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+	req := httptest.NewRequest("GET", "/limited", nil)
+
+	firstKey := "client-a"
+	firstShard := legacyClientLockShard(firstKey)
+	var collidingKey string
+	for i := 0; ; i++ {
+		candidate := fmt.Sprintf("client-%d", i)
+		if candidate != firstKey &&
+			legacyClientLockShard(candidate) == firstShard {
+
+			collidingKey = candidate
+			break
+		}
+	}
+
+	admission, allowed, _ := rl.reserve(req, firstKey)
+	require.True(t, allowed)
+	defer admission.Cancel()
+
+	result := make(chan bool, 1)
+	go func() {
+		allowed, _ := rl.Allow(req, collidingKey)
+		result <- allowed
+	}()
+
+	select {
+	case allowed := <-result:
+		require.True(t, allowed)
+
+	case <-time.After(time.Second):
+		t.Fatal("hash-colliding client blocked by provisional admission")
+	}
+
+	admission.Cancel()
+	rl.clientLocks.mu.Lock()
+	remainingLocks := len(rl.clientLocks.locks)
+	rl.clientLocks.mu.Unlock()
+	require.Zero(t, remainingLocks)
+}
+
+// TestRateLimiterProvisionalAdmissionsSerializeSameClient verifies that a
+// provisional admission remains the exact ordering boundary for later
+// requests using the same client key.
+func TestRateLimiterProvisionalAdmissionsSerializeSameClient(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "cancel"
+		if commit {
+			name = "commit"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			cfg := &RateLimitConfig{
+				Requests: 1,
+				Per:      time.Hour,
+				Burst:    1,
+			}
+			rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+			req := httptest.NewRequest("GET", "/limited", nil)
+
+			first, allowed, _ := rl.reserve(req, "same-client")
+			require.True(t, allowed)
+			defer first.Cancel()
+
+			result := make(chan bool, 1)
+			go func() {
+				allowed, _ := rl.Allow(req, "same-client")
+				result <- allowed
+			}()
+
+			// Wait until the second admission has registered as a waiter,
+			// then prove it cannot pass the first admission out of order.
+			require.Eventually(t, func() bool {
+				rl.clientLocks.mu.Lock()
+				defer rl.clientLocks.mu.Unlock()
+
+				lock := rl.clientLocks.locks["same-client"]
+				return lock != nil && lock.refs == 2
+			}, time.Second, time.Millisecond)
+			select {
+			case <-result:
+				t.Fatal("same-client admission completed out of order")
+			default:
+			}
+
+			if commit {
+				first.Commit()
+			} else {
+				first.Cancel()
+			}
+
+			select {
+			case secondAllowed := <-result:
+				require.Equal(t, !commit, secondAllowed)
+			case <-time.After(time.Second):
+				t.Fatal("same-client admission did not resume")
+			}
+			rl.clientLocks.mu.Lock()
+			require.Empty(t, rl.clientLocks.locks)
+			rl.clientLocks.mu.Unlock()
+		})
+	}
+}
+
+// TestRateLimiterAdmissionDropsReferences makes sure finalization releases the
+// exact-client lock and stops retaining reservations even if a caller keeps the
+// admission object alive.
+func TestRateLimiterAdmissionDropsReferences(t *testing.T) {
+	for _, commit := range []bool{true, false} {
+		name := "cancel"
+		if commit {
+			name = "commit"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			cfg := &RateLimitConfig{
+				Requests: 1,
+				Per:      time.Hour,
+				Burst:    1,
+			}
+			rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+			req := httptest.NewRequest("GET", "/limited", nil)
+
+			admission, allowed, _ := rl.reserve(req, "test-key")
+			require.True(t, allowed)
+			require.NotEmpty(t, admission.reservations)
+			require.NotNil(t, admission.clientLocks)
+			require.NotNil(t, admission.clientLock)
+			require.Equal(t, "test-key", admission.clientKey)
+
+			if commit {
+				admission.Commit()
+			} else {
+				admission.Cancel()
+			}
+
+			require.Nil(t, admission.reservations)
+			require.Nil(t, admission.clientLocks)
+			require.Nil(t, admission.clientLock)
+			require.Empty(t, admission.clientKey)
+			require.Empty(t, admission.serviceName)
+			require.True(t, admission.now.IsZero())
+
+			// Finalization remains idempotent in either order.
+			admission.Commit()
+			admission.Cancel()
+
+			rl.clientLocks.mu.Lock()
+			require.Empty(t, rl.clientLocks.locks)
+			rl.clientLocks.mu.Unlock()
+		})
+	}
+}
+
+// TestRateLimiterAdmissionConcurrentFinalization races Commit and Cancel to
+// verify that exactly one terminal action takes effect and the client lock is
+// released once.
+func TestRateLimiterAdmissionConcurrentFinalization(t *testing.T) {
+	cfg := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    1,
+	}
+	rl := NewRateLimiter(t.Name(), []*RateLimitConfig{cfg})
+	req := httptest.NewRequest("GET", "/limited", nil)
+	labels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": "",
+	}
+	allowedBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_allowed_total", labels,
+	)
+
+	admission, allowed, _ := rl.reserve(req, "same-client")
+	require.True(t, allowed)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(commit bool) {
+			defer wg.Done()
+			<-start
+
+			if commit {
+				admission.Commit()
+				return
+			}
+
+			admission.Cancel()
+		}(i%2 == 0)
+	}
+	close(start)
+	wg.Wait()
+
+	allowedAfter := prometheusCounterValue(
+		t, "aperture_ratelimit_allowed_total", labels,
+	)
+	commitWon := allowedAfter == allowedBefore+1
+	require.True(t, commitWon || allowedAfter == allowedBefore)
+	require.Nil(t, admission.reservations)
+	require.Nil(t, admission.clientLocks)
+	require.Nil(t, admission.clientLock)
+
+	nextAllowed, _ := rl.Allow(req, "same-client")
+	require.Equal(t, !commitWon, nextAllowed)
+	rl.clientLocks.mu.Lock()
+	require.Empty(t, rl.clientLocks.locks)
+	rl.clientLocks.mu.Unlock()
+}
+
+// TestClientLockSetHighChurn exercises pooled lock reuse while many keys and
+// waiters contend. At most one goroutine may hold a given key at a time, and no
+// historical key may remain after the final release.
+func TestClientLockSetHighChurn(t *testing.T) {
+	const (
+		keyCount = 8
+		workers  = 32
+		loops    = 500
+	)
+
+	var locks clientLockSet
+	active := make([]atomic.Int32, keyCount)
+	var violated atomic.Bool
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+
+			for iteration := 0; iteration < loops; iteration++ {
+				keyIndex := (worker + iteration) % keyCount
+				key := fmt.Sprintf("key-%d", keyIndex)
+				lock := locks.lock(key)
+				if active[keyIndex].Add(1) != 1 {
+					violated.Store(true)
+				}
+				runtime.Gosched()
+				active[keyIndex].Add(-1)
+				locks.unlock(key, lock)
+			}
+		}(worker)
+	}
+	wg.Wait()
+
+	require.False(t, violated.Load())
+	locks.mu.Lock()
+	require.Empty(t, locks.locks)
+	locks.mu.Unlock()
+}
+
+// legacyClientLockShard computes the shard used by the former lock scheme.
+func legacyClientLockShard(key string) uint32 {
+	const (
+		offset32 = uint32(2166136261)
+		prime32  = uint32(16777619)
+	)
+
+	hash := offset32
+	for idx := 0; idx < len(key); idx++ {
+		hash ^= uint32(key[idx])
+		hash *= prime32
+	}
+
+	return hash % 256
+}
+
+// TestRateLimiterDuplicatePatternsIndependent makes sure rules with identical
+// path patterns retain their own rates and bursts.
+func TestRateLimiterDuplicatePatternsIndependent(t *testing.T) {
+	lenient := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      10,
+	}
+	strict := &RateLimitConfig{
+		PathRegexp: "^/same$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	lenient.compiledPathRegexp = regexp.MustCompile(lenient.PathRegexp)
+	strict.compiledPathRegexp = regexp.MustCompile(strict.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{lenient, strict},
+	)
+	req := httptest.NewRequest("GET", "/same", nil)
+	strictLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": strict.PathRegexp,
+		"requests":     "1",
+		"per":          time.Hour.String(),
+		"burst":        "1",
+	}
+	strictDeniedBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_rule_denied_total", strictLabels,
+	)
+
+	allowed, _ := rl.Allow(req, "test-key")
+	require.True(t, allowed)
+	allowed, _ = rl.Allow(req, "test-key")
+	require.False(t, allowed)
+	require.Equal(t, 2, rl.Size())
+
+	require.Equal(
+		t, strictDeniedBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_rule_denied_total", strictLabels,
+		),
+	)
+}
+
+// TestRateLimiterDeniedMetrics makes sure the legacy path metric retains its
+// original all-matching-rules semantics, while the rule-specific metric only
+// attributes the denial to the rule that actually rejected the request.
+func TestRateLimiterDeniedMetrics(t *testing.T) {
+	global := &RateLimitConfig{
+		Requests: 1,
+		Per:      time.Hour,
+		Burst:    2,
+	}
+	specific := &RateLimitConfig{
+		PathRegexp: "^/metric-expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      1,
+	}
+	specific.compiledPathRegexp = regexp.MustCompile(specific.PathRegexp)
+
+	rl := NewRateLimiter(
+		t.Name(), []*RateLimitConfig{global, specific},
+	)
+	globalLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": "",
+	}
+	specificLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": specific.PathRegexp,
+	}
+	globalBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_denied_total", globalLabels,
+	)
+	specificBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_denied_total", specificLabels,
+	)
+	ruleGlobalLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": "",
+		"requests":     "1",
+		"per":          time.Hour.String(),
+		"burst":        "2",
+	}
+	ruleSpecificLabels := map[string]string{
+		"service":      t.Name(),
+		"path_pattern": specific.PathRegexp,
+		"requests":     "1",
+		"per":          time.Hour.String(),
+		"burst":        "1",
+	}
+	ruleGlobalBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_rule_denied_total", ruleGlobalLabels,
+	)
+	ruleSpecificBefore := prometheusCounterValue(
+		t, "aperture_ratelimit_rule_denied_total", ruleSpecificLabels,
+	)
+	req := httptest.NewRequest("GET", "/metric-expensive", nil)
+
+	allowed, _ := rl.Allow(req, "test-key")
+	require.True(t, allowed)
+	allowed, _ = rl.Allow(req, "test-key")
+	require.False(t, allowed)
+
+	require.Equal(
+		t, globalBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_denied_total", globalLabels,
+		),
+	)
+	require.Equal(
+		t, specificBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_denied_total", specificLabels,
+		),
+	)
+	require.Equal(
+		t, ruleGlobalBefore, prometheusCounterValue(
+			t, "aperture_ratelimit_rule_denied_total",
+			ruleGlobalLabels,
+		),
+	)
+	require.Equal(
+		t, ruleSpecificBefore+1, prometheusCounterValue(
+			t, "aperture_ratelimit_rule_denied_total",
+			ruleSpecificLabels,
+		),
+	)
+}
+
+// prometheusCounterValue returns the value of a counter with an exact label
+// set, or zero if the labeled metric has not been collected yet.
+func prometheusCounterValue(t *testing.T, name string,
+	wantLabels map[string]string) float64 {
+
+	t.Helper()
+
+	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range metricFamilies {
+		if family.GetName() != name {
+			continue
+		}
+
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if !mapsEqual(labels, wantLabels) {
+				continue
+			}
+
+			return metric.GetCounter().GetValue()
+		}
+	}
+
+	return 0
+}
+
+// prometheusGaugeValue returns the value of a gauge with an exact label set.
+func prometheusGaugeValue(t *testing.T, name string,
+	wantLabels map[string]string) (float64, bool) {
+
+	t.Helper()
+
+	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range metricFamilies {
+		if family.GetName() != name {
+			continue
+		}
+
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if !mapsEqual(labels, wantLabels) {
+				continue
+			}
+
+			return metric.GetGauge().GetValue(), true
+		}
+	}
+
+	return 0, false
+}
+
+// mapsEqual returns true if two string maps contain identical entries.
+func mapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+
+	return true
+}
+
 // TestRateLimiterPerKeyIsolation tests that different keys have independent
 // rate limits.
 func TestRateLimiterPerKeyIsolation(t *testing.T) {
@@ -233,6 +873,18 @@ func TestExtractRateLimitKeyUnauthenticatedIgnoresL402(t *testing.T) {
 	// masked IP.
 	key := ExtractRateLimitKey(req, ip, false)
 	require.Equal(t, "ip:192.168.1.0", key)
+}
+
+// TestExtractRateLimitKeyAuthenticated makes sure a validated L402 request is
+// keyed by its token ID instead of the peer IP.
+func TestExtractRateLimitKeyAuthenticated(t *testing.T) {
+	mac, tokenID := newTestMacaroon(t)
+	req := httptest.NewRequest("GET", "/api/test", nil)
+	req.Header.Set("Authorization", authHeaderForMacaroon(t, mac))
+	ip := net.ParseIP("192.168.1.100")
+
+	key := ExtractRateLimitKey(req, ip, true)
+	require.Equal(t, "token:"+tokenID, key)
 }
 
 // TestRateLimitConfigRate tests the Rate() calculation.
