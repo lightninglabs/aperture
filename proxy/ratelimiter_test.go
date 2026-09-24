@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +58,9 @@ func TestRateLimiterNoMatchingRules(t *testing.T) {
 		allowed, _ := rl.Allow(req, "test-key")
 		require.True(t, allowed, "non-matching request should be allowed")
 	}
+
+	// Non-matching requests should not create cache entries.
+	require.Zero(t, rl.Size())
 }
 
 // TestRateLimiterLRUEviction tests that the LRU cache evicts old entries.
@@ -604,5 +609,79 @@ func TestRateLimiterDeniedRequestRetryAfter(t *testing.T) {
 				retryAfter.Seconds(), 1,
 			)
 		})
+	}
+}
+
+// TestRateLimiterConcurrentMultiRuleAtomic tests that concurrent requests from
+// the same client consume tokens from all matching rules atomically: every
+// allowed request consumes exactly one token from each matching rule and every
+// denied request consumes none.
+func TestRateLimiterConcurrentMultiRuleAtomic(t *testing.T) {
+	const (
+		sharedBurst    = 200
+		expensiveBurst = 40
+		workers        = 64
+		perWorker      = 200
+	)
+
+	for i := 0; i < 10; i++ {
+		rl, shared, expensive := newMultiRuleLimiter(
+			sharedBurst, expensiveBurst,
+		)
+
+		var (
+			wg               sync.WaitGroup
+			allowedExpensive atomic.Int64
+			allowedOthers    atomic.Int64
+			start            = make(chan struct{})
+		)
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				<-start
+
+				for j := 0; j < perWorker; j++ {
+					// Mostly expensive requests, which are
+					// denied once their bucket is empty,
+					// interleaved with requests that only
+					// match the shared rule.
+					path := "/expensive"
+					if (w+j)%4 == 0 {
+						path = "/other"
+					}
+
+					req := httptest.NewRequest(
+						"GET", path, nil,
+					)
+					ok, _ := rl.Allow(req, testClientKey)
+					switch {
+					case !ok:
+					case path == "/expensive":
+						allowedExpensive.Add(1)
+					default:
+						allowedOthers.Add(1)
+					}
+				}
+			}(w)
+		}
+		close(start)
+		wg.Wait()
+
+		nExpensive := allowedExpensive.Load()
+		nOthers := allowedOthers.Load()
+
+		// Requests matching only the shared rule vastly outnumber its
+		// burst, so the shared bucket must end up fully used by the
+		// allowed requests, and the expensive bucket must hold exactly
+		// the tokens not used by allowed expensive requests. Any token
+		// consumed by a denied request shows up as a shortfall here.
+		require.LessOrEqual(t, nExpensive, int64(expensiveBurst))
+		require.EqualValues(t, sharedBurst, nExpensive+nOthers)
+		require.InDelta(t, 0, tokensLeft(rl, shared), 0.01)
+		require.InDelta(
+			t, float64(expensiveBurst-nExpensive),
+			tokensLeft(rl, expensive), 0.01,
+		)
 	}
 }
