@@ -41,6 +41,10 @@ many requests draw against, refunding whatever is left when the buyer closes it.
 Sessions and charge consumption records both need a real database, so `--dbbackend`
 must be `sqlite` or `postgres`; etcd is refused at startup.
 
+A request authenticated with a Payment credential carries no L402 identity:
+Aperture removes any L402 it also presents before rate limiting, metering or
+forwarding it, since nothing verified that token.
+
 [mpp]: https://datatracker.ietf.org/doc/draft-httpauth-payment/
 
 ## Public paths
@@ -256,6 +260,8 @@ including after a service's freebie allowance is exhausted.
 
 On whitelisted paths, verified L402 tokens get their own rate-limit bucket.
 Anonymous requests and services with `auth: "off"` keep IP-based limits.
+
+Requests authenticated with a Payment credential are limited by IP address.
 
 ### Features
 

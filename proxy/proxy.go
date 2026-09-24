@@ -384,9 +384,20 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Explicit auth off bypasses validation. Whitelisted requests only
 	// validate L402 identity, without executing MPP payment actions.
 	authEnabled := target.Auth.IsOn() || target.Auth.IsFreebie()
-	acceptAuth := authEnabled && p.acceptForService(
-		&r.Header, resourceName, target, authLevel.IsOff(),
-	)
+	var acceptAuth, l402Verified bool
+	if authEnabled {
+		acceptAuth, l402Verified = p.acceptForService(
+			&r.Header, resourceName, target, authLevel.IsOff(),
+		)
+	}
+
+	// A request that another scheme, such as a Payment credential,
+	// authenticated can still carry an L402 that nothing verified. Remove
+	// it before the rate limiter, the metering check and the director read
+	// it as the caller's identity.
+	if acceptAuth && !l402Verified {
+		removeL402Credentials(r.Header)
+	}
 
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
 	switch {
@@ -429,14 +440,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// User is authenticated, apply rate limit with L402 token ID.
+		// User is authenticated, apply rate limit with the L402 token
+		// ID if an L402 is what verified, and by IP otherwise.
 		// This runs before the metered check on purpose: that check
 		// reserves an estimate against the token's balance, and the
 		// reservation is only released by the usage report the response
 		// observer sends. A request turned away here never reaches the
 		// backend, so it would produce no report and leak its
 		// reservation, shrinking the buyer's usable balance for nothing.
-		if !checkRateLimit(true) {
+		if !checkRateLimit(l402Verified) {
 			return
 		}
 
@@ -513,10 +525,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Authenticated user on freebie path. Inject receipt
-			// headers and apply rate limit by L402 token.
+			// headers and apply rate limit by L402 token, if an
+			// L402 is what verified.
 			r = p.injectReceiptContext(r, resourceName)
 
-			if !checkRateLimit(true) {
+			if !checkRateLimit(l402Verified) {
 				return
 			}
 		}
@@ -524,7 +537,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Verified public requests use token limits. Anonymous requests
 		// and explicit service-level auth off continue to use IP limits.
-		if !checkRateLimit(acceptAuth) {
+		if !checkRateLimit(l402Verified) {
 			return
 		}
 	}
@@ -552,15 +565,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // AuthScheme setting. If the authenticator is a MultiAuthenticator and the
 // service has an AuthScheme set, only matching sub-authenticators are tried.
 // Public requests only check L402 credentials.
+//
+// The second result reports whether an L402 is what authenticated the request.
+// A request can carry credentials for several schemes, so one that another
+// scheme authenticated can still carry an L402 that nothing verified.
 func (p *Proxy) acceptForService(header *http.Header, resourceName string,
-	target *Service, public bool) bool {
+	target *Service, public bool) (bool, bool) {
 
 	scheme := target.AuthScheme
 	if public {
 		// Machine Payments Protocol (MPP) authentication can consume a
 		// payment or debit a session, so it cannot validate public requests.
 		if scheme == auth.AuthSchemeMPP {
-			return false
+			return false, false
 		}
 
 		scheme = auth.AuthSchemeL402
@@ -574,18 +591,62 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 		// public requests require an L402 authenticator.
 		tagged, ok := p.authenticator.(auth.SchemeTagged)
 		if ok && tagged.Scheme() != auth.AuthSchemeL402 {
-			return false
+			return false, false
 		}
 	}
 
 	multi, ok := p.authenticator.(*auth.MultiAuthenticator)
-	if ok && scheme != "" {
-		return multi.AcceptForScheme(
-			header, resourceName, scheme,
-		)
+	if !ok {
+		// A direct authenticator that declares another scheme cannot
+		// have verified an L402.
+		accepted := p.authenticator.Accept(header, resourceName)
+		tagged, ok := p.authenticator.(auth.SchemeTagged)
+		isL402 := !ok || tagged.Scheme() == auth.AuthSchemeL402
+
+		return accepted, accepted && isL402
 	}
 
-	return p.authenticator.Accept(header, resourceName)
+	// Try L402 on its own first, which is the order the authenticators are
+	// composed in anyway, so that a success here is known to be an L402.
+	if scheme == "" || strings.Contains(scheme, auth.AuthSchemeL402) {
+		accepted := multi.AcceptForScheme(
+			header, resourceName, auth.AuthSchemeL402,
+		)
+		if accepted {
+			return true, true
+		}
+	}
+
+	// Public requests stop at L402, as does a service that only takes it.
+	if public || (scheme != "" &&
+		!strings.Contains(scheme, auth.AuthSchemeMPP)) {
+
+		return false, false
+	}
+
+	accepted := multi.AcceptForScheme(
+		header, resourceName, auth.AuthSchemeMPP,
+	)
+
+	return accepted, false
+}
+
+// removeL402Credentials deletes every Authorization value containing an L402
+// token and keeps the others, such as the Payment credential that did
+// authenticate the request. An accepted Payment value is a single base64url
+// token after its scheme, so it never looks like an L402 itself.
+func removeL402Credentials(header http.Header) {
+	var kept []string
+	for _, value := range header.Values(l402.HeaderAuthorization) {
+		if !l402.ContainsCredential(value) {
+			kept = append(kept, value)
+		}
+	}
+
+	header.Del(l402.HeaderAuthorization)
+	for _, value := range kept {
+		header.Add(l402.HeaderAuthorization, value)
+	}
 }
 
 // publicResourceName returns a signed resource candidate from the same service.

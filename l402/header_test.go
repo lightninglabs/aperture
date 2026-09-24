@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -120,5 +121,34 @@ func TestFromHeader(t *testing.T) {
 			require.Equal(t, mac.Id(), gotMac.Id())
 			require.Equal(t, preimage, gotPreimage)
 		})
+	}
+}
+
+// TestContainsCredential checks which Authorization values contain an L402
+// credential, including values that FromHeader rejects.
+func TestContainsCredential(t *testing.T) {
+	t.Parallel()
+
+	token := "mac:" + strings.Repeat("0", 64)
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{value: "L402 " + token, want: true},
+		{value: "LSAT " + token, want: true},
+		{value: "l402 " + token, want: true},
+
+		// A credential after another scheme is found too.
+		{value: "Bearer L402 " + token, want: true},
+
+		{value: "Payment eyJjaGFsbGVuZ2UiOnt9fQ"},
+		{value: "L402 garbage"},
+	}
+
+	for _, test := range tests {
+		require.Equal(
+			t, test.want, ContainsCredential(test.value),
+			test.value,
+		)
 	}
 }

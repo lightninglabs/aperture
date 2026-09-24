@@ -39,9 +39,24 @@ var (
 		"^(?i:(LSAT|L402))[ ]+([A-Za-z0-9+/=]+):" +
 			"([0-9a-fA-F]{64})$",
 	)
+
+	// credentialAnywhereRegex finds a credential of the same form anywhere
+	// in a value, including after another scheme.
+	credentialAnywhereRegex = regexp.MustCompile(
+		"(?i:(LSAT|L402))[ ]+[A-Za-z0-9+/=]+:" +
+			"[0-9a-fA-F]{64}",
+	)
 	authFormatLegacy = "LSAT %s:%s"
 	authFormat       = "L402 %s:%s"
 )
+
+// ContainsCredential reports whether an Authorization value contains an L402
+// credential anywhere, including after another scheme. FromHeader rejects such
+// a value, but a backend built with an earlier version of this package may
+// still take the token from it, so it must not be forwarded unverified.
+func ContainsCredential(value string) bool {
+	return credentialAnywhereRegex.MatchString(value)
+}
 
 // FromHeader tries to extract authentication information from HTTP headers.
 // There are two supported formats that can be sent in four different header
