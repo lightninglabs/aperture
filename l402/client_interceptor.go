@@ -79,14 +79,20 @@ var (
 // ClientInterceptor is a gRPC client interceptor that can handle L402
 // authentication challenges with embedded payment requests. It uses a
 // connection to lnd to automatically pay for an authentication token.
+// A ClientInterceptor is safe for concurrent use. It serializes token
+// acquisition while allowing calls with a paid token to run concurrently.
 type ClientInterceptor struct {
 	lnd           *lndclient.LndServices
 	store         Store
 	callTimeout   time.Duration
 	maxCost       btcutil.Amount
 	maxFee        btcutil.Amount
-	lock          sync.Mutex
 	allowInsecure bool
+
+	// paymentLock serializes this interceptor's token store access
+	// and token acquisition. Calls with a paid token release it before
+	// invoking the transport.
+	paymentLock sync.Mutex
 }
 
 // NewInterceptor creates a new gRPC client interceptor that uses the provided
@@ -126,40 +132,12 @@ func (i *ClientInterceptor) UnaryInterceptor(ctx context.Context, method string,
 	req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker,
 	opts ...grpc.CallOption) error {
 
-	// To avoid paying for a token twice if two parallel requests are
-	// happening, we require an exclusive lock here.
-	i.lock.Lock()
-	defer i.lock.Unlock()
+	return i.intercept(ctx, opts, func(opts ...grpc.CallOption) error {
+		rpcCtx, cancel := context.WithTimeout(ctx, i.callTimeout)
+		defer cancel()
 
-	// Create the context that we'll use to initiate the real request. This
-	// contains the means to extract response headers and possibly also an
-	// auth token, if we already have paid for one.
-	iCtx, err := i.newInterceptContext(ctx, opts)
-	if err != nil {
-		return err
-	}
-
-	// Try executing the call now. If anything goes wrong, we only handle
-	// the L402 error message that comes in the form of a gRPC status error.
-	rpcCtx, cancel := context.WithTimeout(ctx, i.callTimeout)
-	defer cancel()
-	err = invoker(rpcCtx, method, req, reply, cc, iCtx.opts...)
-	if !IsPaymentRequired(err) {
-		return err
-	}
-
-	// Find out if we need to pay for a new token or perhaps resume
-	// a previously aborted payment.
-	err = i.handlePayment(iCtx)
-	if err != nil {
-		return err
-	}
-
-	// Execute the same request again, now with the L402
-	// token added as an RPC credential.
-	rpcCtx2, cancel2 := context.WithTimeout(ctx, i.callTimeout)
-	defer cancel2()
-	return invoker(rpcCtx2, method, req, reply, cc, iCtx.opts...)
+		return invoker(rpcCtx, method, req, reply, cc, opts...)
+	})
 }
 
 // StreamInterceptor is an interceptor method that can be used directly by gRPC
@@ -174,49 +152,120 @@ func (i *ClientInterceptor) StreamInterceptor(ctx context.Context,
 	streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream,
 	error) {
 
-	// To avoid paying for a token twice if two parallel requests are
-	// happening, we require an exclusive lock here.
-	i.lock.Lock()
-	defer i.lock.Unlock()
+	var stream grpc.ClientStream
+	err := i.intercept(ctx, opts, func(opts ...grpc.CallOption) error {
+		// A stream uses ctx for its entire lifetime. Applying
+		// callTimeout here would cancel it as soon as the interceptor
+		// returns.
+		var err error
+		stream, err = streamer(ctx, desc, cc, method, opts...)
 
-	// Create the context that we'll use to initiate the real request. This
-	// contains the means to extract response headers and possibly also an
-	// auth token, if we already have paid for one.
-	iCtx, err := i.newInterceptContext(ctx, opts)
+		return err
+	})
 	if err != nil {
+		// A stream from an unsuccessful attempt isn't usable. In
+		// particular, don't return one retained before payment handling
+		// failed.
 		return nil, err
 	}
 
-	// Try establishing the stream now. If anything goes wrong, we only
-	// handle the L402 error message that comes in the form of a gRPC status
-	// error. The context of a stream will be used for the whole lifetime of
-	// it, so we can't really clamp down on the initial call with a timeout.
-	stream, err := streamer(ctx, desc, cc, method, iCtx.opts...)
-	if !IsPaymentRequired(err) {
-		return stream, err
+	return stream, nil
+}
+
+// intercept adds L402 authentication to a transport call. Calls with a paid
+// token run concurrently, while calls without one remain serialized until a
+// single payment attempt finishes.
+func (i *ClientInterceptor) intercept(ctx context.Context,
+	opts []grpc.CallOption, invoke func(...grpc.CallOption) error) error {
+
+	var (
+		iCtx           *interceptContext
+		callOutside    bool
+		paymentHandled bool
+	)
+
+	// Keep the first unauthenticated call under the payment lock. Once that
+	// call pays, queued calls load its token instead of requesting fresh
+	// challenges of their own.
+	err := i.withPaymentLock(func() error {
+		var err error
+		iCtx, err = i.newInterceptContext(ctx, opts)
+		if err != nil {
+			return err
+		}
+
+		if iCtx.token != nil && !iCtx.token.isPending() {
+			callOutside = true
+
+			return nil
+		}
+
+		err = invoke(iCtx.opts...)
+		if !IsPaymentRequired(err) {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return status.FromContextError(err).Err()
+		}
+		if err := i.handlePayment(iCtx); err != nil {
+			return err
+		}
+
+		callOutside = true
+		paymentHandled = true
+
+		return nil
+	})
+	if err != nil || !callOutside {
+		return err
 	}
 
-	// Find out if we need to pay for a new token or perhaps resume
-	// a previously aborted payment.
-	err = i.handlePayment(iCtx)
+	// This is either the first call with an existing paid token or
+	// the retry after the serialized payment path. Both can run
+	// without the lock.
+	err = invoke(iCtx.opts...)
+	if paymentHandled || !IsPaymentRequired(err) {
+		return err
+	}
+
+	// Reload a rejected paid token under the lock in case another
+	// store user updated it while the transport call was in flight.
+	err = i.withPaymentLock(func() error {
+		if err := ctx.Err(); err != nil {
+			return status.FromContextError(err).Err()
+		}
+		if err := i.refreshInterceptContext(iCtx, opts); err != nil {
+			return err
+		}
+
+		return i.handlePayment(iCtx)
+	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	// Execute the same request again, now with the L402 token added
-	// as an RPC credential.
-	return streamer(ctx, desc, cc, method, iCtx.opts...)
+	return invoke(iCtx.opts...)
+}
+
+// withPaymentLock executes a function while holding the payment lock.
+func (i *ClientInterceptor) withPaymentLock(fn func() error) error {
+	i.paymentLock.Lock()
+	defer i.paymentLock.Unlock()
+
+	return fn()
 }
 
 // newInterceptContext creates the initial intercept context that can capture
 // metadata from the server and sends the local token to the server if one
 // already exists.
+//
+// NOTE: The caller must hold the payment lock.
 func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	opts []grpc.CallOption) (*interceptContext, error) {
 
 	iCtx := &interceptContext{
 		mainCtx:  ctx,
-		opts:     opts,
+		opts:     append([]grpc.CallOption(nil), opts...),
 		metadata: &metadata.MD{},
 	}
 
@@ -256,8 +305,38 @@ func (i *ClientInterceptor) newInterceptContext(ctx context.Context,
 	return iCtx, nil
 }
 
+// refreshInterceptContext reloads the token after a payment challenge and
+// resets the call options before payment handling adds current credentials.
+//
+// NOTE: The caller must hold the payment lock.
+func (i *ClientInterceptor) refreshInterceptContext(iCtx *interceptContext,
+	opts []grpc.CallOption) error {
+
+	token, err := i.store.CurrentToken()
+	switch {
+	case err == ErrNoToken:
+		token = nil
+
+	case err != nil:
+		log.Errorf("Failed to get token from store: %v", err)
+		return fmt.Errorf("getting token from store failed: %v", err)
+	}
+
+	iCtx.token = token
+
+	// Restore only caller options. This drops stale L402
+	// credentials. The internal trailer is no longer needed because
+	// the final retry is returned directly without handling another
+	// challenge.
+	iCtx.opts = append([]grpc.CallOption(nil), opts...)
+
+	return nil
+}
+
 // handlePayment tries to obtain a valid token by either tracking the payment
 // status of a pending token or paying for a new one.
+//
+// NOTE: The caller must hold the payment lock.
 func (i *ClientInterceptor) handlePayment(iCtx *interceptContext) error {
 	switch {
 	// Resume/track a pending payment if it was interrupted for some reason.
@@ -333,6 +412,8 @@ func (i *ClientInterceptor) addL402Credentials(iCtx *interceptContext) error {
 // payL402Token reads the payment challenge from the response metadata and tries
 // to pay the invoice encoded in them, returning a paid L402 token if
 // successful.
+//
+// NOTE: The caller must hold the payment lock.
 func (i *ClientInterceptor) payL402Token(ctx context.Context, md *metadata.MD) (
 	*Token, error) {
 
@@ -418,6 +499,8 @@ func (i *ClientInterceptor) payL402Token(ctx context.Context, md *metadata.MD) (
 
 // trackPayment tries to resume a pending payment by tracking its state and
 // waiting for a conclusive result.
+//
+// NOTE: The caller must hold the payment lock.
 func (i *ClientInterceptor) trackPayment(ctx context.Context, token *Token) error {
 	// Lookup state of the payment.
 	paymentStateCtx, cancel := context.WithCancel(ctx)
