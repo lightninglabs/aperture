@@ -43,7 +43,10 @@ func (e *limiterEntry) Size() (uint64, error) {
 
 // RateLimiter manages per-key rate limiters with LRU eviction.
 type RateLimiter struct {
-	// cacheMu protects the LRU cache which is not concurrency-safe.
+	// cacheMu protects the LRU cache which is not concurrency-safe. Allow
+	// also holds it for its whole reserve/check/cancel sequence, so that a
+	// request matching several rules consumes tokens from all of them
+	// atomically.
 	cacheMu sync.Mutex
 
 	// configs is the list of rate limit configurations for this limiter.
@@ -111,6 +114,34 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 			continue
 		}
 
+		reservations = append(reservations, ruleReservation{
+			cfg: cfg,
+		})
+	}
+
+	// If no rules matched, allow the request.
+	if len(reservations) == 0 {
+		return true, 0
+	}
+
+	// Hold the cache lock for the whole reserve/check/cancel sequence.
+	// Without this, a concurrent request of the same client can reserve on
+	// a limiter between our reservation and our cancellation, which
+	// prevents the cancellation from restoring the token.
+	rl.cacheMu.Lock()
+	defer rl.cacheMu.Unlock()
+
+	// Use a single timestamp for every reservation, delay check and
+	// cancellation below. CancelAt only refunds a reservation whose time
+	// to act is not before the cancellation time. For a reservation that
+	// can proceed immediately, that is the reservation time itself, so
+	// cancelling with a later time.Now() would silently keep the token
+	// consumed.
+	now := time.Now()
+
+	for i := range reservations {
+		cfg := reservations[i].cfg
+
 		// Create composite key: client key + path pattern for
 		// independent limiting per rule. Using a struct instead of
 		// string concatenation saves memory since pathPattern
@@ -121,17 +152,7 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 		}
 
 		limiter := rl.getOrCreateLimiter(cacheKey, cfg)
-		reservation := limiter.Reserve()
-
-		reservations = append(reservations, ruleReservation{
-			cfg:         cfg,
-			reservation: reservation,
-		})
-	}
-
-	// If no rules matched, allow the request.
-	if len(reservations) == 0 {
-		return true, 0
+		reservations[i].reservation = limiter.ReserveN(now, 1)
 	}
 
 	// Check if all reservations can proceed immediately. If any rule
@@ -149,7 +170,7 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 			break
 		}
 
-		delay := rr.reservation.Delay()
+		delay := rr.reservation.DelayFrom(now)
 		if delay > 0 {
 			allAllowed = false
 			if delay > maxWait {
@@ -161,7 +182,7 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 	// If any rule denied, cancel all reservations and return denied.
 	if !allAllowed {
 		for _, rr := range reservations {
-			rr.reservation.Cancel()
+			rr.reservation.CancelAt(now)
 			rateLimitDenied.WithLabelValues(
 				rl.serviceName, rr.cfg.PathRegexp,
 			).Inc()
@@ -181,11 +202,10 @@ func (rl *RateLimiter) Allow(r *http.Request, key string) (bool,
 }
 
 // getOrCreateLimiter retrieves an existing limiter or creates a new one.
+//
+// NOTE: The caller must hold cacheMu.
 func (rl *RateLimiter) getOrCreateLimiter(key limiterKey,
 	cfg *RateLimitConfig) *rate.Limiter {
-
-	rl.cacheMu.Lock()
-	defer rl.cacheMu.Unlock()
 
 	// Try to get existing entry from cache (also updates LRU order).
 	if entry, err := rl.cache.Get(key); err == nil {
