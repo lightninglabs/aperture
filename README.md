@@ -155,6 +155,16 @@ Changes that need attention when upgrading from an earlier version:
   API is enabled; enabling it reconciles earlier payments at the next startup.
   Tokens minted without a transaction record, by the etcd backend or by
   versions before v0.5.0, cannot be found this way.
+* A dynamic-price service, or a static one whose price was not configured or
+  was changed through the admin API, minted tokens without its `timeout`,
+  `capabilities` and `constraints`, so with a timeout set they never expired.
+  New tokens carry these restrictions, but existing ones do not; revoke them
+  through the admin API as described above. A dynamic-price token's
+  `service_name` is the service name followed by the request path.
+* On a service with a `timeout`, a resource name containing `=` cannot carry a
+  readable timeout caveat, so no token is minted for it.
+* Services that share a name also share their tokens, so startup now fails if
+  they set different `timeout`, `capabilities` or `constraints`.
 
 ## Admin API
 

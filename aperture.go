@@ -1730,10 +1730,15 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
 ) (*proxy.Proxy, func(), error) {
 
+	limiter, err := newStaticServiceLimiter(services)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	minter := mint.New(&mint.Config{
 		Challenger:       challenger,
 		Secrets:          store,
-		ServiceLimiter:   newStaticServiceLimiter(services),
+		ServiceLimiter:   limiter,
 		Now:              time.Now,
 		TransactionStore: txnStore,
 	})
