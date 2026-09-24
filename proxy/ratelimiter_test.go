@@ -434,3 +434,172 @@ func TestRateLimiterTokenRefill(t *testing.T) {
 	allowed, _ = rl.Allow(req, "test-key")
 	require.True(t, allowed)
 }
+
+// newMultiRuleLimiter returns a limiter where a catch-all rule is shared by
+// every request and a stricter rule additionally applies to /expensive. Both
+// rules refill so slowly that no tokens are restored during a test, making
+// token counts exact.
+func newMultiRuleLimiter(sharedBurst, expensiveBurst int) (*RateLimiter,
+	*RateLimitConfig, *RateLimitConfig) {
+
+	shared := &RateLimitConfig{
+		PathRegexp: ".*",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      sharedBurst,
+	}
+	shared.compiledPathRegexp = regexp.MustCompile(shared.PathRegexp)
+
+	expensive := &RateLimitConfig{
+		PathRegexp: "^/expensive$",
+		Requests:   1,
+		Per:        time.Hour,
+		Burst:      expensiveBurst,
+	}
+	expensive.compiledPathRegexp = regexp.MustCompile(expensive.PathRegexp)
+
+	rl := NewRateLimiter(
+		"test-service", []*RateLimitConfig{shared, expensive},
+	)
+
+	return rl, shared, expensive
+}
+
+// testClientKey is the client key used by tokensLeft and allowN.
+const testClientKey = "test-key"
+
+// tokensLeft returns the number of tokens currently available in the bucket
+// of the given rule for testClientKey.
+func tokensLeft(rl *RateLimiter, cfg *RateLimitConfig) float64 {
+	limiter := rl.getOrCreateLimiter(limiterKey{
+		clientKey:   testClientKey,
+		pathPattern: cfg.PathRegexp,
+	}, cfg)
+
+	return limiter.Tokens()
+}
+
+// allowN sends n requests for the given path and returns how many were
+// allowed.
+func allowN(rl *RateLimiter, path string, n int) int {
+	allowed := 0
+	for i := 0; i < n; i++ {
+		req := httptest.NewRequest("GET", path, nil)
+		if ok, _ := rl.Allow(req, testClientKey); ok {
+			allowed++
+		}
+	}
+
+	return allowed
+}
+
+// TestRateLimiterDeniedRequestRefundsOtherRules tests that a request denied by
+// one matching rule does not consume tokens from the other matching rules.
+func TestRateLimiterDeniedRequestRefundsOtherRules(t *testing.T) {
+	t.Run("denied by specific rule", func(t *testing.T) {
+		rl, shared, expensive := newMultiRuleLimiter(10, 2)
+
+		// Only the first two requests fit into the expensive bucket.
+		// The denied ones must not drain the shared bucket.
+		require.Equal(t, 2, allowN(rl, "/expensive", 20))
+		require.InDelta(t, 8, tokensLeft(rl, shared), 0.01)
+		require.InDelta(
+			t, 0, tokensLeft(rl, expensive), 0.01,
+		)
+
+		// The remaining shared capacity is still usable by other
+		// requests of the same client.
+		require.Equal(t, 8, allowN(rl, "/other", 20))
+	})
+
+	t.Run("denied by shared rule", func(t *testing.T) {
+		rl, shared, expensive := newMultiRuleLimiter(2, 10)
+
+		// Exhaust the shared bucket with requests to other paths.
+		require.Equal(t, 2, allowN(rl, "/other", 2))
+
+		// Expensive requests are now denied by the shared rule and must
+		// not drain the expensive bucket.
+		require.Zero(t, allowN(rl, "/expensive", 20))
+		require.InDelta(t, 0, tokensLeft(rl, shared), 0.01)
+		require.InDelta(
+			t, 10, tokensLeft(rl, expensive), 0.01,
+		)
+	})
+}
+
+// TestRateLimiterDeniedRequestRetryAfter tests that a denied request reports
+// the longest wait time of all matching rules.
+func TestRateLimiterDeniedRequestRetryAfter(t *testing.T) {
+	tests := []struct {
+		name           string
+		sharedPer      time.Duration
+		sharedBurst    int
+		expensivePer   time.Duration
+		wantRetryAfter time.Duration
+	}{
+		{
+			name:           "only expensive rule denies",
+			sharedPer:      time.Hour,
+			sharedBurst:    10,
+			expensivePer:   2 * time.Hour,
+			wantRetryAfter: 2 * time.Hour,
+		},
+		{
+			name:           "both deny, expensive waits longer",
+			sharedPer:      time.Hour,
+			sharedBurst:    1,
+			expensivePer:   2 * time.Hour,
+			wantRetryAfter: 2 * time.Hour,
+		},
+		{
+			name:           "both deny, shared waits longer",
+			sharedPer:      3 * time.Hour,
+			sharedBurst:    1,
+			expensivePer:   2 * time.Hour,
+			wantRetryAfter: 3 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shared := &RateLimitConfig{
+				PathRegexp: ".*",
+				Requests:   1,
+				Per:        tt.sharedPer,
+				Burst:      tt.sharedBurst,
+			}
+			shared.compiledPathRegexp = regexp.MustCompile(
+				shared.PathRegexp,
+			)
+
+			expensive := &RateLimitConfig{
+				PathRegexp: "^/expensive$",
+				Requests:   1,
+				Per:        tt.expensivePer,
+				Burst:      1,
+			}
+			expensive.compiledPathRegexp = regexp.MustCompile(
+				expensive.PathRegexp,
+			)
+
+			rl := NewRateLimiter(
+				"test-service",
+				[]*RateLimitConfig{shared, expensive},
+			)
+
+			// Use up the only expensive token.
+			require.Equal(
+				t, 1, allowN(rl, "/expensive", 1),
+			)
+
+			req := httptest.NewRequest("GET", "/expensive", nil)
+			allowed, retryAfter := rl.Allow(req, testClientKey)
+			require.False(t, allowed)
+			require.InDelta(
+				t, tt.wantRetryAfter.Seconds(),
+				retryAfter.Seconds(), 1,
+			)
+		})
+	}
+}
