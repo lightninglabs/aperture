@@ -83,6 +83,16 @@ func encodeServicesCaveatValue(services ...Service) (string, error) {
 			return "", errors.New("missing service name")
 		}
 
+		// The value separates services with ',' and each name from its
+		// tier with ':', and nothing escapes either inside a name. A
+		// dynamic-price resource name ends in the client's request
+		// path, so a name containing one of those characters could
+		// decode back as several services rather than itself.
+		if strings.ContainsAny(service.Name, ",:") {
+			return "", fmt.Errorf("%w: name %q must not contain "+
+				"',' or ':'", ErrInvalidService, service.Name)
+		}
+
 		fmtStr := "%v:%v"
 		if i < len(services)-1 {
 			fmtStr += ","

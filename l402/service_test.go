@@ -109,3 +109,25 @@ func TestServicesFromMacaroon(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []Service{{Name: "two"}}, services)
 }
+
+// TestServicesCaveatRejectsSeparators checks that a name containing one of the
+// encoding's separators is refused instead of being encoded as other services.
+func TestServicesCaveatRejectsSeparators(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		// A dynamic-price resource whose path adds service "other".
+		"svc/x:0,other",
+		"svc/a,b",
+		"svc/v1/items:batchGet",
+	} {
+		_, err := NewServicesCaveat(Service{Name: name})
+		require.ErrorIs(t, err, ErrInvalidService, name)
+	}
+
+	caveat, err := NewServicesCaveat(Service{Name: "svc/v1/items"})
+	require.NoError(t, err)
+	services, err := decodeServicesCaveatValue(caveat.Value)
+	require.NoError(t, err)
+	require.Equal(t, []Service{{Name: "svc/v1/items"}}, services)
+}

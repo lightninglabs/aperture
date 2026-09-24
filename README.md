@@ -145,6 +145,16 @@ Changes that need attention when upgrading from an earlier version:
   unrecognized value such as `no` used to make the service free. The admin
   API used to accept and store a larger freebie count, so correct such a value
   before upgrading.
+* A dynamic-price token whose resource name (its `service_name`) contains a
+  `,` may have been minted authorizing more than the one resource. Such tokens
+  are no longer minted, but upgrading does not invalidate existing ones; revoke
+  them. With a `sqlite` or `postgres` backend, list tokens with
+  `GET /api/admin/tokens` and revoke each one whose
+  `service_name` contains `,` with `DELETE /api/admin/tokens/{token_id}`. Only
+  settled tokens are listed, and settlements are recorded only while the admin
+  API is enabled; enabling it reconciles earlier payments at the next startup.
+  Tokens minted without a transaction record, by the etcd backend or by
+  versions before v0.5.0, cannot be found this way.
 
 ## Admin API
 
