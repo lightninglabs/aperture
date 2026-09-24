@@ -75,6 +75,26 @@ was read from that header, even ones naming the verified token, since nothing
 checked their signatures or caveats. Other macaroons, such as lnd's, are
 forwarded unchanged.
 
+## Request paths
+
+Aperture first cleans the request path as the client escaped it: it drops empty
+segments and `.` segments, written plainly or percent-encoded, and keeps every
+other segment exactly as sent. It then matches services, whitelisted paths,
+prices and rate limits against the decoded form of the cleaned path, and
+forwards the escaped form, so a percent-encoded character reaches the backend as
+the client sent it. Because decoding happens after cleaning, a percent-encoded
+separator stays encoded in what is matched.
+
+A path with a `..` segment is refused with 400, as is a request target that is
+not an absolute path (anything other than `OPTIONS *`).
+
+A percent-encoded separator such as `%2F` is a path separator to Aperture, but
+some backends (grpc-gateway, chi, Go's `ServeMux` and others) treat it as part
+of a single segment. Write service and whitelist patterns so they still match
+when a segment is encoded this way, for example by matching a prefix rather than
+counting segments. Dynamic-price tokens are named from the decoded path, so the
+encoded and decoded spellings of a path map to the same token.
+
 ## Metered pricing
 
 Aperture can sell one request per payment, or it can sell a prepaid bundle of
@@ -165,6 +185,11 @@ Changes that need attention when upgrading from an earlier version:
   readable timeout caveat, so no token is minted for it.
 * Services that share a name also share their tokens, so startup now fails if
   they set different `timeout`, `capabilities` or `constraints`.
+* Request paths are now cleaned as sent, with `.` segments and repeated
+  slashes removed, before they are matched and forwarded, and percent-encoded
+  characters keep their encoding. A path with a `..` segment is refused with
+  400, and so is a request target that is not an absolute path (other than
+  `OPTIONS *`).
 
 ## Admin API
 

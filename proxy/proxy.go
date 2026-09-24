@@ -272,11 +272,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse and log the remote IP address. We also need the parsed IP
 	// address for the freebie count.
 	remoteIP, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
+
+	// Log the request target as the client sent it, before canonicalization
+	// rewrites it.
+	requestURI := r.RequestURI
 	logRequest := func() {
-		prefixLog.Infof(formatPattern, r.Method, r.RequestURI, r.Proto,
+		prefixLog.Infof(formatPattern, r.Method, requestURI, r.Proto,
 			r.Referer(), r.UserAgent())
 	}
 	defer logRequest()
+
+	// Canonicalize the path before any component uses it for routing,
+	// authentication, pricing, or rate limiting. This also ensures the
+	// backend receives the same path that Aperture authorized.
+	if !canonicalizeRequestPath(r) {
+		addCorsHeaders(w.Header())
+		sendDirectResponse(w, r, http.StatusBadRequest, "invalid path")
+		return
+	}
 
 	// Blocklist check
 	if _, blocked := p.blocklist[remoteIP.String()]; blocked {
@@ -560,6 +573,87 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
 	p.proxyBackend.ServeHTTP(w, r)
+}
+
+// canonicalizeRequestPath rejects parent traversal and targets that are not an
+// absolute path, and removes empty and dot segments from the request path. It
+// cleans the escaped path one segment at a time, so the backend receives every
+// remaining segment exactly as the client escaped it, and updates the request
+// target to match the cleaned path.
+func canonicalizeRequestPath(req *http.Request) bool {
+	// Some servers resolve dot segments only after their own normalization
+	// of a segment, so those spellings of ".." are refused as well.
+	isSeparator := func(r rune) bool {
+		return r == '/' || r == '\\'
+	}
+	for segment := range strings.FieldsFuncSeq(req.URL.Path, isSeparator) {
+		if name, _, _ := strings.Cut(segment, ";"); name == ".." {
+			return false
+		}
+	}
+
+	// A target that is not an absolute path is matched without one but
+	// reaches the backend as sent, and a dynamic-price resource named after
+	// it would not be the service name followed by "/". Only "OPTIONS *"
+	// may name no path, and an opaque URI such as "http:x" never names one.
+	// An empty path, as in "GET http://host", is forwarded as "/", so that
+	// is also the path to match.
+	if req.URL.Opaque != "" {
+		return false
+	}
+	escaped := req.URL.EscapedPath()
+	if escaped != "" && !strings.HasPrefix(escaped, "/") {
+		return escaped == "*" && req.Method == http.MethodOptions
+	}
+
+	// Drop empty and "." segments, whether plain or escaped, and keep every
+	// other segment exactly as the client escaped it: decoding an escaped
+	// reserved character, such as an encoded slash, before cleaning would
+	// change which resource the backend sees. A trailing slash is kept,
+	// since backends and file servers treat it as naming a different
+	// resource.
+	var clean strings.Builder
+	for segment := range strings.SplitSeq(escaped, "/") {
+		name, err := url.PathUnescape(segment)
+		if err != nil {
+			return false
+		}
+		if name == "" || name == "." {
+			continue
+		}
+		clean.WriteByte('/')
+		clean.WriteString(segment)
+	}
+	cleanEscaped := clean.String()
+	switch {
+	case cleanEscaped == "":
+		cleanEscaped = "/"
+
+	case strings.HasSuffix(escaped, "/"):
+		cleanEscaped += "/"
+	}
+	if cleanEscaped == escaped {
+		return true
+	}
+
+	cleanPath, err := url.PathUnescape(cleanEscaped)
+	if err != nil {
+		return false
+	}
+
+	// Like net/url, set RawPath only when it differs from the default
+	// encoding of Path.
+	req.URL.Path = cleanPath
+	req.URL.RawPath = ""
+	if req.URL.EscapedPath() != cleanEscaped {
+		req.URL.RawPath = cleanEscaped
+	}
+
+	// The pricer serializes the request target rather than URL.Path, so
+	// it has to name the cleaned path too.
+	req.RequestURI = req.URL.RequestURI()
+
+	return true
 }
 
 // acceptForService checks authentication, respecting the service's per-service
