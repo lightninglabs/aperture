@@ -29,6 +29,13 @@ var (
 	defaultSqliteDatabasePath = filepath.Join(
 		apertureDataDir, defaultSqliteDatabaseFileName,
 	)
+
+	// DefaultTLSCertPath is the default path to the TLS certificate
+	// that aperture generates for its proxy. This is used by the CLI
+	// as the default value for --tlscertpath.
+	DefaultTLSCertPath = filepath.Join(
+		apertureDataDir, defaultTLSCertFilename,
+	)
 )
 
 const (

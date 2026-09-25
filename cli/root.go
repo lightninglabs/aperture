@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	aperture "github.com/lightninglabs/aperture"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +81,8 @@ TTY. Use --json or --human to override.`,
 		"Path to admin macaroon file",
 	)
 	pf.StringVar(
-		&flags.tlsCert, "tls-cert", "",
+		&flags.tlsCert, "tlscertpath",
+		aperture.DefaultTLSCertPath,
 		"Path to TLS certificate for server verification",
 	)
 	pf.BoolVar(
