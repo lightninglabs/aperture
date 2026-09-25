@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lightninglabs/aperture/adminrpc"
@@ -119,13 +120,21 @@ type ServerConfig struct {
 	MPPRealm string
 }
 
-// Server implements the adminrpc.AdminServer gRPC interface. Thread safety
-// for service reads/updates is provided by the serviceHolder and proxy
-// mutexes; the Server itself does not need its own lock.
+// Server implements the adminrpc.AdminServer gRPC interface.
 type Server struct {
 	adminrpc.UnimplementedAdminServer
 
 	cfg ServerConfig
+
+	// servicesMtx serializes CreateService, UpdateService and
+	// DeleteService. Each one reads the service list, applies its change
+	// and passes the result to UpdateServices. The serviceHolder and
+	// proxy mutexes only guard each of those steps on its own, so without
+	// this two concurrent calls could drop each other's change, and
+	// UpdateService could copy a service while another call's
+	// UpdateServices rewrites it. ListServices only reads fields that
+	// stay fixed once a service is live, so it does not take the lock.
+	servicesMtx sync.Mutex
 }
 
 // NewServer creates a new admin gRPC server with the given configuration.
@@ -266,6 +275,9 @@ func (s *Server) CreateService(ctx context.Context,
 		}
 	}
 
+	s.servicesMtx.Lock()
+	defer s.servicesMtx.Unlock()
+
 	services := s.cfg.Services()
 	for _, svc := range services {
 		if svc.Name == req.Name {
@@ -340,6 +352,9 @@ func (s *Server) UpdateService(ctx context.Context,
 			codes.InvalidArgument, "missing service name",
 		)
 	}
+
+	s.servicesMtx.Lock()
+	defer s.servicesMtx.Unlock()
 
 	services := s.cfg.Services()
 	var found *proxy.Service
@@ -495,6 +510,9 @@ func (s *Server) DeleteService(ctx context.Context,
 			codes.InvalidArgument, "missing service name",
 		)
 	}
+
+	s.servicesMtx.Lock()
+	defer s.servicesMtx.Unlock()
 
 	services := s.cfg.Services()
 	filtered := make([]*proxy.Service, 0, len(services))
