@@ -40,6 +40,7 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/tor"
@@ -250,6 +251,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		txnStore        *aperturedb.L402TransactionsStore
 		svcStore        *aperturedb.ServicesStore
 		mppSessionStore auth.SessionStore
+		mppChargeStore  auth.ChargeStore
 	)
 
 	// Connect to the chosen database backend.
@@ -286,6 +288,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		)
 		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
 
+		dbChargeTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPChargesDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppChargeStore = aperturedb.NewMPPChargesStore(dbChargeTxer)
+
 	case "sqlite": //nolint:dupl
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
@@ -302,6 +311,13 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			},
 		)
 		mppSessionStore = aperturedb.NewMPPSessionsStore(dbMPPTxer)
+
+		dbChargeTxer := aperturedb.NewTransactionExecutor(db,
+			func(tx *sql.Tx) aperturedb.MPPChargesDB {
+				return db.WithTx(tx)
+			},
+		)
+		mppChargeStore = aperturedb.NewMPPChargesStore(dbChargeTxer)
 
 	default:
 		return fmt.Errorf("unknown database backend: %s",
@@ -354,6 +370,42 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 			if err != nil {
 				return fmt.Errorf("unable to start lnc "+
 					"challenger: %w", err)
+			}
+
+		case authCfg.WavelengthGateway != "":
+			log.Infof("Using wavelength's authenticator config, "+
+				"minting invoices from %v",
+				authCfg.WavelengthGateway)
+
+			// An unauthenticated gateway is a deliberate
+			// configuration on the wallet's side, and the daemon
+			// refuses it on mainnet, so say plainly which one this
+			// is rather than leaving the operator to discover it
+			// as a 500 on the first request for a paid resource.
+			if authCfg.WavelengthMacaroonPath == "" {
+				log.Warnf("No wavelengthmacaroonpath set, so " +
+					"invoice requests will carry no " +
+					"credential: this only works against " +
+					"a wallet daemon started with " +
+					"rpc.no-macaroons")
+			}
+
+			client, err := challenger.NewWavelengthInvoiceClient(
+				authCfg.WavelengthGateway, a.cfg.StrictVerify,
+				authCfg.WavelengthMacaroonPath,
+			)
+			if err != nil {
+				return fmt.Errorf("unable to create "+
+					"wavelength invoice client: %w", err)
+			}
+
+			a.challenger, err = challenger.NewLndChallenger(
+				client, a.cfg.InvoiceBatchSize, genInvoiceReq,
+				context.Background, errChan, a.cfg.StrictVerify,
+				challengerOpts...,
+			)
+			if err != nil {
+				return err
 			}
 
 		case authCfg.LndHost != "":
@@ -415,16 +467,16 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		a.cfg.Authenticator.LndHost != "" {
 
 		authCfg := a.cfg.Authenticator
-		adminClient, err := lndclient.NewBasicClient(
+		adminConn, err := lndclient.NewBasicConn(
 			authCfg.LndHost, authCfg.TLSPath,
 			authCfg.MacDir, authCfg.Network,
 		)
 		if err != nil {
-			log.Warnf("MPP: Unable to create admin LND client "+
+			log.Warnf("MPP: Unable to create admin LND connection "+
 				"for session refunds: %v", err)
 		} else {
 			paymentSender = challenger.NewLndPaymentSender(
-				adminClient,
+				routerrpc.NewRouterClient(adminConn),
 			)
 		}
 	}
@@ -441,12 +493,26 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 
 	a.proxy, a.proxyCleanup, err = createProxy(
 		a.cfg, initialServices, a.challenger, secretStore,
-		mppSessionStore, paymentSender, mintTxnStore,
+		mppSessionStore, mppChargeStore, paymentSender, mintTxnStore,
 		txnRecorder, adminPriority, adminFallback,
 	)
 	if err != nil {
 		return err
 	}
+	// The write timeout is applied as a rolling idle window on proxied
+	// responses rather than a single absolute deadline. A streamed
+	// inference response routinely outlives any sane absolute timeout
+	// while writing the whole way through; what the timeout should kill
+	// is a stall, and the proxy pushes the deadline forward on every
+	// write to make it mean exactly that.
+	//
+	// Operators should therefore size writetimeout to the worst-case gap
+	// between writes, not to total response duration: a backend that
+	// legitimately pauses longer than the window between chunks, a
+	// reasoning model thinking silently being the canonical case, is cut
+	// off as a stall even though the client is healthy.
+	a.proxy.SetWriteDeadlineWindow(a.cfg.WriteTimeout)
+
 	handler := http.HandlerFunc(a.proxy.ServeHTTP)
 	a.httpsServer = &http.Server{
 		Addr:         a.cfg.ListenAddr,
@@ -910,7 +976,6 @@ func initTorListener(cfg *Config, store tor.OnionStore) (*tor.Controller,
 	}
 
 	if cfg.Tor.V3 {
-		onionCfg.Type = tor.V3
 		addr, err := torController.AddOnion(onionCfg)
 		if err != nil {
 			return nil, err
@@ -1502,9 +1567,9 @@ func initSQLStores(db *aperturedb.BaseDB) (
 }
 
 // mergeServicesFromDB loads persisted services from the database and merges
-// them with config file services. DB services override config services by name
-// so that runtime changes survive restarts. Config services not in the DB are
-// preserved as-is.
+// them with config file services. Persisted fields override matching config
+// fields so that runtime changes survive restarts. Fields not represented in
+// the database and config services without a matching row are preserved.
 func mergeServicesFromDB(configServices []*proxy.Service,
 	svcStore *aperturedb.ServicesStore) []*proxy.Service {
 
@@ -1529,36 +1594,62 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 	}
 
 	// Build a map of DB services keyed by name.
-	dbByName := make(map[string]*proxy.Service, len(dbRows))
+	dbByName := make(map[string]aperturedb.ServiceRow, len(dbRows))
 	for _, row := range dbRows {
-		dbByName[row.Name] = &proxy.Service{
-			Name:       row.Name,
-			Address:    row.Address,
-			Protocol:   row.Protocol,
-			HostRegexp: row.HostRegexp,
-			PathRegexp: row.PathRegexp,
-			Price:      row.Price,
-			Auth:       auth.Level(row.Auth),
-			AuthScheme: row.AuthScheme,
-		}
+		dbByName[row.Name] = row
 	}
 
-	// Start with DB services, then add config services that are not
-	// already in the DB.
-	merged := make([]*proxy.Service, 0, len(dbByName)+len(configServices))
-	for _, svc := range dbByName {
-		merged = append(merged, svc)
-	}
+	// Preserve the order and complete configuration of file services. A DB
+	// row overrides only the fields that the admin API can persist.
+	merged := make([]*proxy.Service, 0, len(dbRows)+len(configServices))
 	for _, svc := range configServices {
-		if _, exists := dbByName[svc.Name]; !exists {
+		row, exists := dbByName[svc.Name]
+		if !exists {
 			merged = append(merged, svc)
+			continue
 		}
+
+		merged = append(merged, serviceFromDBRow(row, svc))
+		delete(dbByName, svc.Name)
+	}
+
+	// Add services that exist only in the DB in the order they were
+	// created, which the store returns and which is also where the admin
+	// API appends them at runtime.
+	for _, row := range dbRows {
+		if _, exists := dbByName[row.Name]; !exists {
+			continue
+		}
+
+		merged = append(merged, serviceFromDBRow(row, nil))
 	}
 
 	log.Infof("Loaded %d services from DB, %d from config (%d merged "+
-		"total)", len(dbByName), len(configServices), len(merged))
+		"total)", len(dbRows), len(configServices), len(merged))
 
 	return merged
+}
+
+// serviceFromDBRow applies the fields persisted by the admin API to an
+// optional config-file service.
+func serviceFromDBRow(row aperturedb.ServiceRow,
+	configService *proxy.Service) *proxy.Service {
+
+	service := &proxy.Service{}
+	if configService != nil {
+		*service = *configService
+	}
+
+	service.Name = row.Name
+	service.Address = row.Address
+	service.Protocol = row.Protocol
+	service.HostRegexp = row.HostRegexp
+	service.PathRegexp = row.PathRegexp
+	service.Price = row.Price
+	service.Auth = auth.Level(row.Auth)
+	service.AuthScheme = row.AuthScheme
+
+	return service
 }
 
 // normalizeDialAddr replaces a wildcard or empty host in an address with
@@ -1630,6 +1721,7 @@ func deriveHMACSecret(store mint.SecretStore) ([]byte, error) {
 func createProxy(cfg *Config, services []*proxy.Service,
 	challenger challenger.Challenger,
 	store mint.SecretStore, mppSessionStore auth.SessionStore,
+	mppChargeStore auth.ChargeStore,
 	paymentSender auth.PaymentSender, txnStore mint.TransactionStore,
 	txnRecorder auth.TransactionRecorder,
 	adminPriorityServices, adminFallbackServices []proxy.LocalService,
@@ -1645,8 +1737,25 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	l402Auth := auth.NewL402Authenticator(minter, challenger)
 
 	// Build the authenticator, optionally composing with MPP.
-	var authenticator auth.Authenticator
+	var (
+		authenticator auth.Authenticator
+		mppCleanup    = func() {}
+	)
 	if cfg.Authenticator.EnableMPP {
+		// A charge credential is single use, and the only thing that
+		// can tell a first presentation from a replay is a durable
+		// record of what has been spent. Backends that provide no such
+		// record, etcd today, cannot serve the charge intent at all,
+		// and saying so here is better than starting up and quietly
+		// handing out unlimited service for one payment.
+		if mppChargeStore == nil {
+			return nil, nil, fmt.Errorf("MPP requires a sql "+
+				"database backend to record spent payments, "+
+				"but %v is configured: run aperture with "+
+				"sqlite or postgres, or without --enablempp",
+				cfg.DatabaseBackend)
+		}
+
 		realm := cfg.Authenticator.MPPRealm
 		if realm == "" {
 			realm = cfg.ListenAddr
@@ -1665,10 +1774,37 @@ func createProxy(cfg *Config, services []*proxy.Service,
 			network = "mainnet"
 		}
 
-		mppAuth := auth.NewMPPAuthenticator(
+		mppAuth, err := auth.NewMPPAuthenticator(
 			challenger, challenger, realm, hmacSecret, network,
-			txnRecorder,
+			txnRecorder, mppChargeStore,
 		)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// On metered services the charge credential is the key to a
+		// prepaid usage bundle, so it stays presentable until the
+		// pricer refuses it, exactly like an L402 token. Everywhere
+		// else the spec's strict single-use rule stands.
+		meteredServices := make(map[string]struct{})
+		for _, svc := range services {
+			if svc.DynamicPrice.Enabled && svc.DynamicPrice.Metered {
+				meteredServices[svc.Name] = struct{}{}
+			}
+		}
+		if len(meteredServices) > 0 {
+			mppAuth.SetReusableChargePolicy(
+				reusableChargePolicyForServices(
+					meteredServices,
+				),
+			)
+		}
+
+		// The authenticator runs a background sweep over the records of
+		// spent payments, which the caller stops along with the rest of
+		// the proxy.
+		mppAuth.Start()
+		mppCleanup = mppAuth.Stop
 
 		auths := []auth.Authenticator{l402Auth, mppAuth}
 
@@ -1716,6 +1852,7 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	staticServer := http.NotFoundHandler()
 	if cfg.ServeStatic {
 		if len(strings.TrimSpace(cfg.StaticRoot)) == 0 {
+			mppCleanup()
 			return nil, nil, fmt.Errorf("staticroot cannot be " +
 				"empty, must contain path to directory that " +
 				"contains index.html")
@@ -1725,17 +1862,24 @@ func createProxy(cfg *Config, services []*proxy.Service,
 
 	var (
 		localServices []proxy.LocalService
-		proxyCleanup  = func() {}
+		hashMailStop  = func() {}
 	)
 
 	if cfg.HashMail.Enabled {
 		hashMailServices, cleanup, err := createHashMailServer(cfg)
 		if err != nil {
+			mppCleanup()
 			return nil, nil, err
 		}
 
 		localServices = append(localServices, hashMailServices...)
-		proxyCleanup = cleanup
+		hashMailStop = cleanup
+	}
+
+	// Everything the proxy started is stopped together.
+	proxyCleanup := func() {
+		hashMailStop()
+		mppCleanup()
 	}
 
 	// Append admin fallback services (e.g. dashboard catch-all) before
@@ -1940,4 +2084,30 @@ func allowCORS(handler http.Handler, origins []string) http.Handler {
 		// chain of handlers.
 		handler.ServeHTTP(w, r)
 	})
+}
+
+// reusableChargePolicyForServices builds the predicate deciding which
+// resource names may re-present a charge credential.
+//
+// The authenticator is handed the resource name, which for a dynamically
+// priced service is the service name with the request path appended
+// (Service.ResourceName), so a metered service is recognized by prefix
+// rather than equality: "inference" covers "inference/v1/chat/completions".
+// The separator is required so a service named "inference" does not
+// accidentally cover one named "inference2".
+func reusableChargePolicyForServices(
+	metered map[string]struct{}) func(string) bool {
+
+	return func(resourceName string) bool {
+		for name := range metered {
+			if resourceName == name {
+				return true
+			}
+			if strings.HasPrefix(resourceName, name+"/") {
+				return true
+			}
+		}
+
+		return false
+	}
 }

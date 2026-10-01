@@ -2,23 +2,25 @@ package challenger
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
+	"io"
 
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"google.golang.org/grpc"
 )
 
 // PaymentClient is the subset of the lnrpc.LightningClient interface needed
 // for sending payments.
 type PaymentClient interface {
-	// SendPaymentSync sends a payment synchronously and returns the
-	// result.
-	SendPaymentSync(ctx context.Context, in *lnrpc.SendRequest,
-		opts ...grpc.CallOption) (*lnrpc.SendResponse, error)
+	// SendPaymentV2 sends a payment and returns a stream of payment
+	// updates.
+	SendPaymentV2(ctx context.Context, in *routerrpc.SendPaymentRequest,
+		opts ...grpc.CallOption) (routerrpc.Router_SendPaymentV2Client,
+		error)
 }
 
-// LndPaymentSender sends Lightning payments via LND's SendPaymentSync RPC.
+// LndPaymentSender sends Lightning payments via LND's SendPaymentV2 RPC.
 // This is used by the MPP session authenticator to refund unspent session
 // balances to the client's return invoice.
 type LndPaymentSender struct {
@@ -35,7 +37,7 @@ func NewLndPaymentSender(client PaymentClient) *LndPaymentSender {
 func (s *LndPaymentSender) SendPayment(ctx context.Context, invoice string,
 	amtSats int64) (string, error) {
 
-	resp, err := s.client.SendPaymentSync(ctx, &lnrpc.SendRequest{
+	stream, err := s.client.SendPaymentV2(ctx, &routerrpc.SendPaymentRequest{
 		PaymentRequest: invoice,
 		Amt:            amtSats,
 	})
@@ -43,10 +45,23 @@ func (s *LndPaymentSender) SendPayment(ctx context.Context, invoice string,
 		return "", fmt.Errorf("failed to send payment: %w", err)
 	}
 
-	if resp.PaymentError != "" {
-		return "", fmt.Errorf("payment error: %s",
-			resp.PaymentError)
-	}
+	for {
+		payment, err := stream.Recv()
+		if err == io.EOF {
+			return "", fmt.Errorf("payment stream ended without result")
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to receive payment "+
+				"update: %w", err)
+		}
 
-	return hex.EncodeToString(resp.PaymentPreimage), nil
+		switch payment.Status {
+		case lnrpc.Payment_SUCCEEDED:
+			return payment.PaymentPreimage, nil
+
+		case lnrpc.Payment_FAILED:
+			return "", fmt.Errorf("payment failed: %s",
+				payment.FailureReason)
+		}
+	}
 }
