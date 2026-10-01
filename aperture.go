@@ -47,7 +47,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
+	"golang.org/x/net/http2/h2c" //nolint:staticcheck // Keep HTTP/1.1 Upgrade support.
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -536,6 +536,8 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		// option is used. The default HTTP handler doesn't support it
 		// though so we need to add a special h2c handler here.
 		serveFn = a.httpsServer.ListenAndServe
+		// Go's native HTTP/2 server does not support HTTP/1.1 Upgrade.
+		//nolint:staticcheck
 		a.httpsServer.Handler = h2c.NewHandler(handler, &http2.Server{})
 	} else {
 		a.httpsServer.TLSConfig, err = getTLSConfig(
@@ -582,8 +584,9 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}()
 
 		a.torHTTPServer = &http.Server{
-			Addr:    fmt.Sprintf("localhost:%d", a.cfg.Tor.ListenPort),
-			Handler: h2c.NewHandler(handler, &http2.Server{}),
+			Addr: fmt.Sprintf("localhost:%d", a.cfg.Tor.ListenPort),
+			// Retain HTTP/1.1 Upgrade support for onion clients.
+			Handler: h2c.NewHandler(handler, &http2.Server{}), //nolint:staticcheck
 		}
 		a.wg.Add(1)
 		go func() {
