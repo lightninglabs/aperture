@@ -26,7 +26,7 @@ func (q *Queries) DeleteService(ctx context.Context, name string) (int64, error)
 const listServices = `-- name: ListServices :many
 SELECT id, name, address, protocol, host_regexp, path_regexp, price, auth, created_at, updated_at, auth_scheme
 FROM services
-ORDER BY name
+ORDER BY id
 `
 
 func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {

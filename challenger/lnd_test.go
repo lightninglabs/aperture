@@ -459,3 +459,149 @@ func TestSettlementQueueDrainOnStop(t *testing.T) {
 	require.GreaterOrEqual(t, len(settled), 1)
 	mu.Unlock()
 }
+
+// untrackedInvoiceClient mints invoices but cannot be asked about them
+// afterwards, which is the shape of every gateway-backed client. It counts the
+// calls it should never see so a test can prove they did not happen, rather
+// than only proving that startup did not fail.
+type untrackedInvoiceClient struct {
+	listCalls      int
+	subscribeCalls int
+}
+
+var _ InvoiceClient = (*untrackedInvoiceClient)(nil)
+var _ InvoiceTracker = (*untrackedInvoiceClient)(nil)
+
+func (u *untrackedInvoiceClient) TracksInvoices() bool {
+	return false
+}
+
+func (u *untrackedInvoiceClient) ListInvoices(_ context.Context,
+	_ *lnrpc.ListInvoiceRequest,
+	_ ...grpc.CallOption) (*lnrpc.ListInvoiceResponse, error) {
+
+	u.listCalls++
+
+	return nil, fmt.Errorf("listing invoices is not supported")
+}
+
+func (u *untrackedInvoiceClient) SubscribeInvoices(_ context.Context,
+	_ *lnrpc.InvoiceSubscription, _ ...grpc.CallOption) (
+	lnrpc.Lightning_SubscribeInvoicesClient, error) {
+
+	u.subscribeCalls++
+
+	return nil, fmt.Errorf("subscribing to invoices is not supported")
+}
+
+func (u *untrackedInvoiceClient) AddInvoice(_ context.Context,
+	_ *lnrpc.Invoice, _ ...grpc.CallOption) (*lnrpc.AddInvoiceResponse,
+	error) {
+
+	return &lnrpc.AddInvoiceResponse{
+		RHash:          lntypes.ZeroHash[:],
+		PaymentRequest: "foo",
+	}, nil
+}
+
+// TestUntrackedClientWithSettlementCallback covers the combination that used
+// to take the whole proxy down on startup: an operator turns on the admin
+// dashboard, which asks for a settlement callback without knowing what is
+// minting the invoices, while the authenticator is a backend that cannot
+// enumerate them. The callback has to be dropped, not honoured, because the
+// only way to honour it is to call methods this client can only fail.
+func TestUntrackedClientWithSettlementCallback(t *testing.T) {
+	t.Parallel()
+
+	client := &untrackedInvoiceClient{}
+	genInvoiceReq := func(int64) (*lnrpc.Invoice, error) {
+		return &lnrpc.Invoice{Value: 99}, nil
+	}
+
+	var settled []lntypes.Hash
+	c, err := NewLndChallenger(
+		client, 10, genInvoiceReq, context.Background,
+		make(chan error), false,
+		WithSettlementCallback(func(hash lntypes.Hash) {
+			settled = append(settled, hash)
+		}),
+	)
+	require.NoError(t, err)
+	defer c.Stop()
+
+	// Neither of the invoice tracking calls may have been attempted, and
+	// no settlement queue should be left running to feed a callback that
+	// can never fire.
+	require.Zero(t, client.listCalls)
+	require.Zero(t, client.subscribeCalls)
+	require.Nil(t, c.onSettled)
+	require.Nil(t, c.settlementQueue)
+	require.Empty(t, settled)
+
+	// Minting still works, which is the one thing this backend is for.
+	_, _, err = c.NewChallenge(99)
+	require.NoError(t, err)
+}
+
+// TestUntrackedClientRefusesStrictVerify checks that the tracking capability
+// is not quietly downgraded. Strict verification means a token is honoured
+// only once its invoice has been seen to settle, so skipping the tracking
+// while leaving the flag on would honour tokens for invoices nobody paid.
+func TestUntrackedClientRefusesStrictVerify(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewLndChallenger(
+		&untrackedInvoiceClient{}, 10,
+		func(int64) (*lnrpc.Invoice, error) {
+			return &lnrpc.Invoice{Value: 99}, nil
+		}, context.Background, make(chan error), true,
+	)
+	require.ErrorContains(t, err, "strict verification")
+}
+
+// TestTrackingClientKeepsSettlementCallback is the other side of the same
+// switch: a client that says nothing about the capability is taken to have it,
+// so the ordinary lnd path is untouched by any of this.
+func TestTrackingClientKeepsSettlementCallback(t *testing.T) {
+	t.Parallel()
+
+	hash := lntypes.Hash{7, 7, 7}
+	mockClient := &mockInvoiceClient{
+		invoices: []*lnrpc.Invoice{
+			newInvoice(hash, 42, lnrpc.Invoice_SETTLED),
+		},
+		updateChan: make(chan *lnrpc.Invoice),
+		errChan:    make(chan error, 1),
+		quit:       make(chan struct{}),
+	}
+
+	var (
+		mu      sync.Mutex
+		settled []lntypes.Hash
+	)
+
+	c, err := NewLndChallenger(
+		mockClient, 10, func(int64) (*lnrpc.Invoice, error) {
+			return &lnrpc.Invoice{Value: 99}, nil
+		}, context.Background, make(chan error), false,
+		WithSettlementCallback(func(hash lntypes.Hash) {
+			mu.Lock()
+			settled = append(settled, hash)
+			mu.Unlock()
+		}),
+	)
+	require.NoError(t, err)
+
+	require.NotNil(t, c.onSettled)
+	require.NotNil(t, c.settlementQueue)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(settled) == 1 && settled[0] == hash
+	}, time.Second, 10*time.Millisecond)
+
+	mockClient.stop()
+	c.Stop()
+}
