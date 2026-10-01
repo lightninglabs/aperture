@@ -28,6 +28,9 @@ endif
 # If we are targetting postgres make sure our tests have the tags.
 ifeq ($(dbbackend),postgres)
 DEV_TAGS += test_db_postgres
+# Each parallel test starts its own Postgres container. Keep fixture startup
+# bounded on CI runners without limiting concurrency inside individual tests.
+TEST_FLAGS += -test.parallel=4
 endif
 
 # Add any additional tags to the dev tags list.
