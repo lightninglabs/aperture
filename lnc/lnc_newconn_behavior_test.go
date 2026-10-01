@@ -30,8 +30,6 @@ import (
 // succeeds with authentication. This reproduces the behavior regression where
 // newConn returned before auth data was initialized.
 func TestNewConnInitialRPCIsAuthenticated(t *testing.T) {
-	mailboxAddr := startTestHashMailServer(t)
-
 	authMacHex, authPayload := testMacaroonPayload(t)
 	passphraseEntropy := make([]byte, 32)
 	for i := range passphraseEntropy {
@@ -45,6 +43,7 @@ func TestNewConnInitialRPCIsAuthenticated(t *testing.T) {
 		&keychain.PrivKeyECDH{PrivKey: serverStatic}, nil,
 		passphraseEntropy, authPayload, nil, nil,
 	)
+	mailboxAddr := startTestHashMailServer(t, serverConnData)
 
 	mailboxListener, err := mailbox.NewServer(
 		mailboxAddr, serverConnData, nil,
@@ -96,7 +95,7 @@ func TestNewConnInitialRPCIsAuthenticated(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func startTestHashMailServer(t *testing.T) string {
+func startTestHashMailServer(t *testing.T, connData *mailbox.ConnData) string {
 	t.Helper()
 
 	certBytes, keyBytes, err := cert.GenCertPair(
@@ -113,7 +112,16 @@ func startTestHashMailServer(t *testing.T) string {
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{pair},
 	})))
-	hashmailrpc.RegisterHashMailServer(server, newTestHashMailServer())
+
+	sid, err := connData.SID()
+	require.NoError(t, err)
+
+	// Pre-create both streams so mailbox setup retries don't consume the
+	// connection timeout in this authentication test.
+	hashMailServer := newTestHashMailServer(
+		mailbox.GetSID(sid, true), mailbox.GetSID(sid, false),
+	)
+	hashmailrpc.RegisterHashMailServer(server, hashMailServer)
 
 	go func() {
 		_ = server.Serve(listener)
@@ -191,10 +199,16 @@ type testHashMailServer struct {
 	streams map[string]chan []byte
 }
 
-func newTestHashMailServer() *testHashMailServer {
-	return &testHashMailServer{
+func newTestHashMailServer(streamIDs ...[64]byte) *testHashMailServer {
+	server := &testHashMailServer{
 		streams: make(map[string]chan []byte),
 	}
+
+	for _, streamID := range streamIDs {
+		server.streams[string(streamID[:])] = make(chan []byte, 64)
+	}
+
+	return server
 }
 
 func (s *testHashMailServer) NewCipherBox(_ context.Context,

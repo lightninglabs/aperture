@@ -1567,9 +1567,9 @@ func initSQLStores(db *aperturedb.BaseDB) (
 }
 
 // mergeServicesFromDB loads persisted services from the database and merges
-// them with config file services. DB services override config services by name
-// so that runtime changes survive restarts. Config services not in the DB are
-// preserved as-is.
+// them with config file services. Persisted fields override matching config
+// fields so that runtime changes survive restarts. Fields not represented in
+// the database and config services without a matching row are preserved.
 func mergeServicesFromDB(configServices []*proxy.Service,
 	svcStore *aperturedb.ServicesStore) []*proxy.Service {
 
@@ -1594,36 +1594,62 @@ func mergeServicesFromDB(configServices []*proxy.Service,
 	}
 
 	// Build a map of DB services keyed by name.
-	dbByName := make(map[string]*proxy.Service, len(dbRows))
+	dbByName := make(map[string]aperturedb.ServiceRow, len(dbRows))
 	for _, row := range dbRows {
-		dbByName[row.Name] = &proxy.Service{
-			Name:       row.Name,
-			Address:    row.Address,
-			Protocol:   row.Protocol,
-			HostRegexp: row.HostRegexp,
-			PathRegexp: row.PathRegexp,
-			Price:      row.Price,
-			Auth:       auth.Level(row.Auth),
-			AuthScheme: row.AuthScheme,
-		}
+		dbByName[row.Name] = row
 	}
 
-	// Start with DB services, then add config services that are not
-	// already in the DB.
-	merged := make([]*proxy.Service, 0, len(dbByName)+len(configServices))
-	for _, svc := range dbByName {
-		merged = append(merged, svc)
-	}
+	// Preserve the order and complete configuration of file services. A DB
+	// row overrides only the fields that the admin API can persist.
+	merged := make([]*proxy.Service, 0, len(dbRows)+len(configServices))
 	for _, svc := range configServices {
-		if _, exists := dbByName[svc.Name]; !exists {
+		row, exists := dbByName[svc.Name]
+		if !exists {
 			merged = append(merged, svc)
+			continue
 		}
+
+		merged = append(merged, serviceFromDBRow(row, svc))
+		delete(dbByName, svc.Name)
+	}
+
+	// Add services that exist only in the DB in the order they were
+	// created, which the store returns and which is also where the admin
+	// API appends them at runtime.
+	for _, row := range dbRows {
+		if _, exists := dbByName[row.Name]; !exists {
+			continue
+		}
+
+		merged = append(merged, serviceFromDBRow(row, nil))
 	}
 
 	log.Infof("Loaded %d services from DB, %d from config (%d merged "+
-		"total)", len(dbByName), len(configServices), len(merged))
+		"total)", len(dbRows), len(configServices), len(merged))
 
 	return merged
+}
+
+// serviceFromDBRow applies the fields persisted by the admin API to an
+// optional config-file service.
+func serviceFromDBRow(row aperturedb.ServiceRow,
+	configService *proxy.Service) *proxy.Service {
+
+	service := &proxy.Service{}
+	if configService != nil {
+		*service = *configService
+	}
+
+	service.Name = row.Name
+	service.Address = row.Address
+	service.Protocol = row.Protocol
+	service.HostRegexp = row.HostRegexp
+	service.PathRegexp = row.PathRegexp
+	service.Price = row.Price
+	service.Auth = auth.Level(row.Auth)
+	service.AuthScheme = row.AuthScheme
+
+	return service
 }
 
 // normalizeDialAddr replaces a wildcard or empty host in an address with
