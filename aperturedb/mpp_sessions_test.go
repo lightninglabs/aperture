@@ -17,11 +17,12 @@ import (
 )
 
 // newMPPSessionsStoreWithDB wraps a raw database handle in the session store.
-func newMPPSessionsStoreWithDB(db *BaseDB) *MPPSessionsStore {
+func newMPPSessionsStoreWithDB(db *BaseDB,
+	opts ...TxExecutorOption) *MPPSessionsStore {
 	dbTxer := NewTransactionExecutor(db,
 		func(tx *sql.Tx) MPPSessionsDB {
 			return db.WithTx(tx)
-		},
+		}, opts...,
 	)
 
 	return NewMPPSessionsStore(dbTxer)
@@ -103,8 +104,8 @@ func creditTopUp(t *testing.T, store *MPPSessionsStore, ctx context.Context,
 func TestMPPSessionLifecycle(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x01, 1000)
 
@@ -147,8 +148,8 @@ func TestMPPSessionLifecycle(t *testing.T) {
 func TestMPPSessionRejectsInsufficientBalance(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x02, 100)
 
@@ -173,8 +174,8 @@ func TestMPPSessionRejectsInsufficientBalance(t *testing.T) {
 func TestMPPSessionRejectsNonPositiveAmounts(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x03, 100)
 
@@ -201,8 +202,8 @@ func TestMPPSessionRejectsNonPositiveAmounts(t *testing.T) {
 func TestMPPSessionClosedIsTerminal(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x04, 1000)
 
@@ -226,8 +227,8 @@ func TestMPPSessionClosedIsTerminal(t *testing.T) {
 func TestMPPSessionUnknownSession(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	const unknown = "0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -254,8 +255,8 @@ func TestMPPSessionUnknownSession(t *testing.T) {
 func TestMPPSessionConcurrentDeductions(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	const (
 		deposit    = 1000
@@ -308,8 +309,8 @@ func TestMPPSessionConcurrentDeductions(t *testing.T) {
 func TestMPPSessionConcurrentCloseAndDeduct(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	const (
 		deposit    = 1000
@@ -425,8 +426,8 @@ func TestMPPSessionSurvivesRestart(t *testing.T) {
 func TestMPPSessionDuplicateOpen(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x08, 1000)
 	require.NoError(t, store.DeductSessionBalance(ctx, session.SessionID, 400))
@@ -555,8 +556,8 @@ func TestMPPSessionBalanceInvariants(t *testing.T) {
 func TestMPPSessionsAreIsolated(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	const numSessions = 5
 
@@ -597,8 +598,8 @@ func TestMPPSessionsAreIsolated(t *testing.T) {
 func TestMPPSessionSettleClamps(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x20, 1000)
 	require.NoError(t, store.DeductSessionBalance(ctx, session.SessionID, 100))
@@ -637,8 +638,8 @@ func TestMPPSessionSettleClamps(t *testing.T) {
 func TestMPPSessionSettleRejectsClosed(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x21, 1000)
 
@@ -659,13 +660,17 @@ func TestMPPSessionSettleRejectsClosed(t *testing.T) {
 func TestMPPSessionConcurrentSettlements(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
-	store := newMPPSessionsStore(t)
-
 	const (
 		deposit  = 10_000
 		requests = 40
 	)
+
+	// This test measures balance invariants under contention, not the
+	// production retry limit. Allow an attempt per competing request.
+	store := newMPPSessionsStoreWithDB(
+		NewTestDB(t).BaseDB, WithTxRetries(requests),
+	)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x22, deposit)
 
@@ -719,8 +724,8 @@ func TestMPPSessionConcurrentSettlements(t *testing.T) {
 func TestMPPSessionCreditIsOnceOnly(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x30, 1000)
 
@@ -757,8 +762,8 @@ func TestMPPSessionCreditIsOnceOnly(t *testing.T) {
 func TestMPPSessionConcurrentCreditReplays(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	const (
 		replays   = 32
@@ -818,8 +823,8 @@ func TestMPPSessionConcurrentCreditReplays(t *testing.T) {
 func TestMPPSessionCreditHashBindsToItsSession(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	first := openSession(t, store, ctx, 0x32, 1000)
 	second := openSession(t, store, ctx, 0x33, 1000)
@@ -848,8 +853,8 @@ func TestMPPSessionCreditHashBindsToItsSession(t *testing.T) {
 func TestMPPSessionDepositHashIsCredited(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	session := openSession(t, store, ctx, 0x34, 1000)
 
@@ -886,8 +891,8 @@ func TestMPPSessionDepositHashIsCredited(t *testing.T) {
 func TestMPPSessionCreditRefusedDoesNotBurnHash(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPSessionsStore(t)
+	ctx := testSessionCtx(t)
 
 	closed := openSession(t, store, ctx, 0x36, 1000)
 	_, err := store.CloseSessionAndGetBalance(ctx, closed.SessionID)
