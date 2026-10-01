@@ -492,11 +492,34 @@ func (s *Server) ReportUsage(_ context.Context,
 				"debited", req.TokenId, req.Path)
 		} else {
 			log.Debugf("No usage object found for token %s "+
-				"(path %s, status %d, complete %v), nothing "+
-				"debited", req.TokenId, req.Path,
-				req.HttpStatus, req.Complete)
+				"(path %s, status %d, complete %v)",
+				req.TokenId, req.Path, req.HttpStatus,
+				req.Complete)
 		}
 	}
+
+	// Resolve the reservation to release up front, since an abandoned
+	// stream settles at exactly this estimate below. An exact release
+	// keeps mismatched estimates from accumulating into phantom exhaustion
+	// on a bundle with real balance left; the fallback covers reports
+	// predating the reservation echo.
+	release := req.ReservedEstimate
+	if release <= 0 {
+		release = s.cfg.EstimatedTokens
+	}
+
+	// An incomplete successful response that carried bytes but no usage
+	// object is a streamed generation the client walked away from: the
+	// usage arrives in the stream's final chunk, so abandoning the stream
+	// discards the bill for every token the upstream already produced and
+	// the seller already paid for. Settle those at the reservation
+	// estimate rather than zero. The estimate is what the request itself
+	// asked for (its max_tokens, or the configured default), so the buyer
+	// never pays past its own stated ceiling, and a response that produced
+	// no bytes at all still costs nothing.
+	settleAtEstimate := !found && !req.Complete &&
+		len(req.ResponseTail) > 0 &&
+		req.HttpStatus >= 200 && req.HttpStatus < 300
 
 	// Resolve the booked model's rates up front, since the debit is
 	// weighted by direction when the usage split is known. A bundle whose
@@ -509,14 +532,24 @@ func (s *Server) ReportUsage(_ context.Context,
 	}
 
 	// The number of tokens to debit is the prompt/completion sum, or the
-	// total count when the split is absent.
+	// total count when the split is absent. An abandoned stream settles at
+	// the reservation estimate instead.
 	var debitTokens int64
-	if found {
+	switch {
+	case found:
 		debitTokens = counts.totalTokens
 		if counts.hasSplit {
 			debitTokens = counts.promptTokens +
 				counts.completionTokens
 		}
+
+	case settleAtEstimate:
+		debitTokens = release
+		log.Warnf("Incomplete %d response for token %s (path %s) "+
+			"carried %d tail bytes but no usage object; settling "+
+			"at the reserved estimate of %d tokens",
+			req.HttpStatus, req.TokenId, req.Path,
+			len(req.ResponseTail), release)
 	}
 
 	// The bundle was priced at the blended (input+output)/2 rate, but the
@@ -536,16 +569,6 @@ func (s *Server) ReportUsage(_ context.Context,
 			debitTokens = (weightedTimesTwo + rateSum - 1) /
 				rateSum
 		}
-	}
-
-	// Release the exact reservation the authorization took when the proxy
-	// echoed it back, falling back to the configured default estimate for
-	// reports predating the echo. An exact release keeps mismatched
-	// estimates from accumulating into phantom exhaustion on a bundle with
-	// real balance left.
-	release := req.ReservedEstimate
-	if release <= 0 {
-		release = s.cfg.EstimatedTokens
 	}
 
 	after, ok, err := s.store.Debit(req.TokenId, debitTokens, release)
@@ -568,11 +591,12 @@ func (s *Server) ReportUsage(_ context.Context,
 	}
 
 	// The debited amount is priced exactly per direction when the split
-	// is known, and at the blended rate otherwise. Millisatoshis round up
-	// to satoshis.
+	// is known, and at the blended rate otherwise, which covers both a
+	// splitless usage object and an abandoned stream settled at the
+	// estimate. Millisatoshis round up to satoshis.
 	var debitedMsat int64
 	switch {
-	case !found:
+	case !found && !settleAtEstimate:
 
 	case counts.hasSplit:
 		debitedMsat = counts.promptTokens*rates.InputMsatPerToken +

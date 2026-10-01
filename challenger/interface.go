@@ -30,6 +30,32 @@ type InvoiceClient interface {
 		opts ...grpc.CallOption) (*lnrpc.AddInvoiceResponse, error)
 }
 
+// InvoiceTracker is an optional capability of an InvoiceClient. A client that
+// mints its invoices somewhere it cannot then enumerate them, such as a wallet
+// daemon reached over an HTTP gateway, implements it and reports false.
+//
+// It is deliberately a separate interface rather than a method on
+// InvoiceClient. The lnd-backed clients are lnrpc types we do not own and
+// cannot add a method to, so the capability has to be optional, and a client
+// that says nothing is taken to track its invoices exactly as before.
+type InvoiceTracker interface {
+	// TracksInvoices reports whether this client can list its invoices and
+	// subscribe to their state changes.
+	TracksInvoices() bool
+}
+
+// tracksInvoices reports whether an invoice client can be asked about invoice
+// state. A client that does not declare the capability is assumed to have it,
+// which is what every lnd-backed client does.
+func tracksInvoices(client InvoiceClient) bool {
+	tracker, ok := client.(InvoiceTracker)
+	if !ok {
+		return true
+	}
+
+	return tracker.TracksInvoices()
+}
+
 // Challenger is an interface that combines the mint.Challenger and the
 // auth.InvoiceChecker interfaces.
 type Challenger interface {

@@ -33,3 +33,26 @@ UPDATE mpp_sessions
 SET status = 'closed', updated_at = $1
 WHERE session_id = $2 AND status = 'open'
 RETURNING CAST(deposit_sats - spent_sats AS BIGINT);
+
+-- name: SettleMPPSessionSpent :one
+UPDATE mpp_sessions
+SET spent_sats = CASE
+        WHEN spent_sats + $1 < 0 THEN 0
+        WHEN spent_sats + $1 > deposit_sats THEN deposit_sats
+        ELSE spent_sats + $1
+    END,
+    updated_at = $2
+WHERE session_id = $3 AND status = 'open'
+RETURNING CAST(spent_sats AS BIGINT);
+
+-- name: InsertMPPSessionCredit :execresult
+INSERT INTO mpp_session_credits (
+    payment_hash, session_id, amount_sats, created_at
+) VALUES (
+    $1, $2, $3, $4
+) ON CONFLICT (payment_hash) DO NOTHING;
+
+-- name: GetMPPSessionCreditOwner :one
+SELECT session_id
+FROM mpp_session_credits
+WHERE payment_hash = $1;
