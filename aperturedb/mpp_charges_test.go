@@ -40,8 +40,8 @@ func liveExpiry() time.Time {
 func TestMPPChargeIsSpentOnce(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPChargesStore(t)
+	ctx := testSessionCtx(t)
 
 	hash := freshHash(t)
 
@@ -87,8 +87,8 @@ func TestMPPChargeIsSpentOnce(t *testing.T) {
 func TestMPPChargeUnspentIsNotConsumed(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPChargesStore(t)
+	ctx := testSessionCtx(t)
 
 	spent, err := store.IsChargeConsumed(ctx, freshHash(t))
 	require.NoError(t, err)
@@ -104,8 +104,8 @@ func TestMPPChargeUnspentIsNotConsumed(t *testing.T) {
 func TestMPPChargeConcurrentClaims(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPChargesStore(t)
+	ctx := testSessionCtx(t)
 
 	const claims = 32
 
@@ -155,8 +155,8 @@ func TestMPPChargeConcurrentClaims(t *testing.T) {
 func TestMPPChargeConcurrentDistinctClaims(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPChargesStore(t)
+	ctx := testSessionCtx(t)
 
 	const payments = 16
 
@@ -263,8 +263,8 @@ func TestMPPChargeSurvivesRestart(t *testing.T) {
 func TestMPPChargePruneDropsOnlyExpired(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	store := newMPPChargesStore(t)
+	ctx := testSessionCtx(t)
 
 	now := time.Now().UTC()
 
@@ -334,8 +334,8 @@ func TestMPPChargePruneDropsOnlyExpired(t *testing.T) {
 func TestMPPChargePruneLeavesSessionCreditsAlone(t *testing.T) {
 	t.Parallel()
 
-	ctx := testSessionCtx(t)
 	db := NewTestDB(t).BaseDB
+	ctx := testSessionCtx(t)
 
 	charges := newMPPChargesStoreWithDB(db)
 	sessions := newMPPSessionsStoreWithDB(db)
