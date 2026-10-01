@@ -20,6 +20,20 @@ const (
 	SessionActionClose SessionAction = "close"
 )
 
+const (
+	// RefundStatusSucceeded means the unspent balance was paid back to the
+	// client's return invoice.
+	RefundStatusSucceeded = "succeeded"
+
+	// RefundStatusFailed means a refund was attempted and did not go
+	// through, so the client's balance is still held by the server.
+	RefundStatusFailed = "failed"
+
+	// RefundStatusSkipped means no refund was attempted, because there was
+	// nothing left to refund.
+	RefundStatusSkipped = "skipped"
+)
+
 // SessionRequest is the decoded request field for method="lightning",
 // intent="session" as defined in draft-lightning-session-00 Section 7.
 type SessionRequest struct {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,8 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
+
 	"github.com/lightninglabs/aperture/l402"
+	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/aperture/pricer"
+	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/macaroon.v2"
 )
@@ -693,4 +698,336 @@ func TestAttachUsageObserverReleasesOnProtocolUpgrade(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no usage report; the reservation leaked")
 	}
+}
+
+// paymentCredentialHeader builds an Authorization: Payment header for a charge
+// credential whose preimage hashes to the returned payment hash. The metering
+// layer runs after authentication, so the credential only has to parse; its
+// HMAC and settlement have already been checked by the time metering sees it.
+func paymentCredentialHeader(t *testing.T, intent string) (http.Header,
+	string) {
+
+	t.Helper()
+
+	var preimage lntypes.Preimage
+	_, err := rand.Read(preimage[:])
+	require.NoError(t, err)
+	paymentHash := preimage.Hash()
+
+	chargeReq := &mpp.ChargeRequest{
+		Amount:   "2000",
+		Currency: mpp.CurrencySat,
+		MethodDetails: mpp.ChargeMethodDetails{
+			Invoice:     "lnbcrt1000n1fake",
+			PaymentHash: paymentHash.String(),
+			Network:     "regtest",
+		},
+	}
+	encodedReq, err := mpp.EncodeRequest(chargeReq)
+	require.NoError(t, err)
+
+	payloadJSON, err := json.Marshal(mpp.ChargePayload{
+		Preimage: preimage.String(),
+	})
+	require.NoError(t, err)
+
+	cred := &mpp.Credential{
+		Challenge: mpp.ChallengeEcho{
+			ID:      "test-challenge-id",
+			Realm:   "test",
+			Method:  mpp.MethodLightning,
+			Intent:  intent,
+			Request: encodedReq,
+		},
+		Payload: json.RawMessage(payloadJSON),
+	}
+	encoded, err := mpp.EncodeCredential(cred)
+	require.NoError(t, err)
+
+	header := make(http.Header)
+	header.Set("Authorization", mpp.AuthScheme+" "+encoded)
+
+	return header, paymentHash.String()
+}
+
+// TestMeteringTokenIDFromPaymentCredential verifies that a Payment charge
+// credential meters under its invoice's payment hash, the same key its mint
+// booking used, and that everything else resolves the way metering expects.
+func TestMeteringTokenIDFromPaymentCredential(t *testing.T) {
+	t.Parallel()
+
+	t.Run("charge meters under the payment hash", func(t *testing.T) {
+		header, wantHash := paymentCredentialHeader(
+			t, mpp.IntentCharge,
+		)
+
+		tokenID, err := meteringTokenIDFromAuthHeader(&header)
+		require.NoError(t, err)
+		require.Equal(t, wantHash, tokenID)
+	})
+
+	t.Run("session is not metered here", func(t *testing.T) {
+		// Sessions have their own draw-down accounting; double
+		// metering a bearer request would charge the buyer twice.
+		header, _ := paymentCredentialHeader(t, mpp.IntentSession)
+
+		_, err := meteringTokenIDFromAuthHeader(&header)
+		require.ErrorIs(t, err, errNoMeteredCredential)
+	})
+
+	t.Run("no credential at all is simply unmetered", func(t *testing.T) {
+		header := make(http.Header)
+
+		_, err := meteringTokenIDFromAuthHeader(&header)
+		require.ErrorIs(t, err, errNoMeteredCredential)
+	})
+
+	t.Run("garbage payment credential is a hard error", func(t *testing.T) {
+		// A malformed credential on a metered service must not become
+		// free unmetered access.
+		header := make(http.Header)
+		header.Set("Authorization", "Payment not-base64url!!!")
+
+		_, err := meteringTokenIDFromAuthHeader(&header)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errNoMeteredCredential)
+	})
+}
+
+// TestCheckMeteredAccessPaymentCharge verifies the metering pipeline admits
+// and annotates a request authenticated with a Payment charge credential,
+// exactly as it does for an L402 token.
+func TestCheckMeteredAccessPaymentCharge(t *testing.T) {
+	t.Parallel()
+
+	header, wantHash := paymentCredentialHeader(t, mpp.IntentCharge)
+
+	newPaymentRequest := func() *http.Request {
+		r := httptest.NewRequest(
+			"POST", "/v1/chat/completions",
+			strings.NewReader(`{"model":"glm"}`),
+		)
+		r.Header.Set(
+			"Authorization", header.Get("Authorization"),
+		)
+
+		return r
+	}
+
+	t.Run("charge request is annotated", func(t *testing.T) {
+		fake := newFakeMeteredPricer()
+		fake.authorizeResult = &pricer.AuthorizeResult{Allowed: true}
+		svc := newMeteredService(fake)
+		p := &Proxy{}
+
+		w := httptest.NewRecorder()
+		r, proceed := p.checkMeteredAccess(
+			w, newPaymentRequest(), svc, "inference",
+		)
+
+		require.True(t, proceed)
+
+		info, ok := r.Context().Value(
+			meteringContextKey{},
+		).(*meteringInfo)
+		require.True(t, ok)
+		require.Equal(t, wantHash, info.tokenID)
+	})
+
+	t.Run("session request passes through unmetered", func(t *testing.T) {
+		sessHeader, _ := paymentCredentialHeader(
+			t, mpp.IntentSession,
+		)
+		fake := newFakeMeteredPricer()
+		svc := newMeteredService(fake)
+		p := &Proxy{}
+
+		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r.Header.Set(
+			"Authorization", sessHeader.Get("Authorization"),
+		)
+
+		w := httptest.NewRecorder()
+		annotated, proceed := p.checkMeteredAccess(
+			w, r, svc, "inference",
+		)
+
+		require.True(t, proceed)
+
+		_, ok := annotated.Context().Value(
+			meteringContextKey{},
+		).(*meteringInfo)
+		require.False(t, ok)
+	})
+
+	t.Run("malformed payment credential is refused", func(t *testing.T) {
+		fake := newFakeMeteredPricer()
+		svc := newMeteredService(fake)
+		p := &Proxy{}
+
+		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r.Header.Set("Authorization", "Payment not-base64url!!!")
+
+		w := httptest.NewRecorder()
+		_, proceed := p.checkMeteredAccess(w, r, svc, "inference")
+
+		require.False(t, proceed)
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+}
+
+// TestMPPChargeHashesFromChallengeHeader verifies the mint-side booking key
+// extraction: every well-formed Payment charge offer in a challenge header
+// yields its payment hash, and everything else is skipped.
+func TestMPPChargeHashesFromChallengeHeader(t *testing.T) {
+	t.Parallel()
+
+	var preimage lntypes.Preimage
+	_, err := rand.Read(preimage[:])
+	require.NoError(t, err)
+	paymentHash := preimage.Hash()
+
+	chargeReq := &mpp.ChargeRequest{
+		Amount:   "2000",
+		Currency: mpp.CurrencySat,
+		MethodDetails: mpp.ChargeMethodDetails{
+			Invoice:     "lnbcrt1000n1fake",
+			PaymentHash: paymentHash.String(),
+			Network:     "regtest",
+		},
+	}
+	encodedReq, err := mpp.EncodeRequest(chargeReq)
+	require.NoError(t, err)
+
+	t.Run("charge offer yields its payment hash", func(t *testing.T) {
+		header := make(http.Header)
+		header.Add(
+			"WWW-Authenticate",
+			`L402 macaroon="AGIAJEemVQUTEyNCR0exk7ek90Cg==", `+
+				`invoice="lnbcrt1fake"`,
+		)
+		mpp.SetChallengeHeader(header, &mpp.ChallengeParams{
+			ID:      "chal-id",
+			Realm:   "test",
+			Method:  mpp.MethodLightning,
+			Intent:  mpp.IntentCharge,
+			Request: encodedReq,
+		})
+
+		hashes := mppChargeHashesFromChallengeHeader(header)
+		require.Equal(t, []string{paymentHash.String()}, hashes)
+	})
+
+	t.Run("session offers are skipped", func(t *testing.T) {
+		header := make(http.Header)
+		mpp.SetChallengeHeader(header, &mpp.ChallengeParams{
+			ID:      "chal-id",
+			Realm:   "test",
+			Method:  mpp.MethodLightning,
+			Intent:  mpp.IntentSession,
+			Request: encodedReq,
+		})
+
+		require.Empty(t, mppChargeHashesFromChallengeHeader(header))
+	})
+
+	t.Run("no payment offer yields no hashes", func(t *testing.T) {
+		header := make(http.Header)
+		header.Add(
+			"WWW-Authenticate",
+			`L402 macaroon="AGIAJEemVQUTEyNCR0exk7ek90Cg==", `+
+				`invoice="lnbcrt1fake"`,
+		)
+
+		require.Empty(t, mppChargeHashesFromChallengeHeader(header))
+	})
+
+	t.Run("offer with a bad hash is skipped", func(t *testing.T) {
+		badReq, err := mpp.EncodeRequest(&mpp.ChargeRequest{
+			Amount:   "2000",
+			Currency: mpp.CurrencySat,
+			MethodDetails: mpp.ChargeMethodDetails{
+				Invoice:     "lnbcrt1fake",
+				PaymentHash: "not-a-hash",
+				Network:     "regtest",
+			},
+		})
+		require.NoError(t, err)
+
+		header := make(http.Header)
+		mpp.SetChallengeHeader(header, &mpp.ChallengeParams{
+			ID:      "chal-id",
+			Realm:   "test",
+			Method:  mpp.MethodLightning,
+			Intent:  mpp.IntentCharge,
+			Request: badReq,
+		})
+
+		require.Empty(t, mppChargeHashesFromChallengeHeader(header))
+	})
+}
+
+// TestMeteringSeesEveryL402HeaderForm pins the presence test to the same
+// three header forms the authenticator reads. A paid token presented through
+// the Macaroon or Grpc-Metadata-Macaroon header authenticates exactly like
+// one in the Authorization header, so it must meter exactly like one too;
+// gating metering on the Authorization scheme alone turned the alternate
+// headers into unlimited unmetered access on a metered service.
+func TestMeteringSeesEveryL402HeaderForm(t *testing.T) {
+	t.Parallel()
+
+	// The alternate headers carry the macaroon hex-encoded with the
+	// preimage as a caveat, unlike the Authorization form's base64 plus
+	// separate preimage.
+	mac, tokenID := newTestMacaroon(t)
+
+	var preimage lntypes.Preimage
+	_, err := rand.Read(preimage[:])
+	require.NoError(t, err)
+	require.NoError(t, mac.AddFirstPartyCaveat(
+		[]byte("preimage="+preimage.String()),
+	))
+
+	macBytes, err := mac.MarshalBinary()
+	require.NoError(t, err)
+	macHex := hex.EncodeToString(macBytes)
+
+	for _, headerName := range []string{
+		"Macaroon", "Grpc-Metadata-Macaroon",
+	} {
+		t.Run(headerName, func(t *testing.T) {
+			header := make(http.Header)
+			header.Set(headerName, macHex)
+
+			got, err := meteringTokenIDFromAuthHeader(&header)
+			require.NoError(t, err)
+			require.Equal(t, tokenID, got)
+		})
+	}
+
+	t.Run("garbage in an alternate header is a hard error", func(t *testing.T) {
+		// A credential-shaped header that fails to parse must refuse
+		// the request rather than skip metering.
+		header := make(http.Header)
+		header.Set("Macaroon", "not-a-macaroon")
+
+		_, err := meteringTokenIDFromAuthHeader(&header)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errNoMeteredCredential)
+	})
+
+	t.Run("a payment credential meters despite a junk L402 header",
+		func(t *testing.T) {
+			// The request authenticated through the Payment door; a
+			// stray unparseable L402 value riding along must not
+			// turn a metered request into a refusal.
+			credHeader, hash := paymentCredentialHeader(
+				t, mpp.IntentCharge,
+			)
+			credHeader.Set("Macaroon", "not-a-macaroon")
+
+			got, err := meteringTokenIDFromAuthHeader(&credHeader)
+			require.NoError(t, err)
+			require.Equal(t, hash, got)
+		})
 }
