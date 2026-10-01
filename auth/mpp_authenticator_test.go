@@ -847,3 +847,70 @@ func TestMPPAuthenticatorAcceptsOncePerPayment(t *testing.T) {
 		}
 	})
 }
+
+// TestMPPAuthenticatorReusableChargeOnMeteredService verifies that the
+// reusable-charge policy turns a repeat presentation from a refused replay
+// into an accepted request, and only on the services the policy names.
+//
+// On a metered service the credential is the key to a prepaid usage bundle:
+// the metering pipeline debits every request against the bundle and refuses
+// when it runs dry, so the draw-down is what bounds the spend and the
+// credential has to stay presentable. Everywhere else the spec's single-use
+// rule stands.
+func TestMPPAuthenticatorReusableChargeOnMeteredService(t *testing.T) {
+	checker := newMockInvoiceChecker()
+	auth, _ := newTestChargeAuth(t, &mockChallenger{}, checker)
+
+	auth.SetReusableChargePolicy(func(serviceName string) bool {
+		return serviceName == "metered-service"
+	})
+
+	// On the metered service, the same credential keeps working: the
+	// second presentation is the buyer spending the rest of its bundle.
+	h, _ := paidCredential(t, checker)
+	require.True(t, auth.Accept(&h, "metered-service"))
+	require.True(t, auth.Accept(&h, "metered-service"))
+
+	// On a service the policy does not name, the strict rule stands: the
+	// first presentation spends the payment and the second is a replay.
+	h2, _ := paidCredential(t, checker)
+	require.True(t, auth.Accept(&h2, "strict-service"))
+	require.False(t, auth.Accept(&h2, "strict-service"))
+}
+
+// TestMPPAuthenticatorNilReusablePolicyStaysStrict verifies that clearing the
+// policy restores the single-use rule everywhere, so a deployment that
+// removes its metered services does not keep serving replays.
+func TestMPPAuthenticatorNilReusablePolicyStaysStrict(t *testing.T) {
+	checker := newMockInvoiceChecker()
+	auth, _ := newTestChargeAuth(t, &mockChallenger{}, checker)
+
+	auth.SetReusableChargePolicy(func(string) bool { return true })
+	auth.SetReusableChargePolicy(nil)
+
+	h, _ := paidCredential(t, checker)
+	require.True(t, auth.Accept(&h, "metered-service"))
+	require.False(t, auth.Accept(&h, "metered-service"))
+}
+
+// TestMPPAuthenticatorReceiptWrongIntent verifies that the charge
+// authenticator declines to produce a receipt for a session credential rather
+// than misreading the session request as a charge request and emitting a
+// receipt with an empty reference.
+func TestMPPAuthenticatorReceiptWrongIntent(t *testing.T) {
+	auth, _ := newTestChargeAuth(
+		t, &mockChallenger{}, newMockInvoiceChecker(),
+	)
+	preimage, paymentHash := testPreimageAndHash(t)
+
+	challenge, _ := buildSessionChallenge(
+		t, testHMACSecret, paymentHash, 300,
+	)
+	h := buildSessionCredential(t, challenge, &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	})
+
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+}

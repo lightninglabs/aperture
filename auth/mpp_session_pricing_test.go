@@ -361,9 +361,11 @@ func TestSettleSessionRequestUnknownSession(t *testing.T) {
 // closeSessionForRefund opens a session, spends part of it, and closes it,
 // returning the receipt header the close produced.
 func closeSessionForRefund(t *testing.T, auth *MPPSessionAuthenticator,
-	hmacSecret []byte, deposit, spend int64) http.Header {
+	hmacSecret []byte, spend int64) http.Header {
 
 	t.Helper()
+
+	const deposit = 300
 
 	preimage, paymentHash := testPreimageAndHash(t)
 	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
@@ -419,7 +421,7 @@ func receiptRefund(t *testing.T, auth *MPPSessionAuthenticator,
 func TestSessionRefundStatusSkipped(t *testing.T) {
 	auth, _, sender, hmacSecret := newTestSessionAuth(t)
 
-	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 300)
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300)
 
 	refund, status := receiptRefund(t, auth, closeCred)
 	require.EqualValues(t, 0, refund)
@@ -436,7 +438,7 @@ func TestSessionRefundStatusSkipped(t *testing.T) {
 func TestSessionRefundStatusSucceeded(t *testing.T) {
 	auth, _, sender, hmacSecret := newTestSessionAuth(t)
 
-	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 100)
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 100)
 
 	require.Eventually(t, func() bool {
 		_, status := receiptRefund(t, auth, closeCred)
@@ -464,7 +466,7 @@ func TestSessionRefundStatusFailed(t *testing.T) {
 	auth, _, sender, hmacSecret := newTestSessionAuth(t)
 	sender.err = errors.New("wavelength cannot pay an amountless invoice")
 
-	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 100)
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 100)
 
 	require.Eventually(t, func() bool {
 		refund, status := receiptRefund(t, auth, closeCred)
@@ -491,7 +493,7 @@ func TestSessionRefundInFlightIsNotClaimedSuccessful(t *testing.T) {
 		close(release)
 	})
 
-	closeCred := closeSessionForRefund(t, auth, hmacSecret, 300, 100)
+	closeCred := closeSessionForRefund(t, auth, hmacSecret, 100)
 
 	refund, status := receiptRefund(t, auth, closeCred)
 	require.EqualValues(t, 200, refund)

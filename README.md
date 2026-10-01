@@ -25,6 +25,51 @@ services and APIs.
 
 [l402]: https://github.com/lightninglabs/L402
 
+## Payment schemes
+
+Aperture speaks two payment protocols, and a single `402` response can carry an
+offer for each so the buyer takes whichever door it understands.
+
+**L402** is the default and is described above: a macaroon plus the preimage of
+the invoice that paid for it.
+
+**The Payment HTTP Authentication Scheme** ([`draft-httpauth-payment-00`][mpp],
+co-authored by Stripe and Tempo) is enabled with
+`--authenticator.enablempp`. It supports two intents. A *charge* buys a single
+request, and a *session* (`--authenticator.enablesessions`) holds a deposit that
+many requests draw against, refunding whatever is left when the buyer closes it.
+Sessions and charge consumption records both need a real database, so `--dbbackend`
+must be `sqlite` or `postgres`; etcd is refused at startup.
+
+[mpp]: https://datatracker.ietf.org/doc/draft-httpauth-payment/
+
+## Metered pricing
+
+Aperture can sell one request per payment, or it can sell a prepaid bundle of
+usage and draw it down as requests flow. The second mode exists because a fixed
+price per request is the wrong unit for LLM inference: one completion costs the
+seller a few dozen upstream tokens and the next costs four thousand, and the
+seller only learns which after the response has been served.
+
+Metering splits the two apart. The payment happens once, up front, for a bundle
+at a known price. The accounting happens per request, after the fact, from the
+usage the upstream actually reported. Aperture holds no pricing or balance state
+of its own; it calls out to a price server over gRPC (`pricesrpc`), configured
+per service with `dynamicprice` and `metered: true`. The reference price server,
+`meterd`, ships in this repo and keeps its state in a JSON file, which is enough
+for development. Production deployments embed `meterd.Server` behind their own
+`Store` and `RateSource`.
+
+Streamed responses work the same way: aperture keeps a bounded tail of the
+response so it can read the usage out of the final SSE chunk, and applies
+`writetimeout` as a rolling idle window rather than an absolute deadline so a
+generation lives as long as it keeps flowing. Size that window to the worst
+gap between chunks, not to the total length of the stream.
+
+[`docs/metering.md`](docs/metering.md) covers all of this in full: the bundle
+lifecycle, how L402 and each Payment intent attribute usage to a balance, what
+changes under streaming, and the configuration reference.
+
 ## Installation / Setup
 
 **lnd**

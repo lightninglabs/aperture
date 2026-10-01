@@ -96,6 +96,108 @@ type Proxy struct {
 	authenticator auth.Authenticator
 	services      []*Service
 	blocklist     map[string]struct{}
+
+	// writeDeadlineWindow, when non-zero, converts the server's absolute
+	// write timeout into a rolling idle deadline for proxied responses:
+	// each write to the client pushes the connection's write deadline this
+	// far into the future. Without it, http.Server.WriteTimeout is a
+	// single deadline armed when the response begins, and any streamed
+	// response outliving it, an SSE inference stream being the canonical
+	// case, is cut off mid-body no matter how healthily it is flowing.
+	// With it, the timeout means what an operator almost certainly
+	// intended: a stream dies when it stalls, not when it lasts.
+	writeDeadlineWindow time.Duration
+}
+
+// SetWriteDeadlineWindow installs the rolling write deadline window applied
+// to proxied responses. Pass the server's configured write timeout; zero
+// disables the rolling extension and leaves whatever absolute deadline the
+// server armed.
+func (p *Proxy) SetWriteDeadlineWindow(window time.Duration) {
+	p.writeDeadlineWindow = window
+}
+
+// deadlineBumpingWriter wraps a ResponseWriter so every write pushes the
+// connection's write deadline forward by a fixed window. Unwrap keeps
+// http.ResponseController able to reach the underlying writer's Flusher and
+// deadline hooks, which the reverse proxy relies on for streaming.
+type deadlineBumpingWriter struct {
+	http.ResponseWriter
+
+	// controller reaches the connection's deadline hooks through however
+	// many wrappers sit between here and the real writer.
+	controller *http.ResponseController
+
+	// window is how far each write pushes the deadline into the future.
+	window time.Duration
+
+	// lastBump is when the deadline was last pushed, so the syscall runs
+	// at most every quarter window rather than on every chunk.
+	lastBump time.Time
+
+	// unsupported latches once the underlying connection reports it has
+	// no deadline support, so the error is not re-made on every write.
+	unsupported bool
+}
+
+// bump pushes the write deadline forward, but only while the stream is
+// healthy: a gap since the last write that is shorter than the window earns
+// an extension, and one that exceeds the window does not.
+//
+// The second half is what makes the timeout still mean something. A write's
+// bytes land in the server's buffer without touching the socket, so the
+// deadline is only ever enforced by the flush that follows, and the flush
+// runs after the write. If a write after a long stall could re-arm the
+// deadline, its own flush would find a fresh deadline and succeed, and no
+// stall would ever be caught. Refusing the extension leaves the expired
+// deadline in force, and the flush tears the connection down exactly as the
+// timeout promises.
+func (d *deadlineBumpingWriter) bump() {
+	if d.unsupported {
+		return
+	}
+
+	now := time.Now()
+	if !d.lastBump.IsZero() {
+		sinceLast := now.Sub(d.lastBump)
+
+		// Recently armed: the deadline still holds most of the
+		// window, so spare the syscall.
+		if sinceLast < d.window/4 {
+			return
+		}
+
+		// Stalled past the window: the armed deadline has already
+		// expired, and it stays expired so the flush that follows
+		// this write refuses it.
+		if sinceLast >= d.window {
+			return
+		}
+	}
+
+	if err := d.controller.SetWriteDeadline(now.Add(d.window)); err != nil {
+		// A connection without deadline support gets the server's
+		// absolute timeout behavior, the same as before this wrapper
+		// existed.
+		d.unsupported = true
+		return
+	}
+	d.lastBump = now
+}
+
+func (d *deadlineBumpingWriter) WriteHeader(statusCode int) {
+	d.bump()
+	d.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (d *deadlineBumpingWriter) Write(b []byte) (int, error) {
+	d.bump()
+	return d.ResponseWriter.Write(b)
+}
+
+// Unwrap exposes the wrapped writer to http.ResponseController.
+func (d *deadlineBumpingWriter) Unwrap() http.ResponseWriter {
+	return d.ResponseWriter
 }
 
 // rewriteRequestPath rewrites the request path according to service config.
@@ -189,6 +291,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// header to application/grpc.
 	if strings.HasPrefix(r.Header.Get(hdrContentType), hdrTypeGrpc) {
 		w.Header().Set(hdrContentType, hdrTypeGrpc)
+	}
+
+	// Roll the write deadline forward as the response flows, so a healthy
+	// long-lived stream is not cut off by the server's absolute write
+	// timeout while a stalled one still dies.
+	if p.writeDeadlineWindow > 0 {
+		w = &deadlineBumpingWriter{
+			ResponseWriter: w,
+			controller:     http.NewResponseController(w),
+			window:         p.writeDeadlineWindow,
+		}
 	}
 
 	// Priority local services are checked before proxy service matching
@@ -663,18 +776,87 @@ func matchService(req *http.Request, services []*Service) (*Service, bool) {
 // Resource Sharing. These header fields are needed to signal to the browser
 // that it's ok to allow requests to sub domains, even if the JS was served from
 // the top level domain.
+//
+// This runs over the backend's own response headers on the way out, and a
+// backend that sets its own CORS headers, which any service that can also be
+// reached directly will do, would otherwise end up with two of each. What that
+// duplication means depends on the field, so the two kinds are handled
+// differently.
+//
+// Access-Control-Allow-Origin is single-valued. Two of them is not a more
+// emphatic "*", it is invalid per the fetch standard and the browser rejects
+// the response outright, so aperture's view replaces whatever was there.
+//
+// The other three are list-based fields. Per RFC 9110 repeated field lines are
+// combined with ", " and the fetch standard's "get, decode, and split" reads
+// them as one list, so a duplicate there was never invalid: it merged. Which
+// means replacing them would silently drop the backend's own entries, and a
+// backend exposing Access-Control-Expose-Headers: X-Request-Id would find that
+// header unreadable from JS the moment it moved behind aperture. So aperture's
+// entries are merged into whatever the backend already asked for.
 func addCorsHeaders(header http.Header) {
 	log.Debugf("Adding CORS headers to response.")
 
-	header.Add("Access-Control-Allow-Origin", "*")
-	header.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	header.Add("Access-Control-Expose-Headers",
-		"WWW-Authenticate, Payment-Receipt")
-	header.Add(
-		"Access-Control-Allow-Headers",
-		"Authorization, Grpc-Metadata-macaroon, "+
-			"WWW-Authenticate, Payment-Receipt",
+	header.Set("Access-Control-Allow-Origin", "*")
+
+	mergeCorsList(header, "Access-Control-Allow-Methods",
+		"GET", "POST", "OPTIONS")
+	mergeCorsList(header, "Access-Control-Expose-Headers",
+		"WWW-Authenticate", "Payment-Receipt")
+
+	// Content-Type has to be allowed for any JSON API behind the proxy. A
+	// POST carrying application/json is not a simple request, so the
+	// browser preflights it, and we answer that preflight ourselves
+	// without ever consulting the backend.
+	mergeCorsList(
+		header, "Access-Control-Allow-Headers",
+		"Content-Type", "Authorization", "Grpc-Metadata-macaroon",
+		"WWW-Authenticate", "Payment-Receipt",
 	)
+}
+
+// mergeCorsList adds the given entries to a list-based CORS header field,
+// keeping whatever the backend already put there and skipping any entry it had
+// already named. The result is written as a single field line, which is the
+// unambiguous form: repeated lines are legal here but only because every
+// reader has to join them first, and there is no reason to make them.
+//
+// Matching is case-insensitive because header names are, and a backend that
+// wrote "content-type" means the same thing we do.
+func mergeCorsList(header http.Header, field string, entries ...string) {
+	var (
+		merged []string
+		seen   = make(map[string]struct{})
+	)
+
+	add := func(entry string) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return
+		}
+
+		key := strings.ToLower(entry)
+		if _, ok := seen[key]; ok {
+			return
+		}
+
+		seen[key] = struct{}{}
+		merged = append(merged, entry)
+	}
+
+	// The backend's own entries come first, so a browser reading the list
+	// sees them in the order that service published them.
+	for _, line := range header.Values(field) {
+		for _, entry := range strings.Split(line, ",") {
+			add(entry)
+		}
+	}
+
+	for _, entry := range entries {
+		add(entry)
+	}
+
+	header.Set(field, strings.Join(merged, ", "))
 }
 
 // freshChallengeHeader mints a challenge quoting the given set of prices,

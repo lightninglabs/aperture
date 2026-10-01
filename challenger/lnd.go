@@ -97,6 +97,34 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		opt(challenger)
 	}
 
+	// A client that cannot enumerate its own invoices has no invoice state
+	// to track, and both of the paths that would track it reach for
+	// ListInvoices and SubscribeInvoices, which such a client can only
+	// fail. Settle that here, once, rather than leaving every call site to
+	// remember which backend it wired up: the admin dashboard turns on a
+	// settlement callback without knowing or caring what is minting the
+	// invoices, and that combination used to be a startup crash.
+	if !tracksInvoices(client) {
+		// Strict verification is refused rather than downgraded. It
+		// means the challenger honours a token only once it has seen
+		// that token's invoice settle, so quietly skipping the
+		// tracking would leave aperture believing it was verifying
+		// settlement while honouring tokens for invoices nobody paid.
+		if strictVerification {
+			return nil, fmt.Errorf("strict verification needs an " +
+				"invoice client that can list and subscribe " +
+				"to its invoices")
+		}
+
+		if challenger.onSettled != nil {
+			log.Warnf("Invoice client cannot track invoice " +
+				"state, so settlements will not be recorded " +
+				"for this backend")
+
+			challenger.onSettled = nil
+		}
+	}
+
 	// If a settlement callback is set, create an unbounded concurrent
 	// queue for settlement processing.
 	if challenger.onSettled != nil {
