@@ -110,8 +110,8 @@ curl -X DELETE \
 ```
 
 Services created or modified via the API are persisted to the database and
-survive restarts. They take precedence over services defined in the config
-file (matched by name).
+survive restarts. For services with a matching name in the config file, fields
+managed by the API take precedence while other config fields are preserved.
 
 ## Transactions
 
