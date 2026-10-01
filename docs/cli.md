@@ -45,7 +45,7 @@ aperturecli --insecure --dry-run services delete --name myapi
 |------|---------|-------------|
 | `--host` | `localhost:8081` | Aperture admin gRPC host:port |
 | `--macaroon` | `~/.aperture/admin.macaroon` | Path to admin macaroon file |
-| `--tls-cert` | | Path to TLS certificate for server verification |
+| `--tlscertpath` | `~/.aperture/tls.cert` | Path to TLS certificate for server verification |
 | `--insecure` | `false` | Skip TLS (plaintext gRPC) |
 | `--json` | `false` | Force JSON output |
 | `--human` | `false` | Force human-readable output |

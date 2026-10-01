@@ -32,7 +32,7 @@ All commands accept these connection flags:
 ```bash
 --host localhost:8081          # gRPC endpoint (default)
 --macaroon ~/.aperture/admin.macaroon  # Auth credential (default)
---tls-cert /path/to/tls.cert  # TLS certificate
+--tlscertpath ~/.aperture/tls.cert  # TLS certificate (default)
 --insecure                     # Skip TLS (dev mode)
 --timeout 30s                  # RPC timeout (default)
 ```
