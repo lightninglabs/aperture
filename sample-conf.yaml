@@ -292,6 +292,17 @@ services:
       # set to true then this path must be set.
       tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
 
+      # Whether the pricer should also be consulted on every authenticated
+      # request and receive response usage reports, enabling draw-down of
+      # prepaid token balances (metered mode). A metered price server must
+      # implement the full pricesrpc.Prices service, including
+      # ChallengeMinted, AuthorizeRequest and ReportUsage.
+      # metered: true
+
+      # The maximum number of trailing response body bytes captured for
+      # usage reports in metered mode. Defaults to 16384.
+      # usagetailbytes: 16384
+
   - name: "service2"
     hostregexp: "service2.com:8083"
     pathregexp: '^/.*$'

@@ -22,4 +22,4 @@ WHERE name = $1;
 -- name: ListServices :many
 SELECT *
 FROM services
-ORDER BY name;
+ORDER BY id;

@@ -34,6 +34,14 @@ type LncSession struct {
 	DevServer          bool
 }
 
+type MppConsumedCharge struct {
+	ID          int32
+	PaymentHash []byte
+	ChallengeID string
+	ExpiresAt   time.Time
+	ConsumedAt  time.Time
+}
+
 type MppSession struct {
 	ID            int32
 	SessionID     string
@@ -44,6 +52,14 @@ type MppSession struct {
 	Status        string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+type MppSessionCredit struct {
+	ID          int32
+	PaymentHash []byte
+	SessionID   string
+	AmountSats  int64
+	CreatedAt   time.Time
 }
 
 type Onion struct {
