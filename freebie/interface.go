@@ -9,7 +9,8 @@ import (
 // keeps track of how many free requests a certain IP address can make to a
 // certain resource.
 type DB interface {
-	CanPass(*http.Request, net.IP) (bool, error)
-
-	TallyFreebie(*http.Request, net.IP) (bool, error)
+	// TakeFreebie atomically checks and consumes the allowance for a
+	// request. It returns false without incrementing if none remains.
+	// Implementations must be safe for concurrent use.
+	TakeFreebie(*http.Request, net.IP) (bool, error)
 }
