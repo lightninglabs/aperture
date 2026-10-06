@@ -85,8 +85,10 @@ forwards the escaped form, so a percent-encoded character reaches the backend as
 the client sent it. Because decoding happens after cleaning, a percent-encoded
 separator stays encoded in what is matched.
 
-A path with a `..` segment is refused with 400, as is a request target that is
-not an absolute path (anything other than `OPTIONS *`).
+A path with a `..` segment is refused with 400, and so is one containing a
+character that some backends normalize in a way that would change which
+resource it names. A request target that is not an absolute path (anything
+other than `OPTIONS *`) is refused as well.
 
 A percent-encoded separator such as `%2F` is a path separator to Aperture, but
 some backends (grpc-gateway, chi, Go's `ServeMux` and others) treat it as part
@@ -190,6 +192,8 @@ Changes that need attention when upgrading from an earlier version:
   characters keep their encoding. A path with a `..` segment is refused with
   400, and so is a request target that is not an absolute path (other than
   `OPTIONS *`).
+* A path containing a character that some backends normalize in a way that
+  would change which resource it names is refused with 400.
 
 ## Admin API
 

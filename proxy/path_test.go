@@ -117,11 +117,12 @@ func TestCanonicalizeRequestPath(t *testing.T) {
 		require.Equal(t, test.want, req.URL.Path, test.path)
 	}
 
-	// Some servers resolve dot segments after dropping ";parameters" from
-	// a segment, or after treating a backslash as a separator.
+	// Parent segments are refused, and so are semicolons and backslashes,
+	// which some servers drop or treat as separators before routing.
 	for _, requestPath := range []string{
 		"/..", "/a/../b", "/a/..;/b", "/a/..;x=1/b",
 		`/a/..\b`, `/a\..\b`,
+		"/a;x/b", "/a/b;", `/a\b`, `/a/b\`,
 	} {
 		req := &http.Request{URL: &url.URL{Path: requestPath}}
 		require.False(t, canonicalizeRequestPath(req), requestPath)
@@ -300,4 +301,77 @@ func TestProxyRefusesTargetsWithoutPath(t *testing.T) {
 	)
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Zero(t, a.challenges)
+}
+
+// TestProxyRefusesAmbiguousSeparators checks that an anonymous request cannot
+// reach a protected resource through a semicolon or a backslash, literal or
+// percent-encoded, which a backend may drop or treat as a separator after
+// Aperture matched the path against a free service or a public whitelist.
+func TestProxyRefusesAmbiguousSeparators(t *testing.T) {
+	received := make(chan *http.Request, 16)
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			received <- r.Clone(r.Context())
+			w.WriteHeader(http.StatusNoContent)
+		},
+	))
+	t.Cleanup(backend.Close)
+	address := strings.TrimPrefix(backend.URL, "http://")
+
+	newProxy := func(services ...*Service) *Proxy {
+		for _, service := range services {
+			service.Address = address
+			service.Protocol = "http"
+			service.HostRegexp = ".*"
+		}
+		p, err := New(auth.NewMockAuthenticator(), services, nil, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, p.Close())
+		})
+
+		return p
+	}
+
+	proxies := map[string]*Proxy{
+		// A paid service in front of a free catch-all for the same
+		// backend.
+		"free catch-all": newProxy(
+			&Service{
+				Name:       "premium",
+				Auth:       "on",
+				PathRegexp: "^/premium/",
+			},
+			&Service{
+				Name:       "free",
+				Auth:       "off",
+				PathRegexp: "^/.*$",
+			},
+		),
+
+		// A public whitelist entry within a paid service.
+		"public whitelist": newProxy(&Service{
+			Name:               "service",
+			Auth:               "on",
+			PathRegexp:         "^/.*$",
+			AuthWhitelistPaths: []string{`\.css$`},
+		}),
+	}
+
+	for name, p := range proxies {
+		for _, requestPath := range []string{
+			"/premium;x/data", "/premium%3Bx/data",
+			`/premium\data`, "/premium%5Cdata",
+			"/private/data;.css", "/private/data%3B.css",
+		} {
+			response := servePublicAuthRequest(
+				p, requestPath, "192.0.2.1", nil,
+			)
+			require.Equal(
+				t, http.StatusBadRequest, response.Code,
+				"%s: %s", name, requestPath,
+			)
+		}
+	}
+	require.Empty(t, received)
 }

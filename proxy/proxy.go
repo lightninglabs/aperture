@@ -575,19 +575,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.proxyBackend.ServeHTTP(w, r)
 }
 
-// canonicalizeRequestPath rejects parent traversal and targets that are not an
-// absolute path, and removes empty and dot segments from the request path. It
-// cleans the escaped path one segment at a time, so the backend receives every
-// remaining segment exactly as the client escaped it, and updates the request
-// target to match the cleaned path.
+// canonicalizeRequestPath rejects paths that a backend could resolve to another
+// resource than the one Aperture matches, and targets that are not an absolute
+// path, and removes empty and dot segments from the rest. It cleans the escaped
+// path one segment at a time, so the backend receives every remaining segment
+// exactly as the client escaped it, and updates the request target to match the
+// cleaned path.
 func canonicalizeRequestPath(req *http.Request) bool {
-	// Some servers resolve dot segments only after their own normalization
-	// of a segment, so those spellings of ".." are refused as well.
-	isSeparator := func(r rune) bool {
-		return r == '/' || r == '\\'
+	// Some backends normalize a path segment before routing, dropping
+	// parameters or treating an alternate character as a separator, so a
+	// path containing such a character can name a different resource there
+	// than the one Aperture matched. URL.Path is decoded, so this refuses
+	// both the literal and the percent-encoded spellings.
+	if strings.ContainsAny(req.URL.Path, ";\\") {
+		return false
 	}
-	for segment := range strings.FieldsFuncSeq(req.URL.Path, isSeparator) {
-		if name, _, _ := strings.Cut(segment, ";"); name == ".." {
+
+	// Backends resolve parent segments themselves, so a path with one
+	// could select a public service or whitelist entry here and reach a
+	// protected resource there.
+	for segment := range strings.SplitSeq(req.URL.Path, "/") {
+		if segment == ".." {
 			return false
 		}
 	}
