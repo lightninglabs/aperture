@@ -82,8 +82,8 @@ segments and `.` segments, written plainly or percent-encoded, and keeps every
 other segment exactly as sent. It then matches services, whitelisted paths,
 prices and rate limits against the decoded form of the cleaned path, and
 forwards the escaped form, so a percent-encoded character reaches the backend as
-the client sent it. Because decoding happens after cleaning, a percent-encoded
-separator stays encoded in what is matched.
+the client sent it. Decoding happens after cleaning, so separators introduced
+by decoding are preserved in the path used for matching.
 
 A path with a `..` segment is refused with 400, and so is one containing a
 character that some backends normalize in a way that would change which
