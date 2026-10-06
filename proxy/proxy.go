@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
@@ -583,11 +584,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // cleaned path.
 func canonicalizeRequestPath(req *http.Request) bool {
 	// Some backends normalize a path segment before routing, dropping
-	// parameters or treating an alternate character as a separator, so a
-	// path containing such a character can name a different resource there
-	// than the one Aperture matched. URL.Path is decoded, so this refuses
-	// both the literal and the percent-encoded spellings.
-	if strings.ContainsAny(req.URL.Path, ";\\") {
+	// parameters or treating an alternate character as a separator, and
+	// some truncate one at a control character. A path containing any of
+	// those characters can name a different resource there than the one
+	// Aperture matched, which also lets a control character hide a parent
+	// segment from the exact check below. URL.Path is decoded, so this
+	// refuses both the literal and the percent-encoded spellings.
+	if strings.ContainsAny(req.URL.Path, ";\\") ||
+		strings.IndexFunc(req.URL.Path, unicode.IsControl) >= 0 {
 		return false
 	}
 

@@ -55,6 +55,7 @@ func TestProxyMatchesCanonicalPath(t *testing.T) {
 		"/public/..;/private",
 		"/public/..%3B/private",
 		"/public/..%5Cprivate",
+		"/public/..%00/private",
 	} {
 		response := servePublicAuthRequest(
 			p, requestPath, "192.0.2.1", nil,
@@ -118,11 +119,15 @@ func TestCanonicalizeRequestPath(t *testing.T) {
 	}
 
 	// Parent segments are refused, and so are semicolons and backslashes,
-	// which some servers drop or treat as separators before routing.
+	// which some servers drop or treat as separators before routing, and
+	// control characters, which some truncate a segment at and which
+	// could otherwise hide a parent segment from the exact check above,
+	// such as the decoded "..\x00".
 	for _, requestPath := range []string{
 		"/..", "/a/../b", "/a/..;/b", "/a/..;x=1/b",
 		`/a/..\b`, `/a\..\b`,
 		"/a;x/b", "/a/b;", `/a\b`, `/a/b\`,
+		"/..\x00", "/a/..\x00/b", "/a\x7f/b", "/a/b\x01",
 	} {
 		req := &http.Request{URL: &url.URL{Path: requestPath}}
 		require.False(t, canonicalizeRequestPath(req), requestPath)
