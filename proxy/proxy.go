@@ -391,12 +391,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	// A request that another scheme, such as a Payment credential,
-	// authenticated can still carry an L402 that nothing verified. Remove
-	// it before the rate limiter, the metering check and the director read
-	// it as the caller's identity.
-	if acceptAuth && !l402Verified {
-		removeL402Credentials(r.Header)
+	// A request that one credential authenticated can still carry L402s
+	// that nothing verified: beside a Payment credential, or in another
+	// header than the L402 that was verified. Remove them before the rate
+	// limiter, the metering check and the director read them as the
+	// caller's identity.
+	if acceptAuth {
+		removeUnverifiedL402(r.Header, l402Verified)
 	}
 
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
@@ -631,21 +632,53 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 	return accepted, false
 }
 
-// removeL402Credentials deletes every Authorization value containing an L402
-// token and keeps the others, such as the Payment credential that did
-// authenticate the request. An accepted Payment value is a single base64url
-// token after its scheme, so it never looks like an L402 itself.
-func removeL402Credentials(header http.Header) {
+// removeUnverifiedL402 deletes the L402 credentials that did not authenticate
+// the request, so a backend cannot take one for the caller's identity. When an
+// L402 authenticated it, only the header field it was read from keeps L402
+// values: an L402 macaroon in another macaroon header is removed even if it
+// names the same token, since Aperture verified neither its signature nor its
+// caveats. Otherwise every Authorization value containing an L402 and every
+// L402 macaroon is removed. Values of other kinds stay, such as the Payment
+// credential that authenticated the request or an lnd macaroon a backend
+// checks itself.
+func removeUnverifiedL402(header http.Header, l402Verified bool) {
+	verified := ""
+	if l402Verified {
+		verified = l402.CredentialHeader(&header)
+	}
+
+	// An accepted Payment value is a single base64url token after its
+	// scheme, so it never contains an L402 itself.
+	if verified != l402.HeaderAuthorization {
+		removeHeaderValues(
+			header, l402.HeaderAuthorization, l402.ContainsCredential,
+		)
+	}
+
+	for _, name := range []string{
+		l402.HeaderMacaroonMD, l402.HeaderMacaroon,
+	} {
+		if name != verified {
+			removeHeaderValues(header, name, l402.IsMacaroonCredential)
+		}
+	}
+}
+
+// removeHeaderValues deletes the values of a header field that match and keeps
+// the others in their order.
+func removeHeaderValues(header http.Header, name string,
+	matches func(string) bool) {
+
 	var kept []string
-	for _, value := range header.Values(l402.HeaderAuthorization) {
-		if !l402.ContainsCredential(value) {
+	for _, value := range header.Values(name) {
+		if !matches(value) {
 			kept = append(kept, value)
 		}
 	}
 
-	header.Del(l402.HeaderAuthorization)
+	header.Del(name)
 	for _, value := range kept {
-		header.Add(l402.HeaderAuthorization, value)
+		header.Add(name, value)
 	}
 }
 

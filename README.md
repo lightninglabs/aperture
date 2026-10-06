@@ -42,8 +42,9 @@ Sessions and charge consumption records both need a real database, so `--dbbacke
 must be `sqlite` or `postgres`; etcd is refused at startup.
 
 A request authenticated with a Payment credential carries no L402 identity:
-Aperture removes any L402 it also presents before rate limiting, metering or
-forwarding it, since nothing verified that token.
+Aperture removes any L402 it also presents, in `Authorization` or in the
+`Macaroon` and `Grpc-Metadata-Macaroon` headers, before rate limiting, metering
+or forwarding it, since nothing verified that token.
 
 [mpp]: https://datatracker.ietf.org/doc/draft-httpauth-payment/
 
@@ -67,6 +68,12 @@ resource.
 Credential cleanup removes the entire `Authorization` header, including Bearer
 and Basic values. Use service-level `auth: "off"` when the backend owns
 authentication; that setting bypasses both validation and credential removal.
+
+On any authenticated request, Aperture removes L402 macaroons from the
+`Macaroon` and `Grpc-Metadata-Macaroon` headers unless the verified credential
+was read from that header, even ones naming the verified token, since nothing
+checked their signatures or caveats. Other macaroons, such as lnd's, are
+forwarded unchanged.
 
 ## Metered pricing
 

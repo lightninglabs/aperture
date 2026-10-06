@@ -1,6 +1,7 @@
 package l402
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -58,6 +59,42 @@ func ContainsCredential(value string) bool {
 	return credentialAnywhereRegex.MatchString(value)
 }
 
+// IsMacaroonCredential reports whether a Macaroon or Grpc-Metadata-Macaroon
+// header value holds a hex-encoded macaroon with an L402 identifier. Macaroons
+// minted elsewhere, such as by lnd, carry identifiers of other versions and are
+// not L402s. Unlike FromHeader, it does not require a preimage caveat, so it
+// also finds a value that a more lenient parser would take.
+func IsMacaroonCredential(value string) bool {
+	macBytes, err := hex.DecodeString(value)
+	if err != nil {
+		return false
+	}
+
+	mac := &macaroon.Macaroon{}
+	if err := mac.UnmarshalBinary(macBytes); err != nil {
+		return false
+	}
+
+	_, err = DecodeIdentifier(bytes.NewReader(mac.Id()))
+
+	return err == nil
+}
+
+// CredentialHeader returns the name of the header field FromHeader reads the
+// credential from, or "" if the request carries none. Only the first field
+// present is read, even if its value is empty.
+func CredentialHeader(header *http.Header) string {
+	for _, name := range []string{
+		HeaderAuthorization, HeaderMacaroonMD, HeaderMacaroon,
+	} {
+		if len(header.Values(name)) > 0 {
+			return name
+		}
+	}
+
+	return ""
+}
+
 // FromHeader tries to extract authentication information from HTTP headers.
 // There are two supported formats that can be sent in four different header
 // fields:
@@ -88,10 +125,10 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 	macaroonMDHeaders := header.Values(HeaderMacaroonMD)
 	macaroonHeaders := header.Values(HeaderMacaroon)
 
-	switch {
+	switch CredentialHeader(header) {
 	// Header field 1 contains the macaroon and the preimage as distinct
 	// values separated by a colon.
-	case len(authHeaders) > 0:
+	case HeaderAuthorization:
 		seenSchemes := make(map[string]struct{}, 2)
 		for _, authHeader := range authHeaders {
 			log.Debugf("Trying to authorize with header value "+
@@ -127,7 +164,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		}
 
 	// Header field 2: Contains only the macaroon.
-	case len(macaroonMDHeaders) > 0:
+	case HeaderMacaroonMD:
 		if len(macaroonMDHeaders) != 1 {
 			return nil, lntypes.Preimage{}, errors.New(
 				"multiple macaroon metadata headers",
@@ -140,7 +177,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		}
 
 	// Header field 3: Contains only the macaroon.
-	case len(macaroonHeaders) > 0:
+	case HeaderMacaroon:
 		if len(macaroonHeaders) != 1 {
 			return nil, lntypes.Preimage{}, errors.New(
 				"multiple macaroon headers",

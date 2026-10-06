@@ -21,11 +21,13 @@ import (
 // publicAuthToken contains the wire encodings of a token with a real L402
 // identifier and a preimage caveat for the direct macaroon headers.
 type publicAuthToken struct {
-	id        l402.TokenID
-	header    http.Header
-	macHex    string
-	l402Value string
-	lsatValue string
+	id         l402.TokenID
+	identifier []byte
+	preimage   lntypes.Preimage
+	header     http.Header
+	macHex     string
+	l402Value  string
+	lsatValue  string
 }
 
 // newPublicAuthToken constructs a distinct token for each seed.
@@ -36,11 +38,11 @@ func newPublicAuthToken(t *testing.T, seed byte) publicAuthToken {
 	preimage[0] = seed
 	var tokenID l402.TokenID
 	tokenID[0] = seed
+	identifier := l402.EncodeIdentifierBytes(preimage.Hash(), tokenID)
 
 	mac, err := macaroon.New(
-		[]byte("test root key"),
-		l402.EncodeIdentifierBytes(preimage.Hash(), tokenID),
-		"test", macaroon.LatestVersion,
+		[]byte("test root key"), identifier, "test",
+		macaroon.LatestVersion,
 	)
 	require.NoError(t, err)
 	require.NoError(t, l402.AddFirstPartyCaveats(mac, l402.Caveat{
@@ -54,12 +56,40 @@ func newPublicAuthToken(t *testing.T, seed byte) publicAuthToken {
 	values := header.Values(l402.HeaderAuthorization)
 
 	return publicAuthToken{
-		id:        tokenID,
-		header:    header,
-		macHex:    hex.EncodeToString(macBytes),
-		l402Value: values[1],
-		lsatValue: values[0],
+		id:         tokenID,
+		identifier: identifier,
+		preimage:   preimage,
+		header:     header,
+		macHex:     hex.EncodeToString(macBytes),
+		l402Value:  values[1],
+		lsatValue:  values[0],
 	}
+}
+
+// newMacaroonHex returns a macaroon in the hex form the Macaroon and
+// Grpc-Metadata-Macaroon headers carry.
+func newMacaroonHex(t *testing.T, rootKey string, id []byte,
+	caveats ...l402.Caveat) string {
+
+	t.Helper()
+
+	mac, err := macaroon.New(
+		[]byte(rootKey), id, "test", macaroon.LatestVersion,
+	)
+	require.NoError(t, err)
+	require.NoError(t, l402.AddFirstPartyCaveats(mac, caveats...))
+	macBytes, err := mac.MarshalBinary()
+	require.NoError(t, err)
+
+	return hex.EncodeToString(macBytes)
+}
+
+// newLndMacaroon returns a macaroon of the kind lnd mints: its identifier
+// starts with a macaroon-bakery version byte instead of an L402 version.
+func newLndMacaroon(t *testing.T) string {
+	t.Helper()
+
+	return newMacaroonHex(t, "lnd root key", []byte{3, 1, 2, 3})
 }
 
 // publicAuthRecorder records authentication attempts and accepts only the
@@ -393,6 +423,19 @@ func TestPublicPathAuthentication(t *testing.T) {
 					expected["Authorization"] = []string{
 						valid.lsatValue,
 						valid.l402Value,
+					}
+
+					// Every macaroon in these cases is an L402,
+					// and only the field the verified credential
+					// was read from keeps its own.
+					read := l402.CredentialHeader(&header)
+					for _, name := range []string{
+						l402.HeaderMacaroon,
+						l402.HeaderMacaroonMD,
+					} {
+						if name != read {
+							expected.Del(name)
+						}
 					}
 				}
 				for _, name := range []string{
@@ -761,6 +804,94 @@ func TestProtectedPathStillRequiresAuthentication(t *testing.T) {
 				require.Equal(t, 1, a.challenges)
 			}
 			require.Empty(t, received)
+		})
+	}
+}
+
+// TestAuthenticatedRequestKeepsOnlyVerifiedL402 checks that an authenticated
+// request reaches the backend with the L402 that was verified and no other. A
+// macaroon in another header is removed even when it names the verified token,
+// since nothing checked its signature or caveats, while a macaroon of another
+// kind, such as lnd's, stays for the backend to check.
+func TestAuthenticatedRequestKeepsOnlyVerifiedL402(t *testing.T) {
+	valid := newPublicAuthToken(t, 1)
+
+	// The forgery copies the verified token's identifier, but is signed
+	// with another root key and claims more capabilities.
+	forgery := newMacaroonHex(
+		t, "another root key", valid.identifier,
+		l402.Caveat{
+			Condition: l402.PreimageKey,
+			Value:     valid.preimage.String(),
+		},
+		l402.NewCapabilitiesCaveat("test-service", "read,write"),
+	)
+	lndMacaroon := newLndMacaroon(t)
+	validAuthorization := valid.header.Values("Authorization")
+
+	tests := []struct {
+		name   string
+		header http.Header
+
+		// want holds the macaroon headers the backend receives.
+		want http.Header
+	}{
+		{
+			name: "forgery beside Authorization",
+			header: http.Header{
+				"Authorization":       validAuthorization,
+				l402.HeaderMacaroonMD: {forgery},
+				l402.HeaderMacaroon:   {forgery},
+			},
+			want: http.Header{},
+		},
+		{
+			name: "forgery beside metadata macaroon",
+			header: http.Header{
+				l402.HeaderMacaroonMD: {valid.macHex},
+				l402.HeaderMacaroon:   {forgery},
+			},
+			want: http.Header{l402.HeaderMacaroonMD: {valid.macHex}},
+		},
+		{
+			name: "lnd macaroon beside Authorization",
+			header: http.Header{
+				"Authorization":       validAuthorization,
+				l402.HeaderMacaroonMD: {lndMacaroon},
+			},
+			want: http.Header{l402.HeaderMacaroonMD: {lndMacaroon}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := &publicAuthRecorder{
+				scheme: auth.AuthSchemeL402,
+				accepted: map[l402.TokenID]bool{
+					valid.id: true,
+				},
+			}
+			p, received := newPublicAuthProxy(
+				t, &Service{Auth: "on"}, a,
+			)
+			response := servePublicAuthRequest(
+				p, "/resource", "192.0.2.1", test.header,
+			)
+			require.Equal(t, http.StatusNoContent, response.Code)
+
+			forwarded := <-received
+			require.Equal(
+				t, validAuthorization,
+				forwarded.Header.Values("Authorization"),
+			)
+			for _, name := range []string{
+				l402.HeaderMacaroonMD, l402.HeaderMacaroon,
+			} {
+				require.Equal(
+					t, test.want.Values(name),
+					forwarded.Header.Values(name), name,
+				)
+			}
 		})
 	}
 }

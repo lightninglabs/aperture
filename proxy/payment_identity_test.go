@@ -181,6 +181,35 @@ func TestPaymentCredentialCarriesNoL402Identity(t *testing.T) {
 		)
 	})
 
+	// The macaroon headers lose their L402s too, while another service's
+	// macaroon, such as lnd's, is forwarded for the backend to check.
+	t.Run("macaroon headers", func(t *testing.T) {
+		lndMacaroon := newLndMacaroon(t)
+		p, received, metering := newPaymentProxy(t, nil)
+		response := servePublicAuthRequest(
+			p, "/resource", "192.0.2.1", http.Header{
+				"Authorization":       {payment},
+				l402.HeaderMacaroon:   {victim.macHex},
+				l402.HeaderMacaroonMD: {lndMacaroon},
+			},
+		)
+		require.Equal(t, http.StatusNoContent, response.Code)
+
+		forwarded := <-received
+		require.Equal(
+			t, []string{payment},
+			forwarded.Header.Values("Authorization"),
+		)
+		require.Empty(t, forwarded.Header.Values(l402.HeaderMacaroon))
+		require.Equal(
+			t, []string{lndMacaroon},
+			forwarded.Header.Values(l402.HeaderMacaroonMD),
+		)
+		require.Equal(
+			t, []string{paymentTokenID}, metering.tokenIDs,
+		)
+	})
+
 	// Rotating forged tokens must not buy fresh rate limit buckets.
 	t.Run("rate limit", func(t *testing.T) {
 		p, _, _ := newPaymentProxy(t, []*RateLimitConfig{{

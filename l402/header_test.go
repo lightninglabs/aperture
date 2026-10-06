@@ -152,3 +152,80 @@ func TestContainsCredential(t *testing.T) {
 		)
 	}
 }
+
+// TestIsMacaroonCredential checks that an L402 macaroon in a macaroon header
+// is found, with or without a preimage caveat, while a macaroon minted by
+// another service, such as lnd, is not.
+func TestIsMacaroonCredential(t *testing.T) {
+	t.Parallel()
+
+	encode := func(id []byte) string {
+		mac, err := macaroon.New(
+			[]byte("root key"), id, "test", macaroon.LatestVersion,
+		)
+		require.NoError(t, err)
+		macBytes, err := mac.MarshalBinary()
+		require.NoError(t, err)
+
+		return hex.EncodeToString(macBytes)
+	}
+
+	preimage := lntypes.Preimage{1}
+	l402Mac := encode(EncodeIdentifierBytes(preimage.Hash(), TokenID{2}))
+	require.True(t, IsMacaroonCredential(l402Mac))
+	require.True(t, IsMacaroonCredential(strings.ToUpper(l402Mac)))
+
+	// macaroon-bakery, which lnd uses, starts its identifiers with a
+	// version byte of 2 or 3.
+	require.False(t, IsMacaroonCredential(encode([]byte{3, 1, 2, 3})))
+
+	require.False(t, IsMacaroonCredential("not hex"))
+	require.False(t, IsMacaroonCredential("00ff"))
+	require.False(t, IsMacaroonCredential(""))
+}
+
+// TestCredentialHeader checks that CredentialHeader names the field FromHeader
+// reads, which is the first one present even if its value is empty.
+func TestCredentialHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		header http.Header
+		want   string
+	}{
+		{header: http.Header{}, want: ""},
+		{
+			header: http.Header{
+				HeaderAuthorization: {"L402 mac:preimage"},
+				HeaderMacaroonMD:    {"aa"},
+				HeaderMacaroon:      {"bb"},
+			},
+			want: HeaderAuthorization,
+		},
+		{
+			header: http.Header{
+				HeaderAuthorization: {""},
+				HeaderMacaroonMD:    {"aa"},
+			},
+			want: HeaderAuthorization,
+		},
+		{
+			header: http.Header{
+				HeaderMacaroonMD: {"aa"},
+				HeaderMacaroon:   {"bb"},
+			},
+			want: HeaderMacaroonMD,
+		},
+		{
+			header: http.Header{HeaderMacaroon: {"bb"}},
+			want:   HeaderMacaroon,
+		},
+	}
+
+	for _, test := range tests {
+		require.Equal(
+			t, test.want, CredentialHeader(&test.header),
+			test.header,
+		)
+	}
+}
