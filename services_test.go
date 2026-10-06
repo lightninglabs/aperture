@@ -168,7 +168,8 @@ func TestStaticServiceLimiterDynamicResources(t *testing.T) {
 }
 
 // TestStaticServiceLimiterRejectsUnreadableTimeout checks that no token is
-// minted with a timeout caveat the verifier could not read back.
+// minted with a timeout caveat the verifier could not read back: a caveat
+// splits its condition from its value at the first '='.
 func TestStaticServiceLimiterRejectsUnreadableTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -184,6 +185,16 @@ func TestStaticServiceLimiterRejectsUnreadableTimeout(t *testing.T) {
 		Tier: l402.BaseTier,
 	})
 	require.Error(t, err)
+}
+
+// TestValidateServiceNameRejectsEqualSign checks that a configured service
+// name containing '=' is rejected, since every capabilities caveat carries
+// the service name in its condition, which the backend could not read back.
+func TestValidateServiceNameRejectsEqualSign(t *testing.T) {
+	t.Parallel()
+
+	require.Error(t, proxy.ValidateServiceName("svc=x"))
+	require.NoError(t, proxy.ValidateServiceName("svc"))
 }
 
 // TestStaticServiceLimiterSharedName checks that services sharing a name, and

@@ -207,10 +207,20 @@ func (s *Service) ResourceName(resourcePath string) string {
 // per-resource token namespace of another service. ResourceName appends the
 // request path to the name of a dynamic-price service, so a name containing a
 // slash could overlap the names another service issues tokens under.
+//
+// A caveat splits its condition from its value at the first '=', and a
+// capabilities caveat carries the service name in its condition, so a name
+// containing one could not be read back by the backend that checks it. The
+// timeout caveat names the token instead, whose own name may end in the
+// request path, so the mint checks that one when it is configured.
 func ValidateServiceName(name string) error {
 	if strings.Contains(name, "/") {
 		return fmt.Errorf("invalid service name %q, must not contain "+
 			"'/'", name)
+	}
+	if strings.Contains(name, "=") {
+		return fmt.Errorf("invalid service name %q, must not contain "+
+			"'='", name)
 	}
 
 	return nil

@@ -157,10 +157,11 @@ changes under streaming, and the configuration reference.
 
 Changes that need attention when upgrading from an earlier version:
 
-* Service names can no longer contain `/`, because a dynamic-price service
-  names each resource by appending the request path to its own name. Startup
-  fails on such a service, including one stored in the database, where the
-  admin API cannot rename it once Aperture refuses to start. Rename it before
+* Service names can no longer contain `/` or `=`. A slash could overlap the
+  token namespace of another dynamic-price service, and an equal sign cannot
+  be read back from the condition of a capabilities caveat. Startup fails on
+  such a service, including one stored in the database, where the admin API
+  cannot rename it once Aperture refuses to start. Rename it before
   upgrading.
 * A service's `auth` value must be `on`, `off`, `true`, `false`, or
   `freebie N` with N from 1 to 65535; anything else now fails startup. An

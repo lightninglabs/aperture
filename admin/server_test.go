@@ -289,20 +289,25 @@ func TestCreateServiceRejectsInvalidAuth(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid freebie count")
 }
 
-func TestCreateServiceRejectsSlashInName(t *testing.T) {
+// TestCreateServiceRejectsInvalidName checks that a service name a token
+// caveat could not carry, a slash or an equal sign, is rejected with
+// InvalidArgument rather than a generic internal error.
+func TestCreateServiceRejectsInvalidName(t *testing.T) {
 	t.Parallel()
 
 	s := newTestServer()
 
-	_, err := s.CreateService(context.Background(),
-		&adminrpc.CreateServiceRequest{
-			Name:       "svc/admin",
-			Address:    "localhost:1234",
-			PathRegexp: "^/api/admin/.*",
-		},
-	)
-	require.Equal(t, codes.InvalidArgument, status.Code(err))
-	require.Contains(t, err.Error(), "invalid service name")
+	for _, name := range []string{"svc/admin", "svc=admin"} {
+		_, err := s.CreateService(context.Background(),
+			&adminrpc.CreateServiceRequest{
+				Name:       name,
+				Address:    "localhost:1234",
+				PathRegexp: "^/api/admin/.*",
+			},
+		)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		require.Contains(t, err.Error(), "invalid service name")
+	}
 }
 
 func TestUpdateServiceRejectsInvalidAuth(t *testing.T) {

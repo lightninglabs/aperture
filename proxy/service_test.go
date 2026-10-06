@@ -114,6 +114,13 @@ func TestPrepareServicesName(t *testing.T) {
 	require.ErrorContains(
 		t, prepareServices([]*Service{service}), "invalid service name",
 	)
+
+	// A name containing '=' could not be read back from a capabilities
+	// caveat's condition.
+	service = &Service{Name: "svc=admin"}
+	require.ErrorContains(
+		t, prepareServices([]*Service{service}), "invalid service name",
+	)
 }
 
 // TestDirectorOverwritesClientHeaders makes sure a configured service header
