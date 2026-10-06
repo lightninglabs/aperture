@@ -189,7 +189,11 @@ etcd:
 # avoid YAML parsing errors!
 services:
     # The identifying name of the service. This will also be used to identify
-    # which capabilities caveat (if any) corresponds to the service.
+    # which capabilities caveat (if any) corresponds to the service. It must
+    # not contain '/', since dynamic-price tokens name each resource as the
+    # service name followed by the request path. Services that share a name
+    # also share their tokens, so they must set the same timeout,
+    # capabilities and constraints.
   - name: "service1"
 
     # The regular expression used to match the service host.
@@ -242,7 +246,12 @@ services:
     # dynamicprice.enabled is set to true.
     price: 0
 
-    # A list of regular expressions for path that are free of charge.
+    # Paths that allow anonymous requests. L402 authentication is checked;
+    # failures remove Authorization and both macaroon headers before forwarding.
+    # Grpc-Metadata-Authorization is always removed when auth is enabled.
+    # Public requests never execute MPP payment actions. Dynamic-price tokens
+    # for another resource in this service can establish public-path identity.
+    # Service-level auth: "off" bypasses this validation and removal.
     authwhitelistpaths:
       - '^/freebieservice.*$'
 

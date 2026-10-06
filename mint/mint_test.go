@@ -305,6 +305,31 @@ func TestMintL402IgnoresTransactionStoreErrors(t *testing.T) {
 	require.True(t, txStore.called)
 }
 
+// TestMintL402RejectsSeparatorNames ensures that no L402 is minted for a name
+// the services caveat cannot represent, and that its secret is not kept.
+func TestMintL402RejectsSeparatorNames(t *testing.T) {
+	t.Parallel()
+
+	secrets := newMockSecretStore()
+	mint := New(&Config{
+		Secrets:        secrets,
+		Challenger:     newMockChallenger(),
+		ServiceLimiter: newMockServiceLimiter(),
+		Now:            time.Now,
+	})
+
+	// A dynamic-price resource name ends in the client's request path.
+	// This one would otherwise grant access to the service "other" too.
+	service := l402.Service{
+		Name:  "svc/x:0,other",
+		Tier:  l402.BaseTier,
+		Price: 1,
+	}
+	_, _, err := mint.MintL402(context.Background(), service)
+	require.ErrorIs(t, err, l402.ErrInvalidService)
+	require.Empty(t, secrets.secrets)
+}
+
 type mockTime struct {
 	time time.Time
 }

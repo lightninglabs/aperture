@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -120,5 +121,111 @@ func TestFromHeader(t *testing.T) {
 			require.Equal(t, mac.Id(), gotMac.Id())
 			require.Equal(t, preimage, gotPreimage)
 		})
+	}
+}
+
+// TestContainsCredential checks which Authorization values contain an L402
+// credential, including values that FromHeader rejects.
+func TestContainsCredential(t *testing.T) {
+	t.Parallel()
+
+	token := "mac:" + strings.Repeat("0", 64)
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{value: "L402 " + token, want: true},
+		{value: "LSAT " + token, want: true},
+		{value: "l402 " + token, want: true},
+
+		// A credential after another scheme is found too.
+		{value: "Bearer L402 " + token, want: true},
+
+		{value: "Payment eyJjaGFsbGVuZ2UiOnt9fQ"},
+		{value: "L402 garbage"},
+	}
+
+	for _, test := range tests {
+		require.Equal(
+			t, test.want, ContainsCredential(test.value),
+			test.value,
+		)
+	}
+}
+
+// TestIsMacaroonCredential checks that an L402 macaroon in a macaroon header
+// is found, with or without a preimage caveat, while a macaroon minted by
+// another service, such as lnd, is not.
+func TestIsMacaroonCredential(t *testing.T) {
+	t.Parallel()
+
+	encode := func(id []byte) string {
+		mac, err := macaroon.New(
+			[]byte("root key"), id, "test", macaroon.LatestVersion,
+		)
+		require.NoError(t, err)
+		macBytes, err := mac.MarshalBinary()
+		require.NoError(t, err)
+
+		return hex.EncodeToString(macBytes)
+	}
+
+	preimage := lntypes.Preimage{1}
+	l402Mac := encode(EncodeIdentifierBytes(preimage.Hash(), TokenID{2}))
+	require.True(t, IsMacaroonCredential(l402Mac))
+	require.True(t, IsMacaroonCredential(strings.ToUpper(l402Mac)))
+
+	// macaroon-bakery, which lnd uses, starts its identifiers with a
+	// version byte of 2 or 3.
+	require.False(t, IsMacaroonCredential(encode([]byte{3, 1, 2, 3})))
+
+	require.False(t, IsMacaroonCredential("not hex"))
+	require.False(t, IsMacaroonCredential("00ff"))
+	require.False(t, IsMacaroonCredential(""))
+}
+
+// TestCredentialHeader checks that CredentialHeader names the field FromHeader
+// reads, which is the first one present even if its value is empty.
+func TestCredentialHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		header http.Header
+		want   string
+	}{
+		{header: http.Header{}, want: ""},
+		{
+			header: http.Header{
+				HeaderAuthorization: {"L402 mac:preimage"},
+				HeaderMacaroonMD:    {"aa"},
+				HeaderMacaroon:      {"bb"},
+			},
+			want: HeaderAuthorization,
+		},
+		{
+			header: http.Header{
+				HeaderAuthorization: {""},
+				HeaderMacaroonMD:    {"aa"},
+			},
+			want: HeaderAuthorization,
+		},
+		{
+			header: http.Header{
+				HeaderMacaroonMD: {"aa"},
+				HeaderMacaroon:   {"bb"},
+			},
+			want: HeaderMacaroonMD,
+		},
+		{
+			header: http.Header{HeaderMacaroon: {"bb"}},
+			want:   HeaderMacaroon,
+		},
+	}
+
+	for _, test := range tests {
+		require.Equal(
+			t, test.want, CredentialHeader(&test.header),
+			test.header,
+		)
 	}
 }

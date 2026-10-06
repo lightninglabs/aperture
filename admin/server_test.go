@@ -17,6 +17,8 @@ import (
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func newTestServer() *Server {
@@ -285,6 +287,27 @@ func TestCreateServiceRejectsInvalidAuth(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid freebie count")
+}
+
+// TestCreateServiceRejectsInvalidName checks that a service name a token
+// caveat could not carry, a slash or an equal sign, is rejected with
+// InvalidArgument rather than a generic internal error.
+func TestCreateServiceRejectsInvalidName(t *testing.T) {
+	t.Parallel()
+
+	s := newTestServer()
+
+	for _, name := range []string{"svc/admin", "svc=admin"} {
+		_, err := s.CreateService(context.Background(),
+			&adminrpc.CreateServiceRequest{
+				Name:       name,
+				Address:    "localhost:1234",
+				PathRegexp: "^/api/admin/.*",
+			},
+		)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		require.Contains(t, err.Error(), "invalid service name")
+	}
 }
 
 func TestUpdateServiceRejectsInvalidAuth(t *testing.T) {

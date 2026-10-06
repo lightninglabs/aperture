@@ -41,7 +41,61 @@ many requests draw against, refunding whatever is left when the buyer closes it.
 Sessions and charge consumption records both need a real database, so `--dbbackend`
 must be `sqlite` or `postgres`; etcd is refused at startup.
 
+A request authenticated with a Payment credential carries no L402 identity:
+Aperture removes any L402 it also presents, in `Authorization` or in the
+`Macaroon` and `Grpc-Metadata-Macaroon` headers, before rate limiting, metering
+or forwarding it, since nothing verified that token.
+
 [mpp]: https://datatracker.ietf.org/doc/draft-httpauth-payment/
+
+## Public paths
+
+`authwhitelistpaths` allows anonymous access within an authenticated service.
+L402 authentication is checked but not required. Successful requests retain
+the usual header-forwarding behavior. If authentication fails, Aperture removes
+`Authorization`, `Macaroon`, and `Grpc-Metadata-Macaroon` before forwarding the
+request anonymously. The same cleanup applies to anonymous freebie and
+zero-price fallbacks. On services with authentication enabled, Aperture always
+removes client-supplied `Grpc-Metadata-Authorization`; grpc-gateway would
+otherwise translate it into unvalidated `authorization` metadata.
+
+Public paths only validate L402. They do not execute MPP payment actions,
+issue payment challenges, or incur metered charges. For dynamically priced
+services, a valid token for another resource in the same service can establish
+identity on a public path. Protected paths still require a token for the exact
+resource.
+
+Credential cleanup removes the entire `Authorization` header, including Bearer
+and Basic values. Use service-level `auth: "off"` when the backend owns
+authentication; that setting bypasses both validation and credential removal.
+
+On any authenticated request, Aperture removes L402 macaroons from the
+`Macaroon` and `Grpc-Metadata-Macaroon` headers unless the verified credential
+was read from that header, even ones naming the verified token, since nothing
+checked their signatures or caveats. Other macaroons, such as lnd's, are
+forwarded unchanged.
+
+## Request paths
+
+Aperture first cleans the request path as the client escaped it: it drops empty
+segments and `.` segments, written plainly or percent-encoded, and keeps every
+other segment exactly as sent. It then matches services, whitelisted paths,
+prices and rate limits against the decoded form of the cleaned path, and
+forwards the escaped form, so a percent-encoded character reaches the backend as
+the client sent it. Decoding happens after cleaning, so separators introduced
+by decoding are preserved in the path used for matching.
+
+A path with a `..` segment is refused with 400, and so is one containing a
+character that some backends normalize in a way that would change which
+resource it names. A request target that is not an absolute path (anything
+other than `OPTIONS *`) is refused as well.
+
+A percent-encoded separator such as `%2F` is a path separator to Aperture, but
+some backends (grpc-gateway, chi, Go's `ServeMux` and others) treat it as part
+of a single segment. Write service and whitelist patterns so they still match
+when a segment is encoded this way, for example by matching a prefix rather than
+counting segments. Dynamic-price tokens are named from the decoded path, so the
+encoded and decoded spellings of a path map to the same token.
 
 ## Metered pricing
 
@@ -98,6 +152,49 @@ changes under streaming, and the configuration reference.
   compare with `sample-conf.yaml`.
 * Start aperture without any command line parameters (`./aperture`), all configuration
   is done in the `~/.aperture/aperture.yaml` file.
+
+## Upgrading
+
+Changes that need attention when upgrading from an earlier version:
+
+* Service names can no longer contain `/` or `=`. A slash could overlap the
+  token namespace of another dynamic-price service, and an equal sign cannot
+  be read back from the condition of a capabilities caveat. Startup fails on
+  such a service, including one stored in the database, where the admin API
+  cannot rename it once Aperture refuses to start. Rename it before
+  upgrading.
+* A service's `auth` value must be `on`, `off`, `true`, `false`, or
+  `freebie N` with N from 1 to 65535; anything else now fails startup. An
+  unrecognized value such as `no` used to make the service free. The admin
+  API used to accept and store a larger freebie count, so correct such a value
+  before upgrading.
+* A dynamic-price token whose resource name (its `service_name`) contains a
+  `,` may have been minted authorizing more than the one resource. Such tokens
+  are no longer minted, but upgrading does not invalidate existing ones; revoke
+  them. With a `sqlite` or `postgres` backend, list tokens with
+  `GET /api/admin/tokens` and revoke each one whose
+  `service_name` contains `,` with `DELETE /api/admin/tokens/{token_id}`. Only
+  settled tokens are listed, and settlements are recorded only while the admin
+  API is enabled; enabling it reconciles earlier payments at the next startup.
+  Tokens minted without a transaction record, by the etcd backend or by
+  versions before v0.5.0, cannot be found this way.
+* A dynamic-price service, or a static one whose price was not configured or
+  was changed through the admin API, minted tokens without its `timeout`,
+  `capabilities` and `constraints`, so with a timeout set they never expired.
+  New tokens carry these restrictions, but existing ones do not; revoke them
+  through the admin API as described above. A dynamic-price token's
+  `service_name` is the service name followed by the request path.
+* On a service with a `timeout`, a resource name containing `=` cannot carry a
+  readable timeout caveat, so no token is minted for it.
+* Services that share a name also share their tokens, so startup now fails if
+  they set different `timeout`, `capabilities` or `constraints`.
+* Request paths are now cleaned as sent, with `.` segments and repeated
+  slashes removed, before they are matched and forwarded, and percent-encoded
+  characters keep their encoding. A path with a `..` segment is refused with
+  400, and so is a request target that is not an absolute path (other than
+  `OPTIONS *`).
+* A path containing a character that some backends normalize in a way that
+  would change which resource it names is refused with 400.
 
 ## Admin API
 
@@ -214,6 +311,14 @@ Aperture supports optional per-endpoint rate limiting using a token bucket
 algorithm. Rate limits are configured per service and applied based on the
 client's L402 token ID for authenticated requests, or IP address for
 unauthenticated requests.
+
+Anonymous requests still obey IP-based limits when the pricer returns zero,
+including after a service's freebie allowance is exhausted.
+
+On whitelisted paths, verified L402 tokens get their own rate-limit bucket.
+Anonymous requests and services with `auth: "off"` keep IP-based limits.
+
+Requests authenticated with a Payment credential are limited by IP address.
 
 ### Features
 

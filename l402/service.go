@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/macaroon.v2"
 )
 
 const (
@@ -81,6 +83,16 @@ func encodeServicesCaveatValue(services ...Service) (string, error) {
 			return "", errors.New("missing service name")
 		}
 
+		// The value separates services with ',' and each name from its
+		// tier with ':', and nothing escapes either inside a name. A
+		// dynamic-price resource name ends in the client's request
+		// path, so a name containing one of those characters could
+		// decode back as several services rather than itself.
+		if strings.ContainsAny(service.Name, ",:") {
+			return "", fmt.Errorf("%w: name %q must not contain "+
+				"',' or ':'", ErrInvalidService, service.Name)
+		}
+
 		fmtStr := "%v:%v"
 		if i < len(services)-1 {
 			fmtStr += ","
@@ -124,6 +136,17 @@ func decodeServicesCaveatValue(s string) ([]Service, error) {
 	}
 
 	return services, nil
+}
+
+// ServicesFromMacaroon returns the services in the macaroon's final services
+// caveat. The macaroon must still be verified before these values are trusted.
+func ServicesFromMacaroon(mac *macaroon.Macaroon) ([]Service, error) {
+	value, ok := HasCaveat(mac, CondServices)
+	if !ok {
+		return nil, ErrNoServices
+	}
+
+	return decodeServicesCaveatValue(value)
 }
 
 // NewCapabilitiesCaveat creates a new capabilities caveat for the given

@@ -247,8 +247,16 @@ func (s *testHashMailServer) DelCipherBox(_ context.Context,
 
 	id := string(req.Desc.StreamId)
 
+	// Removing the stream from the map ends it for the handlers: a
+	// SendStream or RecvStream in flight looks the channel up again on
+	// its next message and gets NotFound, and a handler blocked in a
+	// send or a receive is released by the stream context's cancellation
+	// when the client goes away. The channel is deliberately not
+	// closed: a close can race with a concurrent send on the same
+	// channel, which the race detector reports on a channel that is
+	// buffered and whose senders outlive the caller's stream.
 	s.mu.Lock()
-	ch, ok := s.streams[id]
+	_, ok := s.streams[id]
 	if ok {
 		delete(s.streams, id)
 	}
@@ -258,7 +266,6 @@ func (s *testHashMailServer) DelCipherBox(_ context.Context,
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
-	close(ch)
 	return &hashmailrpc.DelCipherBoxResp{}, nil
 }
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
@@ -37,6 +38,11 @@ const (
 	hdrGrpcStatus  = "Grpc-Status"
 	hdrGrpcMessage = "Grpc-Message"
 	hdrTypeGrpc    = "application/grpc"
+
+	// grpcMetadataAuthorization is a client-supplied header that grpc-gateway
+	// surfaces to backends as authorization metadata, which Aperture does not
+	// validate.
+	grpcMetadataAuthorization = "Grpc-Metadata-Authorization"
 )
 
 // LocalService is an interface that describes a service that is handled
@@ -261,15 +267,30 @@ func New(auth auth.Authenticator, services []*Service,
 
 // ServeHTTP checks a client's headers for appropriate authorization and either
 // returns a challenge or forwards their request to the target backend service.
+//
+//nolint:gocyclo
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse and log the remote IP address. We also need the parsed IP
 	// address for the freebie count.
 	remoteIP, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
+
+	// Log the request target as the client sent it, before canonicalization
+	// rewrites it.
+	requestURI := r.RequestURI
 	logRequest := func() {
-		prefixLog.Infof(formatPattern, r.Method, r.RequestURI, r.Proto,
+		prefixLog.Infof(formatPattern, r.Method, requestURI, r.Proto,
 			r.Referer(), r.UserAgent())
 	}
 	defer logRequest()
+
+	// Canonicalize the path before any component uses it for routing,
+	// authentication, pricing, or rate limiting. This also ensures the
+	// backend receives the same path that Aperture authorized.
+	if !canonicalizeRequestPath(r) {
+		addCorsHeaders(w.Header())
+		sendDirectResponse(w, r, http.StatusBadRequest, "invalid path")
+		return
+	}
 
 	// Blocklist check
 	if _, blocked := p.blocklist[remoteIP.String()]; blocked {
@@ -374,18 +395,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return allowed
 	}
 
+	// Explicit auth off bypasses validation. Whitelisted requests only
+	// validate L402 identity, without executing MPP payment actions.
+	authEnabled := target.Auth.IsOn() || target.Auth.IsFreebie()
+	var acceptAuth, l402Verified bool
+	if authEnabled {
+		acceptAuth, l402Verified = p.acceptForService(
+			&r.Header, resourceName, target, authLevel.IsOff(),
+		)
+	}
+
+	// A request that one credential authenticated can still carry L402s
+	// that nothing verified: beside a Payment credential, or in another
+	// header than the L402 that was verified. Remove them before the rate
+	// limiter, the metering check and the director read them as the
+	// caller's identity.
+	if acceptAuth {
+		removeUnverifiedL402(r.Header, l402Verified)
+	}
+
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
 	switch {
 	case authLevel.IsOn():
-		// Determine if the header contains the authentication
-		// required for the given resource. The call to Accept is
-		// called in each case body rather than outside the switch so
-		// as to avoid calling this possibly expensive call for static
-		// resources. If the service specifies an auth scheme, only
-		// authenticators matching that scheme are tried.
-		acceptAuth := p.acceptForService(
-			&r.Header, resourceName, target,
-		)
 		if !acceptAuth {
 			if skipInvoiceCreation {
 				addCorsHeaders(w.Header())
@@ -412,6 +443,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// If the price returned is zero, then break out of the
 			// switch statement and allow access to the service.
 			if price == 0 {
+				if !checkRateLimit(false) {
+					return
+				}
+
 				break
 			}
 
@@ -420,14 +455,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// User is authenticated, apply rate limit with L402 token ID.
+		// User is authenticated, apply rate limit with the L402 token
+		// ID if an L402 is what verified, and by IP otherwise.
 		// This runs before the metered check on purpose: that check
 		// reserves an estimate against the token's balance, and the
 		// reservation is only released by the usage report the response
 		// observer sends. A request turned away here never reaches the
 		// backend, so it would produce no report and leak its
 		// reservation, shrinking the buyer's usable balance for nothing.
-		if !checkRateLimit(true) {
+		if !checkRateLimit(l402Verified) {
 			return
 		}
 
@@ -453,9 +489,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case authLevel.IsFreebie():
 		// We only need to respect the freebie counter if the user
 		// is not authenticated at all.
-		acceptAuth := p.acceptForService(
-			&r.Header, resourceName, target,
-		)
 		if !acceptAuth {
 			// Check and consume together so concurrent requests
 			// cannot claim the same remaining freebie.
@@ -488,6 +521,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// out of the switch statement and allow access
 				// to the service.
 				if price == 0 {
+					if !checkRateLimit(false) {
+						return
+					}
+
 					break
 				}
 
@@ -503,18 +540,34 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Authenticated user on freebie path. Inject receipt
-			// headers and apply rate limit by L402 token.
+			// headers and apply rate limit by L402 token, if an
+			// L402 is what verified.
 			r = p.injectReceiptContext(r, resourceName)
 
-			if !checkRateLimit(true) {
+			if !checkRateLimit(l402Verified) {
 				return
 			}
 		}
 
 	default:
-		// Auth is off, rate limit by IP for unauthenticated access.
-		if !checkRateLimit(false) {
+		// Verified public requests use token limits. Anonymous requests
+		// and explicit service-level auth off continue to use IP limits.
+		if !checkRateLimit(l402Verified) {
 			return
+		}
+	}
+
+	if authEnabled {
+		// grpc-gateway maps this alias to authorization metadata. Always
+		// remove the client value because Aperture does not validate it.
+		r.Header.Del(grpcMetadataAuthorization)
+
+		// Requests admitted without authentication must not carry an
+		// unverified identity to the backend.
+		if !acceptAuth {
+			r.Header.Del(l402.HeaderAuthorization)
+			r.Header.Del(l402.HeaderMacaroon)
+			r.Header.Del(l402.HeaderMacaroonMD)
 		}
 	}
 
@@ -523,20 +576,250 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.proxyBackend.ServeHTTP(w, r)
 }
 
+// canonicalizeRequestPath rejects paths that a backend could resolve to another
+// resource than the one Aperture matches, and targets that are not an absolute
+// path, and removes empty and dot segments from the rest. It cleans the escaped
+// path one segment at a time, so the backend receives every remaining segment
+// exactly as the client escaped it, and updates the request target to match the
+// cleaned path.
+func canonicalizeRequestPath(req *http.Request) bool {
+	// Some backends normalize a path segment before routing, dropping
+	// parameters or treating an alternate character as a separator, and
+	// some truncate one at a control character. A path containing any of
+	// those characters can name a different resource there than the one
+	// Aperture matched, which also lets a control character hide a parent
+	// segment from the exact check below. URL.Path is decoded, so this
+	// refuses both the literal and the percent-encoded spellings.
+	if strings.ContainsAny(req.URL.Path, ";\\") ||
+		strings.IndexFunc(req.URL.Path, unicode.IsControl) >= 0 {
+		return false
+	}
+
+	// Backends resolve parent segments themselves, so a path with one
+	// could select a public service or whitelist entry here and reach a
+	// protected resource there.
+	for segment := range strings.SplitSeq(req.URL.Path, "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+
+	// A target that is not an absolute path is matched without one but
+	// reaches the backend as sent, and a dynamic-price resource named after
+	// it would not be the service name followed by "/". Only "OPTIONS *"
+	// may name no path, and an opaque URI such as "http:x" never names one.
+	// An empty path, as in "GET http://host", is forwarded as "/", so that
+	// is also the path to match.
+	if req.URL.Opaque != "" {
+		return false
+	}
+	escaped := req.URL.EscapedPath()
+	if escaped != "" && !strings.HasPrefix(escaped, "/") {
+		return escaped == "*" && req.Method == http.MethodOptions
+	}
+
+	// Drop empty and "." segments, whether plain or escaped, and keep every
+	// other segment exactly as the client escaped it: decoding an escaped
+	// reserved character, such as an encoded slash, before cleaning would
+	// change which resource the backend sees. A trailing slash is kept,
+	// since backends and file servers treat it as naming a different
+	// resource.
+	var clean strings.Builder
+	for segment := range strings.SplitSeq(escaped, "/") {
+		name, err := url.PathUnescape(segment)
+		if err != nil {
+			return false
+		}
+		if name == "" || name == "." {
+			continue
+		}
+		clean.WriteByte('/')
+		clean.WriteString(segment)
+	}
+	cleanEscaped := clean.String()
+	switch {
+	case cleanEscaped == "":
+		cleanEscaped = "/"
+
+	case strings.HasSuffix(escaped, "/"):
+		cleanEscaped += "/"
+	}
+	if cleanEscaped == escaped {
+		return true
+	}
+
+	cleanPath, err := url.PathUnescape(cleanEscaped)
+	if err != nil {
+		return false
+	}
+
+	// Like net/url, set RawPath only when it differs from the default
+	// encoding of Path.
+	req.URL.Path = cleanPath
+	req.URL.RawPath = ""
+	if req.URL.EscapedPath() != cleanEscaped {
+		req.URL.RawPath = cleanEscaped
+	}
+
+	// The pricer serializes the request target rather than URL.Path, so
+	// it has to name the cleaned path too.
+	req.RequestURI = req.URL.RequestURI()
+
+	return true
+}
+
 // acceptForService checks authentication, respecting the service's per-service
 // AuthScheme setting. If the authenticator is a MultiAuthenticator and the
 // service has an AuthScheme set, only matching sub-authenticators are tried.
+// Public requests only check L402 credentials.
+//
+// The second result reports whether an L402 is what authenticated the request.
+// A request can carry credentials for several schemes, so one that another
+// scheme authenticated can still carry an L402 that nothing verified.
 func (p *Proxy) acceptForService(header *http.Header, resourceName string,
-	target *Service) bool {
+	target *Service, public bool) (bool, bool) {
+
+	scheme := target.AuthScheme
+	if public {
+		// Machine Payments Protocol (MPP) authentication can consume a
+		// payment or debit a session, so it cannot validate public requests.
+		if scheme == auth.AuthSchemeMPP {
+			return false, false
+		}
+
+		scheme = auth.AuthSchemeL402
+		if target.DynamicPrice.Enabled {
+			resourceName = publicResourceName(
+				header, target.Name, resourceName,
+			)
+		}
+
+		// A direct authenticator cannot select a different scheme, so
+		// public requests require an L402 authenticator.
+		tagged, ok := p.authenticator.(auth.SchemeTagged)
+		if ok && tagged.Scheme() != auth.AuthSchemeL402 {
+			return false, false
+		}
+	}
 
 	multi, ok := p.authenticator.(*auth.MultiAuthenticator)
-	if ok && target.AuthScheme != "" {
-		return multi.AcceptForScheme(
-			header, resourceName, target.AuthScheme,
+	if !ok {
+		// A direct authenticator that declares another scheme cannot
+		// have verified an L402.
+		accepted := p.authenticator.Accept(header, resourceName)
+		tagged, ok := p.authenticator.(auth.SchemeTagged)
+		isL402 := !ok || tagged.Scheme() == auth.AuthSchemeL402
+
+		return accepted, accepted && isL402
+	}
+
+	// Try L402 on its own first, which is the order the authenticators are
+	// composed in anyway, so that a success here is known to be an L402.
+	if scheme == "" || strings.Contains(scheme, auth.AuthSchemeL402) {
+		accepted := multi.AcceptForScheme(
+			header, resourceName, auth.AuthSchemeL402,
+		)
+		if accepted {
+			return true, true
+		}
+	}
+
+	// Public requests stop at L402, as does a service that only takes it.
+	if public || (scheme != "" &&
+		!strings.Contains(scheme, auth.AuthSchemeMPP)) {
+
+		return false, false
+	}
+
+	accepted := multi.AcceptForScheme(
+		header, resourceName, auth.AuthSchemeMPP,
+	)
+
+	return accepted, false
+}
+
+// removeUnverifiedL402 deletes the L402 credentials that did not authenticate
+// the request, so a backend cannot take one for the caller's identity. When an
+// L402 authenticated it, only the header field it was read from keeps L402
+// values: an L402 macaroon in another macaroon header is removed even if it
+// names the same token, since Aperture verified neither its signature nor its
+// caveats. Otherwise every Authorization value containing an L402 and every
+// L402 macaroon is removed. Values of other kinds stay, such as the Payment
+// credential that authenticated the request or an lnd macaroon a backend
+// checks itself.
+func removeUnverifiedL402(header http.Header, l402Verified bool) {
+	verified := ""
+	if l402Verified {
+		verified = l402.CredentialHeader(&header)
+	}
+
+	// An accepted Payment value is a single base64url token after its
+	// scheme, so it never contains an L402 itself.
+	if verified != l402.HeaderAuthorization {
+		removeHeaderValues(
+			header, l402.HeaderAuthorization, l402.ContainsCredential,
 		)
 	}
 
-	return p.authenticator.Accept(header, resourceName)
+	for _, name := range []string{
+		l402.HeaderMacaroonMD, l402.HeaderMacaroon,
+	} {
+		if name != verified {
+			removeHeaderValues(header, name, l402.IsMacaroonCredential)
+		}
+	}
+}
+
+// removeHeaderValues deletes the values of a header field that match and keeps
+// the others in their order.
+func removeHeaderValues(header http.Header, name string,
+	matches func(string) bool) {
+
+	var kept []string
+	for _, value := range header.Values(name) {
+		if !matches(value) {
+			kept = append(kept, value)
+		}
+	}
+
+	header.Del(name)
+	for _, value := range kept {
+		header.Add(name, value)
+	}
+}
+
+// publicResourceName returns a signed resource candidate from the same service.
+// Authentication still verifies the macaroon against the returned resource
+// before any identity is trusted.
+//
+// A dynamic-price resource is named after its service followed by the request
+// path. ValidateServiceName keeps slashes out of service names, so a name that
+// equals this service's name, or starts with it and a slash, cannot have been
+// issued by any other service. Without that rule a token name could be
+// ambiguous between this service and another, and neither this check nor the
+// fallback, which is the requested resource itself, could tell them apart.
+func publicResourceName(header *http.Header, serviceName,
+	fallback string) string {
+
+	mac, _, err := l402.FromHeader(header)
+	if err != nil {
+		return fallback
+	}
+	services, err := l402.ServicesFromMacaroon(mac)
+	if err != nil {
+		return fallback
+	}
+
+	resourcePrefix := serviceName + "/"
+	for _, service := range services {
+		if service.Name == serviceName ||
+			strings.HasPrefix(service.Name, resourcePrefix) {
+
+			return service.Name
+		}
+	}
+
+	return fallback
 }
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
