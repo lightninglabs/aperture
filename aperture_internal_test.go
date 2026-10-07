@@ -1,6 +1,8 @@
 package aperture
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -158,4 +160,43 @@ func TestMergeServicesFromDBPreservesConfig(t *testing.T) {
 		configOnlyFirst, &expectedMerged, configOnlyLast,
 		expectedDBOnly, expectedAddedLater,
 	}, merged)
+}
+
+// TestGetConfigKeepsSessionKnobsFromFile asserts that the session deposit
+// multiplier and idle timeout set in the config file survive the second flag
+// pass. That pass exists so command line flags win over the file, but a flag
+// carrying a default tag re-applies its default on every parse, which silently
+// threw away whatever the file had set for these two.
+func TestGetConfigKeepsSessionKnobsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "aperture.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+listenaddr: "127.0.0.1:0"
+authenticator:
+  # Disabled so the fixture does not depend on any authenticator
+  # backend validation.
+  disable: true
+  sessiondepositmultiplier: 2000
+  sessionidletimeout: 900
+`), 0600))
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"aperture", "--configfile=" + configPath}
+
+	cfg, err := getConfig()
+	require.NoError(t, err)
+	require.Equal(t, 2000, cfg.Authenticator.SessionDepositMultiplier)
+	require.Equal(t, 900, cfg.Authenticator.SessionIdleTimeout)
+
+	// A flag still overrides the file, for both knobs.
+	os.Args = []string{
+		"aperture", "--configfile=" + configPath,
+		"--authenticator.sessiondepositmultiplier=50",
+		"--authenticator.sessionidletimeout=60",
+	}
+	cfg, err = getConfig()
+	require.NoError(t, err)
+	require.Equal(t, 50, cfg.Authenticator.SessionDepositMultiplier)
+	require.Equal(t, 60, cfg.Authenticator.SessionIdleTimeout)
 }
