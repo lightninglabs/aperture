@@ -107,11 +107,11 @@ type AuthConfig struct {
 
 	// SessionDepositMultiplier is the number of service units per deposit.
 	// Defaults to 20 if not set.
-	SessionDepositMultiplier int `long:"sessiondepositmultiplier" description:"Number of service units per session deposit" default:"20"`
+	SessionDepositMultiplier int `long:"sessiondepositmultiplier" description:"Number of service units per session deposit" default-mask:"20"`
 
 	// SessionIdleTimeout is the idle timeout for sessions in seconds.
 	// Defaults to 300 (5 minutes) if not set.
-	SessionIdleTimeout int `long:"sessionidletimeout" description:"Session idle timeout in seconds" default:"300"`
+	SessionIdleTimeout int `long:"sessionidletimeout" description:"Session idle timeout in seconds" default-mask:"300"`
 }
 
 func (a *AuthConfig) validate() error {
