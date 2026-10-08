@@ -85,6 +85,7 @@ type fakeSessionSettler struct {
 	sessionID string
 	charged   int64
 	present   bool
+	checks    int
 
 	err error
 
@@ -105,6 +106,10 @@ func (f *fakeSessionSettler) Accept(_ *http.Header, _ string) bool {
 	return true
 }
 
+func (f *fakeSessionSettler) Scheme() string {
+	return auth.AuthSchemeMPP
+}
+
 func (f *fakeSessionSettler) FreshChallengeHeader(_ string,
 	_ int64) (http.Header, error) {
 
@@ -114,6 +119,7 @@ func (f *fakeSessionSettler) FreshChallengeHeader(_ string,
 func (f *fakeSessionSettler) BearerSessionID(_ context.Context,
 	_ *http.Header) (string, int64, bool) {
 
+	f.checks++
 	if !f.present {
 		return "", 0, false
 	}
@@ -137,6 +143,24 @@ func (f *fakeSessionSettler) SettleSessionRequest(_ context.Context,
 	}
 
 	return f.err
+}
+
+// acceptingL402Authenticator stands in for an L402 credential that wins
+// authentication before the MPP session authenticator is tried.
+type acceptingL402Authenticator struct{}
+
+func (acceptingL402Authenticator) Accept(_ *http.Header, _ string) bool {
+	return true
+}
+
+func (acceptingL402Authenticator) FreshChallengeHeader(_ string,
+	_ int64) (http.Header, error) {
+
+	return make(http.Header), nil
+}
+
+func (acceptingL402Authenticator) Scheme() string {
+	return auth.AuthSchemeL402
 }
 
 // newSessionService builds a service whose pricer is the given fake.
@@ -258,6 +282,32 @@ func TestCheckSessionMeteringAnnotates(t *testing.T) {
 	body, err := io.ReadAll(annotated.Body)
 	require.NoError(t, err)
 	require.Equal(t, `{"model":"gpt-test"}`, string(body))
+}
+
+// TestL402AuthenticationSkipsSessionMetering verifies that an attached MPP
+// session credential cannot reach reconciliation when L402 authenticated the
+// request. The session authenticator did not deduct an estimate in that case.
+func TestL402AuthenticationSkipsSessionMetering(t *testing.T) {
+	fake := newFakeSessionPricer()
+	settler := newFakeSessionSettler()
+	target := &Service{
+		Auth:       "on",
+		AuthScheme: auth.AuthSchemeL402MPP,
+	}
+
+	multi := auth.NewMultiAuthenticator(
+		acceptingL402Authenticator{}, settler,
+	)
+	p, received := newPublicAuthProxy(t, target, multi)
+	target.DynamicPrice.Enabled = true
+	target.pricer = fake
+
+	response := servePublicAuthRequest(
+		p, "/v1/chat/completions", "192.0.2.1", nil,
+	)
+	require.Equal(t, http.StatusNoContent, response.Code)
+	<-received
+	require.Zero(t, settler.checks)
 }
 
 // TestCheckSessionMeteringSkips asserts nothing is annotated when there is no

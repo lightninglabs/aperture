@@ -171,6 +171,18 @@ func (a *MPPSessionAuthenticator) Accept(header *http.Header,
 		return false
 	}
 
+	// Every action verifies the challenge HMAC in its handler. Check the
+	// resource it covers here first so a challenge priced for one resource
+	// cannot be spent on another.
+	if err := verifyMPPChallengeBinding(
+		cred.Challenge.Opaque, serviceName,
+	); err != nil {
+
+		log.Debugf("MPP Session: Challenge resource verification failed: %v",
+			err)
+		return false
+	}
+
 	// Decode the session payload to determine the action.
 	var payload mpp.SessionPayload
 	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
@@ -794,6 +806,11 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeaderWithPrices(
 			"request: %w", err)
 	}
 
+	opaque, err := encodeMPPChallengeBinding(serviceName)
+	if err != nil {
+		return nil, err
+	}
+
 	expires := time.Now().Add(defaultChallengeExpiry).UTC().Format(
 		time.RFC3339,
 	)
@@ -803,6 +820,7 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeaderWithPrices(
 		Intent:  mpp.IntentSession,
 		Request: encodedRequest,
 		Expires: expires,
+		Opaque:  opaque,
 	}
 	params.ID = mpp.ComputeChallengeID(a.hmacSecret, params)
 

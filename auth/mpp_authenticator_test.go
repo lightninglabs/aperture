@@ -203,6 +203,8 @@ func testChargeChallenge(t require.TestingT, paymentHash lntypes.Hash,
 		Request: encodedReq,
 		Expires: expires,
 	}
+	params.Opaque, err = encodeMPPChallengeBinding("test-service")
+	require.NoError(t, err)
 	params.ID = mpp.ComputeChallengeID(testHMACSecret, params)
 
 	return mpp.ChallengeEcho{
@@ -212,6 +214,7 @@ func testChargeChallenge(t require.TestingT, paymentHash lntypes.Hash,
 		Intent:  params.Intent,
 		Request: params.Request,
 		Expires: params.Expires,
+		Opaque:  params.Opaque,
 	}
 }
 
@@ -241,15 +244,67 @@ func buildTestCredential(t require.TestingT, challenge mpp.ChallengeEcho,
 	return h
 }
 
+// TestMPPAuthenticatorBindsChargeToService verifies that a payment made for
+// one service cannot authorize a request to another. Refusing the wrong target
+// must not consume the credential, so the service that minted it can still
+// accept it afterward.
+func TestMPPAuthenticatorBindsChargeToService(t *testing.T) {
+	preimage, paymentHash := testPreimageAndHash(t)
+	challenger := &mockChallenger{
+		paymentRequest: "lnbcrt1n1...",
+		paymentHash:    paymentHash,
+	}
+	checker := newMockInvoiceChecker()
+	checker.settledHashes[paymentHash] = true
+	auth, store := newTestChargeAuth(t, challenger, checker)
+
+	header, err := auth.FreshChallengeHeader("premium", 1)
+	require.NoError(t, err)
+	params, err := mpp.ParseChallengeHeader(
+		header.Get("WWW-Authenticate"),
+	)
+	require.NoError(t, err)
+
+	credential := buildTestCredential(t, mpp.ChallengeEcho{
+		ID:          params.ID,
+		Realm:       params.Realm,
+		Method:      params.Method,
+		Intent:      params.Intent,
+		Request:     params.Request,
+		Expires:     params.Expires,
+		Description: params.Description,
+		Opaque:      params.Opaque,
+		Digest:      params.Digest,
+	}, preimage)
+
+	require.False(t, auth.Accept(&credential, "vip"))
+	require.False(t, store.isConsumed(paymentHash))
+	require.True(t, auth.Accept(&credential, "premium"))
+	require.True(t, store.isConsumed(paymentHash))
+}
+
 // paidCredential mints a settled payment and returns a credential for it, which
 // is what an honest buyer holds after paying a 402.
 func paidCredential(t require.TestingT,
 	checker *mockInvoiceChecker) (http.Header, lntypes.Hash) {
 
+	return paidCredentialForService(t, checker, "test-service")
+}
+
+// paidCredentialForService mints a settled payment credential bound to the
+// named service.
+func paidCredentialForService(t require.TestingT, checker *mockInvoiceChecker,
+	serviceName string) (http.Header, lntypes.Hash) {
+
 	preimage, paymentHash := testPreimageAndHash(t)
 	checker.settledHashes[paymentHash] = true
 
 	challenge := testChargeChallenge(t, paymentHash, testExpiry())
+	opaque, err := encodeMPPChallengeBinding(serviceName)
+	require.NoError(t, err)
+	challenge.Opaque = opaque
+	params := challenge.ToChallengeParams()
+	challenge.ID = mpp.ComputeChallengeID(testHMACSecret, params)
 
 	return buildTestCredential(t, challenge, preimage), paymentHash
 }
@@ -452,6 +507,9 @@ func TestMPPAuthenticatorFreshChallengeHeader(t *testing.T) {
 	require.Equal(t, mpp.IntentCharge, params.Intent)
 	require.NotEmpty(t, params.ID)
 	require.NotEmpty(t, params.Request)
+	require.NoError(t, verifyMPPChallengeBinding(
+		params.Opaque, "test-service",
+	))
 
 	// Every challenge carries an expiry, which is what bounds how long a
 	// record of its consumption has to be kept.
@@ -571,6 +629,7 @@ func TestMPPAuthenticatorEndToEnd(t *testing.T) {
 		Intent:  params.Intent,
 		Request: params.Request,
 		Expires: params.Expires,
+		Opaque:  params.Opaque,
 	}
 	credHeader := buildTestCredential(t, challenge, preimage)
 
@@ -867,13 +926,13 @@ func TestMPPAuthenticatorReusableChargeOnMeteredService(t *testing.T) {
 
 	// On the metered service, the same credential keeps working: the
 	// second presentation is the buyer spending the rest of its bundle.
-	h, _ := paidCredential(t, checker)
+	h, _ := paidCredentialForService(t, checker, "metered-service")
 	require.True(t, auth.Accept(&h, "metered-service"))
 	require.True(t, auth.Accept(&h, "metered-service"))
 
 	// On a service the policy does not name, the strict rule stands: the
 	// first presentation spends the payment and the second is a replay.
-	h2, _ := paidCredential(t, checker)
+	h2, _ := paidCredentialForService(t, checker, "strict-service")
 	require.True(t, auth.Accept(&h2, "strict-service"))
 	require.False(t, auth.Accept(&h2, "strict-service"))
 }
@@ -888,7 +947,7 @@ func TestMPPAuthenticatorNilReusablePolicyStaysStrict(t *testing.T) {
 	auth.SetReusableChargePolicy(func(string) bool { return true })
 	auth.SetReusableChargePolicy(nil)
 
-	h, _ := paidCredential(t, checker)
+	h, _ := paidCredentialForService(t, checker, "metered-service")
 	require.True(t, auth.Accept(&h, "metered-service"))
 	require.False(t, auth.Accept(&h, "metered-service"))
 }
