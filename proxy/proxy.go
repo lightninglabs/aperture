@@ -479,8 +479,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// An MPP session bearer request was already charged the
 		// challenge's per-unit estimate by the authenticator. Annotate
 		// it so the response modifier can reconcile that estimate
-		// against what the request turns out to cost.
-		r = p.checkSessionMetering(r, target)
+		// against what the request turns out to cost. If L402 won
+		// authentication, the session authenticator did not make that
+		// initial charge, so there is nothing to reconcile.
+		if !l402Verified {
+			r = p.checkSessionMetering(r, target)
+		}
 
 		// Inject receipt headers into the request context for the
 		// response modifier to pick up.

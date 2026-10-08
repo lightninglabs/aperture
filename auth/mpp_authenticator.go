@@ -269,6 +269,12 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		log.Debugf("MPP: Challenge ID verification failed")
 		return false
 	}
+	if err := verifyMPPChallengeBinding(
+		cred.Challenge.Opaque, serviceName,
+	); err != nil {
+		log.Debugf("MPP: Challenge resource verification failed: %v", err)
+		return false
+	}
 
 	// Every challenge this authenticator mints carries an expiry, and the
 	// expiry is slot 4 of the challenge HMAC, so a client can neither drop
@@ -435,6 +441,13 @@ func (a *MPPAuthenticator) FreshChallengeHeader(serviceName string,
 			"request: %w", err)
 	}
 
+	// Bind the challenge to the resource that determined its price. Opaque is
+	// covered by the challenge HMAC and echoed by the client.
+	opaque, err := encodeMPPChallengeBinding(serviceName)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build challenge params with expiry.
 	expires := time.Now().Add(a.challengeExpiry).UTC().Format(
 		time.RFC3339,
@@ -445,6 +458,7 @@ func (a *MPPAuthenticator) FreshChallengeHeader(serviceName string,
 		Intent:  mpp.IntentCharge,
 		Request: encodedRequest,
 		Expires: expires,
+		Opaque:  opaque,
 	}
 
 	// Compute the HMAC challenge ID.

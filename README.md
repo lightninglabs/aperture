@@ -41,6 +41,10 @@ many requests draw against, refunding whatever is left when the buyer closes it.
 Sessions and charge consumption records both need a real database, so `--dbbackend`
 must be `sqlite` or `postgres`; etcd is refused at startup.
 
+Each Payment challenge binds its HMAC to the exact resource that Aperture priced.
+For a dynamic-price service, that resource includes the request path. A credential
+issued for one resource is refused when a client presents it for another.
+
 A request authenticated with a Payment credential carries no L402 identity:
 Aperture removes any L402 it also presents, in `Authorization` or in the
 `Macaroon` and `Grpc-Metadata-Macaroon` headers, before rate limiting, metering
@@ -157,6 +161,10 @@ changes under streaming, and the configuration reference.
 
 Changes that need attention when upgrading from an earlier version:
 
+* Payment credentials created by an older Aperture carry no resource binding and
+  are refused after the upgrade, even if the invoice was paid. Clients must fetch
+  and pay a fresh challenge. Account for outstanding Payment challenges when
+  scheduling the upgrade.
 * Service names can no longer contain `/` or `=`. A slash could overlap the
   token namespace of another dynamic-price service, and an equal sign cannot
   be read back from the condition of a capabilities caveat. Startup fails on

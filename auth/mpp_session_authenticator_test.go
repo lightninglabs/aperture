@@ -319,6 +319,8 @@ func buildSessionChallenge(t *testing.T, hmacSecret []byte,
 		Intent:  mpp.IntentSession,
 		Request: encodedReq,
 	}
+	params.Opaque, err = encodeMPPChallengeBinding("test-service")
+	require.NoError(t, err)
 	params.ID = mpp.ComputeChallengeID(hmacSecret, params)
 
 	challenge := mpp.ChallengeEcho{
@@ -327,6 +329,7 @@ func buildSessionChallenge(t *testing.T, hmacSecret []byte,
 		Method:  params.Method,
 		Intent:  params.Intent,
 		Request: params.Request,
+		Opaque:  params.Opaque,
 	}
 	return challenge, hex.EncodeToString(paymentHash[:])
 }
@@ -386,6 +389,33 @@ func TestSessionOpenAccept(t *testing.T) {
 	require.Equal(t, "open", session.Status)
 	require.Equal(t, int64(300), session.DepositSats)
 	require.Equal(t, returnInvoice, session.ReturnInvoice)
+}
+
+// TestMPPSessionBindsChallengeToService verifies that a session challenge paid
+// for one service cannot open a session while authorizing another service. The
+// failed attempt must not create the session, and the bound service can still
+// accept the same credential afterward.
+func TestMPPSessionBindsChallengeToService(t *testing.T) {
+	auth, store, _, hmacSecret := newTestSessionAuth(t)
+	preimage, paymentHash := testPreimageAndHash(t)
+	auth.checker.(*mockInvoiceChecker).settledHashes[paymentHash] = true
+
+	challenge, sessionID := buildSessionChallenge(
+		t, hmacSecret, paymentHash, 300,
+	)
+	payload := &mpp.SessionPayload{
+		Action:        mpp.SessionActionOpen,
+		Preimage:      hex.EncodeToString(preimage[:]),
+		ReturnInvoice: testReturnInvoice(t, paymentHash),
+	}
+	header := buildSessionCredential(t, challenge, payload)
+
+	require.False(t, auth.Accept(&header, "other-service"))
+	_, err := store.GetSession(context.Background(), sessionID)
+	require.Error(t, err)
+	require.True(t, auth.Accept(&header, "test-service"))
+	_, err = store.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
 }
 
 // TestSessionBearerAccept verifies that a valid bearer credential is accepted
@@ -615,6 +645,9 @@ func TestSessionFreshChallengeHeader(t *testing.T) {
 	require.Equal(t, mpp.MethodLightning, params.Method)
 	require.Equal(t, mpp.IntentSession, params.Intent)
 	require.True(t, mpp.VerifyChallengeID(hmacSecret, params, params.ID))
+	require.NoError(t, verifyMPPChallengeBinding(
+		params.Opaque, "test-service",
+	))
 
 	// Decode request.
 	var sessReq mpp.SessionRequest
