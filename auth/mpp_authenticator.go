@@ -272,7 +272,6 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 	if err := verifyMPPChallengeBinding(
 		cred.Challenge.Opaque, serviceName,
 	); err != nil {
-
 		log.Debugf("MPP: Challenge resource verification failed: %v", err)
 		return false
 	}
