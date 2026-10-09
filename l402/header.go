@@ -29,6 +29,11 @@ const (
 )
 
 var (
+	// ErrNoCredential is returned by FromHeader when a request carries no
+	// L402 credential: no credential header at all, or only Authorization
+	// values of another scheme.
+	ErrNoCredential = errors.New("no L402 credential provided")
+
 	// authRegex matches the supported Authorization credential format:
 	//
 	//     (LSAT / L402) 1*SP base64(macaroon) ":" 64HEXDIG
@@ -57,6 +62,22 @@ var (
 // still take the token from it, so it must not be forwarded unverified.
 func ContainsCredential(value string) bool {
 	return credentialAnywhereRegex.MatchString(value)
+}
+
+// hasL402Authorization reports whether any Authorization value uses the LSAT
+// or L402 scheme, or contains an L402 credential after another scheme.
+func hasL402Authorization(values []string) bool {
+	for _, value := range values {
+		scheme, _, _ := strings.Cut(value, " ")
+		if strings.EqualFold(scheme, "LSAT") ||
+			strings.EqualFold(scheme, "L402") ||
+			ContainsCredential(value) {
+
+			return true
+		}
+	}
+
+	return false
 }
 
 // IsMacaroonCredential reports whether a Macaroon or Grpc-Metadata-Macaroon
@@ -129,6 +150,10 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 	// Header field 1 contains the macaroon and the preimage as distinct
 	// values separated by a colon.
 	case HeaderAuthorization:
+		if !hasL402Authorization(authHeaders) {
+			return nil, lntypes.Preimage{}, ErrNoCredential
+		}
+
 		seenSchemes := make(map[string]struct{}, 2)
 		for _, authHeader := range authHeaders {
 			log.Debugf("Trying to authorize with header value "+
@@ -190,8 +215,7 @@ func FromHeader(header *http.Header) (*macaroon.Macaroon, lntypes.Preimage, erro
 		}
 
 	default:
-		return nil, lntypes.Preimage{}, fmt.Errorf("no auth header " +
-			"provided")
+		return nil, lntypes.Preimage{}, ErrNoCredential
 	}
 
 	if macBytes == nil {
