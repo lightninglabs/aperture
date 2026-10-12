@@ -223,7 +223,7 @@ type AdminConfig struct {
 
 	// CORSOrigins controls which origins are allowed to call the admin REST
 	// API. If empty, CORS is disabled and browsers can only use same-origin.
-	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API." yaml:"corsorigin"`
 }
 
 type Config struct {
@@ -409,6 +409,7 @@ var renamedConfigKeys = []struct {
 		section: "postgres", oldKey: "maxopenconnections",
 		newKey: "maxconnections",
 	},
+	{section: "admin", oldKey: "corsorigins", newKey: "corsorigin"},
 }
 
 // checkRenamedConfigKeys returns an error if the config file uses a key from

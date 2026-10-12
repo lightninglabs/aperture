@@ -3,6 +3,8 @@ package aperture
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,6 +218,9 @@ sqlite:
   dbfile: "/data/aperture.db"
 postgres:
   maxconnections: 7
+admin:
+  corsorigin:
+    - "https://dashboard.example.com"
 services:
   - name: "quotes"
 blocklist:
@@ -240,6 +245,16 @@ postgres:
 			wantErr: "config key postgres.maxopenconnections is " +
 				"no longer read, use postgres.maxconnections " +
 				"instead",
+		},
+		{
+			name: "admin corsorigins",
+			config: `
+admin:
+  corsorigins:
+    - "https://dashboard.example.com"
+`,
+			wantErr: "config key admin.corsorigins is no longer " +
+				"read, use admin.corsorigin instead",
 		},
 	}
 
@@ -311,4 +326,95 @@ sqlite:
 	require.True(t, filepath.IsAbs(dbFile))
 	require.Equal(t, "aperture-test.db", filepath.Base(dbFile))
 	require.NotContains(t, dbFile, "~")
+}
+
+// TestGetConfigReadsFlagNamedKeys asserts that dbfile, maxconnections and
+// corsorigin are read from the config file.
+func TestGetConfigReadsFlagNamedKeys(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "aperture.yaml")
+	dbPath := filepath.Join(dir, "aperture.db")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+listenaddr: "127.0.0.1:0"
+authenticator:
+  # Disabled so the fixture does not depend on any authenticator
+  # backend validation.
+  disable: true
+sqlite:
+  dbfile: "`+dbPath+`"
+postgres:
+  maxconnections: 7
+admin:
+  corsorigin:
+    - "https://dashboard.example.com"
+`), 0600))
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"aperture", "--configfile=" + configPath}
+
+	cfg, err := getConfig()
+	require.NoError(t, err)
+	require.Equal(t, dbPath, cfg.Sqlite.DatabaseFileName)
+	require.EqualValues(t, 7, cfg.Postgres.MaxOpenConnections)
+	require.Equal(
+		t, []string{"https://dashboard.example.com"},
+		cfg.Admin.CORSOrigins,
+	)
+}
+
+// TestConfigYAMLKeysMatchFlags asserts that every aperture config field with a
+// flag is read from the config file under the flag's name.
+func TestConfigYAMLKeysMatchFlags(t *testing.T) {
+	// The repeatable --service flag is a services list in the file.
+	exceptions := map[string]bool{
+		"Config.Services": true,
+	}
+
+	seen := make(map[reflect.Type]bool)
+
+	var check func(reflect.Type)
+	check = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice {
+			typ = typ.Elem()
+		}
+
+		// Only check aperture's own structs, not lnd's logging config.
+		const module = "github.com/lightninglabs/aperture"
+		if typ.Kind() != reflect.Struct || seen[typ] ||
+			!strings.HasPrefix(typ.PkgPath(), module) {
+
+			return
+		}
+		seen[typ] = true
+
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+
+			// The YAML decoder falls back to the lowercased
+			// field name when there is no yaml tag.
+			key := strings.ToLower(field.Name)
+			yamlTag := strings.Split(field.Tag.Get("yaml"), ",")[0]
+			if yamlTag != "" {
+				key = yamlTag
+			}
+
+			name := typ.Name() + "." + field.Name
+			flag := field.Tag.Get("long")
+			if flag != "" && !exceptions[name] {
+				require.Equalf(
+					t, flag, key, "%s is read from %q "+
+						"in the config file, but its "+
+						"flag is %q", name, key, flag,
+				)
+			}
+
+			check(field.Type)
+		}
+	}
+
+	check(reflect.TypeOf(Config{}))
 }
