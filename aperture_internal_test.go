@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/pricer"
@@ -417,4 +418,16 @@ func TestConfigYAMLKeysMatchFlags(t *testing.T) {
 	}
 
 	check(reflect.TypeOf(Config{}))
+}
+
+// TestSampleConfigKeysAreRead asserts that aperture reads every key in
+// sample-conf.yaml, since unknown keys are silently ignored.
+func TestSampleConfigKeysAreRead(t *testing.T) {
+	sample, err := os.ReadFile("sample-conf.yaml")
+	require.NoError(t, err)
+
+	err = yaml.UnmarshalWithOptions(
+		sample, NewConfig(), yaml.DisallowUnknownField(),
+	)
+	require.NoError(t, err)
 }
