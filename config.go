@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/v2"
@@ -397,19 +398,19 @@ func NewConfig() *Config {
 	}
 }
 
-// renamedConfigKeys lists the keys aperture used to read by mistake, with the
-// documented key that replaces each.
+// renamedConfigKeys lists config file keys that aperture does not read, with
+// the documented key that replaces each.
 var renamedConfigKeys = []struct {
-	section string
-	oldKey  string
-	newKey  string
+	oldKey string
+	newKey string
 }{
-	{section: "sqlite", oldKey: "databasefilename", newKey: "dbfile"},
+	{oldKey: "sqlite.databasefilename", newKey: "sqlite.dbfile"},
 	{
-		section: "postgres", oldKey: "maxopenconnections",
-		newKey: "maxconnections",
+		oldKey: "postgres.maxopenconnections",
+		newKey: "postgres.maxconnections",
 	},
-	{section: "admin", oldKey: "corsorigins", newKey: "corsorigin"},
+	{oldKey: "postgres.requireSSL", newKey: "postgres.requiressl"},
+	{oldKey: "admin.corsorigins", newKey: "admin.corsorigin"},
 }
 
 // checkRenamedConfigKeys returns an error if the config file uses a key from
@@ -421,15 +422,15 @@ func checkRenamedConfigKeys(configFile []byte) error {
 	}
 
 	for _, renamed := range renamedConfigKeys {
-		section, ok := sections[renamed.section].(map[string]any)
+		name, key, _ := strings.Cut(renamed.oldKey, ".")
+		section, ok := sections[name].(map[string]any)
 		if !ok {
 			continue
 		}
 
-		if _, ok := section[renamed.oldKey]; ok {
-			return fmt.Errorf("config key %s.%s is not read, "+
-				"use %s.%s instead", renamed.section,
-				renamed.oldKey, renamed.section, renamed.newKey)
+		if _, ok := section[key]; ok {
+			return fmt.Errorf("config key %s is not read, use %s "+
+				"instead", renamed.oldKey, renamed.newKey)
 		}
 	}
 

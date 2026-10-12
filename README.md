@@ -213,6 +213,9 @@ Changes that need attention when upgrading from an earlier version:
   Move that database, with its `-wal` and `-shm` files, to the configured
   path, or remove `sqlite.dbfile`. `admin.corsorigin` must be a list: a single
   string fails with `string was used where sequence is expected`.
+* `postgres.requireSSL`, from the old sample config, was never read, so
+  aperture connected to postgres without SSL. Startup now fails on it; use
+  `postgres.requiressl`, which requires SSL when set to `true`.
 
 ## Admin API
 
