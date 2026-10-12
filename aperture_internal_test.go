@@ -200,3 +200,115 @@ authenticator:
 	require.Equal(t, 50, cfg.Authenticator.SessionDepositMultiplier)
 	require.Equal(t, 60, cfg.Authenticator.SessionIdleTimeout)
 }
+
+// TestCheckRenamedConfigKeys asserts that the old keys are rejected and the
+// documented keys are accepted.
+func TestCheckRenamedConfigKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "documented keys",
+			config: `
+sqlite:
+  dbfile: "/data/aperture.db"
+postgres:
+  maxconnections: 7
+services:
+  - name: "quotes"
+blocklist:
+  - "1.1.1.1"
+`,
+		},
+		{
+			name: "sqlite databasefilename",
+			config: `
+sqlite:
+  databasefilename: "/data/aperture.db"
+`,
+			wantErr: "config key sqlite.databasefilename is no " +
+				"longer read, use sqlite.dbfile instead",
+		},
+		{
+			name: "postgres maxopenconnections",
+			config: `
+postgres:
+  maxopenconnections: 7
+`,
+			wantErr: "config key postgres.maxopenconnections is " +
+				"no longer read, use postgres.maxconnections " +
+				"instead",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := checkRenamedConfigKeys([]byte(test.config))
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
+// TestCheckSqliteDatabaseMoved asserts that aperture refuses to start a new
+// sqlite database while one exists at the default path.
+func TestCheckSqliteDatabaseMoved(t *testing.T) {
+	dir := t.TempDir()
+	defaultPath := filepath.Join(dir, "default", "aperture.db")
+	configuredPath := filepath.Join(dir, "configured", "aperture.db")
+
+	createFile := func(path string) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+		require.NoError(t, os.WriteFile(path, nil, 0600))
+	}
+
+	// Neither database exists: a new install.
+	err := checkSqliteDatabaseMoved(configuredPath, defaultPath)
+	require.NoError(t, err)
+
+	// The default path is configured.
+	createFile(defaultPath)
+	require.NoError(t, checkSqliteDatabaseMoved(defaultPath, defaultPath))
+
+	// The configured database does not exist, but the default one does.
+	err = checkSqliteDatabaseMoved(configuredPath, defaultPath)
+	require.ErrorContains(
+		t, err, "sqlite database "+configuredPath+" does not exist, "+
+			"but one exists at the default path "+defaultPath,
+	)
+
+	// Both exist: the configured database is used as it is.
+	createFile(configuredPath)
+	err = checkSqliteDatabaseMoved(configuredPath, defaultPath)
+	require.NoError(t, err)
+}
+
+// TestGetConfigExpandsDBFile asserts that a ~ in sqlite.dbfile is expanded to
+// the home directory.
+func TestGetConfigExpandsDBFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "aperture.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+listenaddr: "127.0.0.1:0"
+authenticator:
+  disable: true
+sqlite:
+  dbfile: "~/aperture-test.db"
+`), 0600))
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"aperture", "--configfile=" + configPath}
+
+	cfg, err := getConfig()
+	require.NoError(t, err)
+	dbFile := cfg.Sqlite.DatabaseFileName
+	require.True(t, filepath.IsAbs(dbFile))
+	require.Equal(t, "aperture-test.db", filepath.Base(dbFile))
+	require.NotContains(t, dbFile, "~")
+}

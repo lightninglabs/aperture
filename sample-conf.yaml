@@ -144,8 +144,9 @@ dbbackend: "sqlite"
 # Settings for the sqlite process which the proxy will use to reliably store and
 # retrieve token information.
 sqlite:
-    # The full path to the database.
-    dbfile: "/path/to/.aperture/aperture.db"
+    # The full path to the database. Defaults to aperture.db in the
+    # aperture data directory.
+    # dbfile: "/path/to/.aperture/aperture.db"
 
     # Skip applying migrations on startup.
     skipmigrations: false
