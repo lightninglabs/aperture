@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -688,6 +689,14 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 		// Machine Payments Protocol (MPP) authentication can consume a
 		// payment or debit a session, so it cannot validate public requests.
 		if scheme == auth.AuthSchemeMPP {
+			return false, false
+		}
+
+		// A public request without an L402 credential can't be
+		// recognized as a paying user, so don't count it as a denied
+		// verification.
+		_, _, err := l402.FromHeader(header)
+		if errors.Is(err, l402.ErrNoCredential) {
 			return false, false
 		}
 
