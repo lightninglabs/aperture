@@ -119,7 +119,8 @@ func TestRevokedL402(t *testing.T) {
 	if err := mint.cfg.Secrets.RevokeSecret(ctx, idHash); err != nil {
 		t.Fatalf("unable to revoke L402: %v", err)
 	}
-	if err := mint.VerifyL402(ctx, params); err != ErrSecretNotFound {
+	err = mint.VerifyL402(ctx, params)
+	if !errors.Is(err, ErrSecretNotFound) {
 		t.Fatalf("expected ErrSecretNotFound, got %v", err)
 	}
 }
