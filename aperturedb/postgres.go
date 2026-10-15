@@ -28,14 +28,14 @@ var (
 
 // PostgresConfig holds the postgres database configuration.
 type PostgresConfig struct {
-	SkipMigrations     bool   `long:"skipmigrations" description:"Skip applying migrations on startup."`
+	SkipMigrations     bool   `long:"skipmigrations" yaml:"skipmigrations" description:"Skip applying migrations on startup."`
 	Host               string `long:"host" description:"Database server hostname."`
 	Port               int    `long:"port" description:"Database server port."`
 	User               string `long:"user" description:"Database user."`
 	Password           string `long:"password" description:"Database user's password."`
 	DBName             string `long:"dbname" description:"Database name to use."`
-	MaxOpenConnections int32  `long:"maxconnections" description:"Max open connections to keep alive to the database server."`
-	RequireSSL         bool   `long:"requiressl" description:"Whether to require using SSL (mode: require) when connecting to the server."`
+	MaxOpenConnections int32  `long:"maxconnections" yaml:"maxconnections" description:"Max open connections to keep alive to the database server."`
+	RequireSSL         bool   `long:"requiressl" yaml:"requireSSL" description:"Whether to require using SSL (mode: require) when connecting to the server."`
 }
 
 // DSN returns the dns to connect to the database.
