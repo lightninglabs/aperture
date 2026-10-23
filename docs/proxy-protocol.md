@@ -95,3 +95,26 @@ listener from accepting other connections.
 
 Aperture sends ordinary HTTP/gRPC to backend services. This receiver does not
 emit PROXY headers on backend connections.
+
+## Parser fuzzing
+
+The normal Go test suite runs the fuzz seed corpus and generated valid-frame
+properties. To mutate inputs beyond the seeds, run each target separately:
+
+```shell
+go test . -run '^$' -fuzz '^FuzzProxyV2Wire$' -fuzztime=2m -parallel=4
+go test . -run '^$' -fuzz '^FuzzProxyV2Frames$' -fuzztime=2m -parallel=4
+go test . -run '^$' -fuzz '^FuzzProxyProtocolNetworks$' -fuzztime=2m -parallel=4
+```
+
+The wire target checks framing, fragmented reads, identity fallback, and lazy
+connection state. The structured target generates valid addresses and TLV
+chains, then checks source identity, suffix preservation, truncation, and TLV
+bounds. The configuration target compares IP/CIDR acceptance and admission
+against an independent prefix oracle, including mapped IPv4 addresses.
+
+For more generated valid frames in an ordinary test run:
+
+```shell
+go test . -run '^TestProxyProtocolFrameProperties$' -rapid.checks=1000
+```
