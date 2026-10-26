@@ -255,18 +255,28 @@ func ExtractRateLimitKey(r *http.Request, remoteIP net.IP,
 	// Only use L402 token ID if the request has been authenticated.
 	// This prevents DoS attacks where garbage L402 tokens flood the cache.
 	if authenticated {
-		mac, _, err := l402.FromHeader(&r.Header)
-		if err == nil && mac != nil {
-			identifier, err := l402.DecodeIdentifier(
-				bytes.NewBuffer(mac.Id()),
-			)
-			if err == nil {
-				return "token:" + identifier.TokenID.String()
-			}
+		if tokenID, ok := l402TokenID(&r.Header); ok {
+			return "token:" + tokenID
 		}
 	}
 
 	// Fall back to IP address for unauthenticated requests.
 	// Mask the IP to group clients from the same network segment.
 	return "ip:" + netutil.MaskIP(remoteIP).String()
+}
+
+// l402TokenID reads a token ID from credentials already verified by the
+// authenticator. Callers must check L402 authentication before using it.
+func l402TokenID(header *http.Header) (string, bool) {
+	mac, _, err := l402.FromHeader(header)
+	if err != nil || mac == nil {
+		return "", false
+	}
+
+	identifier, err := l402.DecodeIdentifier(bytes.NewBuffer(mac.Id()))
+	if err != nil {
+		return "", false
+	}
+
+	return identifier.TokenID.String(), true
 }
