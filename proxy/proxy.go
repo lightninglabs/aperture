@@ -277,9 +277,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Log the request target as the client sent it, before canonicalization
 	// rewrites it.
 	requestURI := r.RequestURI
+	var verifiedTokenID string
 	logRequest := func() {
-		prefixLog.Infof(formatPattern, r.Method, requestURI, r.Proto,
-			r.Referer(), r.UserAgent())
+		format := formatPattern
+		args := []interface{}{
+			r.Method, requestURI, r.Proto, r.Referer(), r.UserAgent(),
+		}
+		if verifiedTokenID != "" {
+			format += " l402_id=%s"
+			args = append(args, verifiedTokenID)
+		}
+		prefixLog.Infof(format, args...)
 	}
 	defer logRequest()
 
@@ -412,6 +420,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// caller's identity.
 	if acceptAuth {
 		removeUnverifiedL402(r.Header, l402Verified)
+		if l402Verified {
+			verifiedTokenID, _ = l402TokenID(&r.Header)
+		}
 	}
 
 	skipInvoiceCreation := target.SkipInvoiceCreation(r)
