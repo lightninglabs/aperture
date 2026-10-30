@@ -1,21 +1,25 @@
 package proxy_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/aperture/proxy"
+	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/stretchr/testify/require"
 )
@@ -283,6 +287,333 @@ func TestProxyMPPChallengeNotFirstInValue(t *testing.T) {
 				problem.Status)
 		})
 	}
+}
+
+// mppProblemAuth reports a fixed problem type for every Payment credential the
+// wrapped mock refuses, the way a ProblemAuthenticator names why it refused.
+type mppProblemAuth struct {
+	*mppMockAuthenticator
+
+	// problem is the problem type reported for a refused credential.
+	problem string
+}
+
+var _ auth.ProblemAuthenticator = (*mppProblemAuth)(nil)
+
+func (m *mppProblemAuth) AcceptWithProblem(header *http.Header,
+	service string) (bool, string) {
+
+	if m.Accept(header, service) {
+		return true, ""
+	}
+
+	_, err := mpp.ParseCredential(header)
+	if errors.Is(err, mpp.ErrNoCredential) {
+		return false, ""
+	}
+
+	return false, m.problem
+}
+
+// TestProxyMPPRefusalProblemType verifies that a 402 answering a refused
+// Payment credential carries the problem type the authenticator reported, both
+// when the authenticator is used directly and behind a MultiAuthenticator, and
+// that a request without a credential still gets payment-required.
+func TestProxyMPPRefusalProblemType(t *testing.T) {
+	newDirect := func(problemAuth *mppProblemAuth) auth.Authenticator {
+		return problemAuth
+	}
+	newMulti := func(problemAuth *mppProblemAuth) auth.Authenticator {
+		return auth.NewMultiAuthenticator(problemAuth)
+	}
+
+	testCases := []struct {
+		name    string
+		newAuth func(*mppProblemAuth) auth.Authenticator
+		authz   string
+		problem string
+	}{{
+		name:    "direct, no credential",
+		newAuth: newDirect,
+		problem: mpp.ProblemPaymentRequired,
+	}, {
+		name:    "direct, refused credential",
+		newAuth: newDirect,
+		authz:   mpp.AuthScheme + " %%%",
+		problem: mpp.ProblemPaymentExpired,
+	}, {
+		name:    "multi, no credential",
+		newAuth: newMulti,
+		problem: mpp.ProblemPaymentRequired,
+	}, {
+		name:    "multi, refused credential",
+		newAuth: newMulti,
+		authz:   mpp.AuthScheme + " %%%",
+		problem: mpp.ProblemPaymentExpired,
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			problemAuth := &mppProblemAuth{
+				mppMockAuthenticator: newMPPMockAuth(),
+				problem:              mpp.ProblemPaymentExpired,
+			}
+
+			services := []*proxy.Service{{
+				Address:    testMPPBackendAddr,
+				HostRegexp: ".*",
+				PathRegexp: "^/http/.*$",
+				Protocol:   "http",
+				Auth:       "on",
+				Price:      100,
+			}}
+
+			p, err := proxy.New(
+				tc.newAuth(problemAuth), services, nil, nil,
+			)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(
+				"GET", "http://localhost/http/test", nil,
+			)
+			if tc.authz != "" {
+				req.Header.Set("Authorization", tc.authz)
+			}
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+
+			resp := rec.Result()
+			defer resp.Body.Close()
+
+			require.Equal(t, http.StatusPaymentRequired,
+				resp.StatusCode)
+			require.Equal(t, mpp.ProblemContentType,
+				resp.Header.Get("Content-Type"))
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			var problem mpp.ProblemDetails
+			require.NoError(t, json.Unmarshal(body, &problem))
+			require.Equal(t, tc.problem, problem.Type)
+			require.Equal(t, http.StatusPaymentRequired,
+				problem.Status)
+		})
+	}
+}
+
+// refusalTestChallenger mints invoices for the refusal test and remembers the
+// preimage of each, standing in for the buyer that pays them.
+type refusalTestChallenger struct {
+	mu        sync.Mutex
+	preimages map[lntypes.Hash]lntypes.Preimage
+}
+
+func (c *refusalTestChallenger) NewChallenge(int64) (string, lntypes.Hash,
+	error) {
+
+	var preimage lntypes.Preimage
+	if _, err := rand.Read(preimage[:]); err != nil {
+		return "", lntypes.Hash{}, err
+	}
+	hash := lntypes.Hash(sha256.Sum256(preimage[:]))
+
+	c.mu.Lock()
+	c.preimages[hash] = preimage
+	c.mu.Unlock()
+
+	return "lnbcrt1000n1pmocktest...", hash, nil
+}
+
+func (c *refusalTestChallenger) Stop() {}
+
+// refusalTestChecker reports every invoice as settled.
+type refusalTestChecker struct{}
+
+func (refusalTestChecker) VerifyInvoiceStatus(lntypes.Hash,
+	lnrpc.Invoice_InvoiceState, time.Duration) error {
+
+	return nil
+}
+
+// refusalTestStore is an in-memory charge store.
+type refusalTestStore struct {
+	mu       sync.Mutex
+	consumed map[lntypes.Hash]bool
+}
+
+func (s *refusalTestStore) ConsumeCharge(_ context.Context,
+	paymentHash lntypes.Hash, _ string, _ time.Time) (bool, error) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.consumed[paymentHash] {
+		return false, nil
+	}
+	s.consumed[paymentHash] = true
+
+	return true, nil
+}
+
+func (s *refusalTestStore) PruneConsumedCharges(context.Context,
+	time.Time) (int64, error) {
+
+	return 0, nil
+}
+
+// TestProxyMPPChargeRefusalProblemTypes runs the charge authenticator behind a
+// MultiAuthenticator, as aperture composes it, and verifies that each refused
+// credential is answered with the problem type the status code table of
+// draft-httpauth-payment-00 gives it.
+func TestProxyMPPChargeRefusalProblemTypes(t *testing.T) {
+	secret := []byte("test-hmac-secret-key-32-bytes!!")
+	challenger := &refusalTestChallenger{
+		preimages: make(map[lntypes.Hash]lntypes.Preimage),
+	}
+	mppAuth, err := auth.NewMPPAuthenticator(
+		challenger, refusalTestChecker{}, "test.example.com", secret,
+		"regtest", nil,
+		&refusalTestStore{consumed: make(map[lntypes.Hash]bool)},
+	)
+	require.NoError(t, err)
+
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, testMPPBackendBody)
+		},
+	))
+	defer backend.Close()
+
+	services := []*proxy.Service{{
+		Name:       "test-service",
+		Address:    backend.Listener.Addr().String(),
+		HostRegexp: ".*",
+		PathRegexp: "^/http/.*$",
+		Protocol:   "http",
+		Auth:       "on",
+		Price:      100,
+	}}
+	p, err := proxy.New(
+		auth.NewMultiAuthenticator(mppAuth), services, nil, nil,
+	)
+	require.NoError(t, err)
+
+	// send makes a request with the given Authorization value and
+	// returns the status code and the problem type of the response.
+	send := func(authz string) (int, string, http.Header) {
+		req := httptest.NewRequest(
+			"GET", "http://localhost/http/test", nil,
+		)
+		if authz != "" {
+			req.Header.Set("Authorization", authz)
+		}
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+
+		resp := rec.Result()
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusPaymentRequired {
+			return resp.StatusCode, "", resp.Header
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		var problem mpp.ProblemDetails
+		require.NoError(t, json.Unmarshal(body, &problem))
+
+		return resp.StatusCode, problem.Type, resp.Header
+	}
+
+	// challenge returns a freshly minted Payment challenge.
+	challenge := func() *mpp.ChallengeParams {
+		status, problem, header := send("")
+		require.Equal(t, http.StatusPaymentRequired, status)
+		require.Equal(t, mpp.ProblemPaymentRequired, problem)
+
+		challenges, err := mpp.ParseChallengeHeaders(header)
+		require.NoError(t, err)
+		require.Len(t, challenges, 1)
+
+		return challenges[0]
+	}
+
+	// credential answers the challenge with the given preimage.
+	credential := func(c *mpp.ChallengeParams,
+		preimage lntypes.Preimage) string {
+
+		payload, err := json.Marshal(mpp.ChargePayload{
+			Preimage: hex.EncodeToString(preimage[:]),
+		})
+		require.NoError(t, err)
+
+		credJSON, err := json.Marshal(&mpp.Credential{
+			Challenge: mpp.ChallengeEcho{
+				ID:      c.ID,
+				Realm:   c.Realm,
+				Method:  c.Method,
+				Intent:  c.Intent,
+				Request: c.Request,
+				Expires: c.Expires,
+				Opaque:  c.Opaque,
+			},
+			Payload: payload,
+		})
+		require.NoError(t, err)
+
+		return mpp.AuthScheme + " " + mpp.Base64URLEncode(credJSON)
+	}
+
+	// paid returns the preimage of the challenge's invoice.
+	paid := func(c *mpp.ChallengeParams) lntypes.Preimage {
+		var chargeReq mpp.ChargeRequest
+		require.NoError(t, mpp.DecodeRequest(c.Request, &chargeReq))
+
+		hash, err := lntypes.MakeHashFromStr(
+			chargeReq.MethodDetails.PaymentHash,
+		)
+		require.NoError(t, err)
+
+		challenger.mu.Lock()
+		defer challenger.mu.Unlock()
+
+		return challenger.preimages[hash]
+	}
+
+	// A paid credential is served once. Presenting it again names the
+	// challenge as already used.
+	c := challenge()
+	valid := credential(c, paid(c))
+
+	status, _, _ := send(valid)
+	require.Equal(t, http.StatusOK, status)
+
+	status, problem, _ := send(valid)
+	require.Equal(t, http.StatusPaymentRequired, status)
+	require.Equal(t, mpp.ProblemInvalidChallenge, problem)
+
+	// A challenge past its expiry, bound with the server secret so only
+	// the expiry is wrong.
+	c = challenge()
+	c.Expires = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	c.ID = mpp.ComputeChallengeID(secret, c)
+
+	_, problem, _ = send(credential(c, paid(c)))
+	require.Equal(t, mpp.ProblemPaymentExpired, problem)
+
+	// A preimage that does not belong to the invoice.
+	var wrongPreimage lntypes.Preimage
+	_, err = rand.Read(wrongPreimage[:])
+	require.NoError(t, err)
+
+	_, problem, _ = send(credential(challenge(), wrongPreimage))
+	require.Equal(t, mpp.ProblemVerificationFailed, problem)
+
+	// A credential that is not base64url.
+	_, problem, _ = send(mpp.AuthScheme + " %%%")
+	require.Equal(t, mpp.ProblemMalformedCredential, problem)
 }
 
 // TestProxyMPP402Response verifies that the proxy returns correct 402
