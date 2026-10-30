@@ -2,6 +2,8 @@ module github.com/lightninglabs/aperture
 
 go 1.26.0
 
+godebug multipathtcp=0
+
 require (
 	github.com/btcsuite/btcd/address/v2 v2.0.0
 	github.com/btcsuite/btcd/btcec/v2 v2.5.0
