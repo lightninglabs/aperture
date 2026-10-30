@@ -69,6 +69,52 @@ func TestMultiAuthenticatorAcceptNoneMatch(t *testing.T) {
 	require.False(t, result)
 }
 
+// mockProblemAuth is a mock that also implements ProblemAuthenticator.
+type mockProblemAuth struct {
+	mockAuthenticator
+	problem string
+}
+
+var _ ProblemAuthenticator = (*mockProblemAuth)(nil)
+
+func (m *mockProblemAuth) AcceptWithProblem(_ *http.Header,
+	_ string) (bool, string) {
+
+	if m.acceptResult {
+		return true, ""
+	}
+	return false, m.problem
+}
+
+// TestMultiAuthenticatorAcceptWithProblem verifies that a refusal reports the
+// problem type of the first authenticator that gave one, that an acceptance
+// reports none, and that authenticators without a problem type are still
+// tried.
+func TestMultiAuthenticatorAcceptWithProblem(t *testing.T) {
+	plain := &mockAuthenticator{acceptResult: false}
+	silent := &mockProblemAuth{}
+	expired := &mockProblemAuth{problem: "expired"}
+	invalid := &mockProblemAuth{problem: "invalid"}
+	h := make(http.Header)
+
+	multi := NewMultiAuthenticator(plain, silent, expired, invalid)
+	accepted, problem := multi.AcceptWithProblem(&h, "test-service")
+	require.False(t, accepted)
+	require.Equal(t, "expired", problem)
+
+	multi = NewMultiAuthenticator(
+		expired, &mockAuthenticator{acceptResult: true},
+	)
+	accepted, problem = multi.AcceptWithProblem(&h, "test-service")
+	require.True(t, accepted)
+	require.Empty(t, problem)
+
+	multi = NewMultiAuthenticator(plain, silent)
+	accepted, problem = multi.AcceptWithProblem(&h, "test-service")
+	require.False(t, accepted)
+	require.Empty(t, problem)
+}
+
 // TestMultiAuthenticatorChallengeHeaderMerge verifies that challenge headers
 // from all authenticators are merged into the response.
 func TestMultiAuthenticatorChallengeHeaderMerge(t *testing.T) {

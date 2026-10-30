@@ -361,7 +361,7 @@ func (p *Proxy) checkMeteredAccess(w http.ResponseWriter, r *http.Request,
 			}
 		}
 
-		p.handlePaymentRequired(w, r, target, resourceName, price)
+		p.handlePaymentRequired(w, r, target, resourceName, price, "")
 
 		return r, false
 	}

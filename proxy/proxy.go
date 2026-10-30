@@ -407,8 +407,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// validate L402 identity, without executing MPP payment actions.
 	authEnabled := target.Auth.IsOn() || target.Auth.IsFreebie()
 	var acceptAuth, l402Verified bool
+	var authProblem string
 	if authEnabled {
-		acceptAuth, l402Verified = p.acceptForService(
+		acceptAuth, l402Verified, authProblem = p.acceptForService(
 			&r.Header, resourceName, target, authLevel.IsOff(),
 		)
 	}
@@ -462,7 +463,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			prefixLog.Infof("Authentication failed. Sending 402.")
-			p.handlePaymentRequired(w, r, target, resourceName, price)
+			p.handlePaymentRequired(
+				w, r, target, resourceName, price, authProblem,
+			)
 			return
 		}
 
@@ -545,6 +548,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				p.handlePaymentRequired(
 					w, r, target, resourceName, price,
+					authProblem,
 				)
 				return
 			}
@@ -691,15 +695,19 @@ func canonicalizeRequestPath(req *http.Request) bool {
 // The second result reports whether an L402 is what authenticated the request.
 // A request can carry credentials for several schemes, so one that another
 // scheme authenticated can still carry an L402 that nothing verified.
+//
+// The third result is, for a refused request, the Problem Details type of the
+// 402 that answers it, as reported by an authenticator that implements
+// auth.ProblemAuthenticator. It is empty when no authenticator gave one.
 func (p *Proxy) acceptForService(header *http.Header, resourceName string,
-	target *Service, public bool) (bool, bool) {
+	target *Service, public bool) (bool, bool, string) {
 
 	scheme := target.AuthScheme
 	if public {
 		// Machine Payments Protocol (MPP) authentication can consume a
 		// payment or debit a session, so it cannot validate public requests.
 		if scheme == auth.AuthSchemeMPP {
-			return false, false
+			return false, false, ""
 		}
 
 		scheme = auth.AuthSchemeL402
@@ -713,7 +721,7 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 		// public requests require an L402 authenticator.
 		tagged, ok := p.authenticator.(auth.SchemeTagged)
 		if ok && tagged.Scheme() != auth.AuthSchemeL402 {
-			return false, false
+			return false, false, ""
 		}
 	}
 
@@ -721,11 +729,22 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 	if !ok {
 		// A direct authenticator that declares another scheme cannot
 		// have verified an L402.
-		accepted := p.authenticator.Accept(header, resourceName)
+		var (
+			accepted bool
+			problem  string
+		)
+		pa, ok := p.authenticator.(auth.ProblemAuthenticator)
+		if ok {
+			accepted, problem = pa.AcceptWithProblem(
+				header, resourceName,
+			)
+		} else {
+			accepted = p.authenticator.Accept(header, resourceName)
+		}
 		tagged, ok := p.authenticator.(auth.SchemeTagged)
 		isL402 := !ok || tagged.Scheme() == auth.AuthSchemeL402
 
-		return accepted, accepted && isL402
+		return accepted, accepted && isL402, problem
 	}
 
 	// Try L402 on its own first, which is the order the authenticators are
@@ -735,7 +754,7 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 			header, resourceName, auth.AuthSchemeL402,
 		)
 		if accepted {
-			return true, true
+			return true, true, ""
 		}
 	}
 
@@ -743,14 +762,14 @@ func (p *Proxy) acceptForService(header *http.Header, resourceName string,
 	if public || (scheme != "" &&
 		!strings.Contains(scheme, auth.AuthSchemeMPP)) {
 
-		return false, false
+		return false, false, ""
 	}
 
-	accepted := multi.AcceptForScheme(
+	accepted, problem := multi.AcceptForSchemeWithProblem(
 		header, resourceName, auth.AuthSchemeMPP,
 	)
 
-	return accepted, false
+	return accepted, false, problem
 }
 
 // removeUnverifiedL402 deletes the L402 credentials that did not authenticate
@@ -1170,8 +1189,12 @@ func (p *Proxy) freshChallengeHeader(serviceName string,
 
 // handlePaymentRequired returns fresh challenge header fields and status code
 // to the client signaling that a payment is required to fulfil the request.
+// The problem type, when not empty, names why a credential the request carried
+// was refused, and is what the Problem Details body of a Payment challenge
+// reports instead of payment-required.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
-	target *Service, serviceName string, servicePrice int64) {
+	target *Service, serviceName string, servicePrice int64,
+	problemType string) {
 
 	// The intents a challenge can carry ask different questions of the
 	// pricer. L402 and the MPP charge intent quote a one-shot purchase,
@@ -1234,7 +1257,7 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 	if hasMPP {
 		w.Header().Set("Content-Type", mpp.ProblemContentType)
 		w.WriteHeader(http.StatusPaymentRequired)
-		w.Write(mpp.PaymentRequiredProblem()) //nolint:errcheck
+		w.Write(mpp.Problem402(problemType)) //nolint:errcheck
 	} else {
 		sendDirectResponse(
 			w, r, http.StatusPaymentRequired,
