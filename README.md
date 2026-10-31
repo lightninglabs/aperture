@@ -52,6 +52,14 @@ or forwarding it, since nothing verified that token.
 
 [mpp]: https://datatracker.ietf.org/doc/draft-httpauth-payment/
 
+## TCP load balancers
+
+Aperture can receive PROXY protocol v2 connections to preserve the original
+client IP and port behind a trusted TCP load balancer. Enable it explicitly
+with `proxyprotocol.enabled` and configure the allowed sender IPs/CIDRs.
+See [the configuration and HAProxy example](docs/proxy-protocol.md), including
+health checks, local REST gateways, and dashboard access.
+
 ## Public paths
 
 `authwhitelistpaths` allows anonymous access within an authenticated service.
