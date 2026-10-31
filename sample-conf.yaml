@@ -144,8 +144,9 @@ dbbackend: "sqlite"
 # Settings for the sqlite process which the proxy will use to reliably store and
 # retrieve token information.
 sqlite:
-    # The full path to the database.
-    dbfile: "/path/to/.aperture/aperture.db"
+    # The full path to the database. Defaults to aperture.db in the
+    # aperture data directory.
+    # dbfile: "/path/to/.aperture/aperture.db"
 
     # Skip applying migrations on startup.
     skipmigrations: false
@@ -165,7 +166,7 @@ postgres:
 
     # Whether to require using SSL (mode: require) when connecting to the 
     # server.
-    requireSSL: true
+    requiressl: true
 
     # Skip applying migrations on startup.
     skipmigrations: false
@@ -329,7 +330,7 @@ services:
     constraints:
         "valid_until": "2020-01-01"
     dynamicprice:
-      enbled: true
+      enabled: true
       grpcaddress: 123.456.789:8083
       insecure: false
       tlscertpath: "path-to-pricer-server-tls-cert/tls.cert"
@@ -368,21 +369,12 @@ prometheus:
   enabled: true
   listenaddr: "localhost:9000"
 
-# Console and file logger settings.
+# Console and file logger settings. The log level is set with debuglevel.
 logging:
   console:
-    style: true
     disable: false
     callsite: off
     notimestamps: true
-
-    # Log level for console output.
-    # Valid options include: trace, debug, info, warn, error, critical, off.
-    level: "info"
   file:
     disable: false
     callsite: long
-
-    # Log level for file output.
-    # Valid options include: trace, debug, info, warn, error, critical, off.
-    level: "info"

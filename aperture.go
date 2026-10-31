@@ -296,6 +296,14 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		mppChargeStore = aperturedb.NewMPPChargesStore(dbChargeTxer)
 
 	case "sqlite": //nolint:dupl
+		err := checkSqliteDatabaseMoved(
+			a.cfg.Sqlite.DatabaseFileName,
+			defaultSqliteDatabasePath,
+		)
+		if err != nil {
+			return err
+		}
+
 		db, err := aperturedb.NewSqliteStore(a.cfg.Sqlite)
 		if err != nil {
 			return fmt.Errorf("unable to connect to sqlite: %v",
@@ -740,6 +748,10 @@ func getConfig() (*Config, error) {
 			return nil, err
 		}
 
+		if err := checkRenamedConfigKeys(b); err != nil {
+			return nil, err
+		}
+
 	// If the error is unrelated to the existence of the file, we must
 	// always return it.
 	case !os.IsNotExist(err):
@@ -765,6 +777,9 @@ func getConfig() (*Config, error) {
 	)
 	cfg.Authenticator.MacDir = lnd.CleanAndExpandPath(
 		cfg.Authenticator.MacDir,
+	)
+	cfg.Sqlite.DatabaseFileName = lnd.CleanAndExpandPath(
+		cfg.Sqlite.DatabaseFileName,
 	)
 
 	// Set default mailbox address if none is set.

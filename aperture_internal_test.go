@@ -3,9 +3,12 @@ package aperture
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/pricer"
@@ -199,4 +202,232 @@ authenticator:
 	require.NoError(t, err)
 	require.Equal(t, 50, cfg.Authenticator.SessionDepositMultiplier)
 	require.Equal(t, 60, cfg.Authenticator.SessionIdleTimeout)
+}
+
+// TestCheckRenamedConfigKeys asserts that the old keys are rejected and the
+// documented keys are accepted.
+func TestCheckRenamedConfigKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "documented keys",
+			config: `
+sqlite:
+  dbfile: "/data/aperture.db"
+postgres:
+  maxconnections: 7
+admin:
+  corsorigin:
+    - "https://dashboard.example.com"
+services:
+  - name: "quotes"
+blocklist:
+  - "1.1.1.1"
+`,
+		},
+		{
+			name: "sqlite databasefilename",
+			config: `
+sqlite:
+  databasefilename: "/data/aperture.db"
+`,
+			wantErr: "config key sqlite.databasefilename is no " +
+				"longer read, use sqlite.dbfile instead",
+		},
+		{
+			name: "postgres maxopenconnections",
+			config: `
+postgres:
+  maxopenconnections: 7
+`,
+			wantErr: "config key postgres.maxopenconnections is " +
+				"no longer read, use postgres.maxconnections " +
+				"instead",
+		},
+		{
+			name: "admin corsorigins",
+			config: `
+admin:
+  corsorigins:
+    - "https://dashboard.example.com"
+`,
+			wantErr: "config key admin.corsorigins is no longer " +
+				"read, use admin.corsorigin instead",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := checkRenamedConfigKeys([]byte(test.config))
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
+// TestCheckSqliteDatabaseMoved asserts that aperture refuses to start a new
+// sqlite database while one exists at the default path.
+func TestCheckSqliteDatabaseMoved(t *testing.T) {
+	dir := t.TempDir()
+	defaultPath := filepath.Join(dir, "default", "aperture.db")
+	configuredPath := filepath.Join(dir, "configured", "aperture.db")
+
+	createFile := func(path string) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+		require.NoError(t, os.WriteFile(path, nil, 0600))
+	}
+
+	// Neither database exists: a new install.
+	err := checkSqliteDatabaseMoved(configuredPath, defaultPath)
+	require.NoError(t, err)
+
+	// The default path is configured.
+	createFile(defaultPath)
+	require.NoError(t, checkSqliteDatabaseMoved(defaultPath, defaultPath))
+
+	// The configured database does not exist, but the default one does.
+	err = checkSqliteDatabaseMoved(configuredPath, defaultPath)
+	require.ErrorContains(
+		t, err, "sqlite database "+configuredPath+" does not exist, "+
+			"but one exists at the default path "+defaultPath,
+	)
+
+	// Both exist: the configured database is used as it is.
+	createFile(configuredPath)
+	err = checkSqliteDatabaseMoved(configuredPath, defaultPath)
+	require.NoError(t, err)
+}
+
+// TestGetConfigExpandsDBFile asserts that a ~ in sqlite.dbfile is expanded to
+// the home directory.
+func TestGetConfigExpandsDBFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "aperture.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+listenaddr: "127.0.0.1:0"
+authenticator:
+  disable: true
+sqlite:
+  dbfile: "~/aperture-test.db"
+`), 0600))
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"aperture", "--configfile=" + configPath}
+
+	cfg, err := getConfig()
+	require.NoError(t, err)
+	dbFile := cfg.Sqlite.DatabaseFileName
+	require.True(t, filepath.IsAbs(dbFile))
+	require.Equal(t, "aperture-test.db", filepath.Base(dbFile))
+	require.NotContains(t, dbFile, "~")
+}
+
+// TestGetConfigReadsFlagNamedKeys asserts that dbfile, maxconnections and
+// corsorigin are read from the config file.
+func TestGetConfigReadsFlagNamedKeys(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "aperture.yaml")
+	dbPath := filepath.Join(dir, "aperture.db")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+listenaddr: "127.0.0.1:0"
+authenticator:
+  # Disabled so the fixture does not depend on any authenticator
+  # backend validation.
+  disable: true
+sqlite:
+  dbfile: "`+dbPath+`"
+postgres:
+  maxconnections: 7
+admin:
+  corsorigin:
+    - "https://dashboard.example.com"
+`), 0600))
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"aperture", "--configfile=" + configPath}
+
+	cfg, err := getConfig()
+	require.NoError(t, err)
+	require.Equal(t, dbPath, cfg.Sqlite.DatabaseFileName)
+	require.EqualValues(t, 7, cfg.Postgres.MaxOpenConnections)
+	require.Equal(
+		t, []string{"https://dashboard.example.com"},
+		cfg.Admin.CORSOrigins,
+	)
+}
+
+// TestConfigYAMLKeysMatchFlags asserts that every aperture config field with a
+// flag is read from the config file under the flag's name.
+func TestConfigYAMLKeysMatchFlags(t *testing.T) {
+	// The repeatable --service flag is a services list in the file.
+	exceptions := map[string]bool{
+		"Config.Services": true,
+	}
+
+	seen := make(map[reflect.Type]bool)
+
+	var check func(reflect.Type)
+	check = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice {
+			typ = typ.Elem()
+		}
+
+		// Only check aperture's own structs, not lnd's logging config.
+		const module = "github.com/lightninglabs/aperture"
+		if typ.Kind() != reflect.Struct || seen[typ] ||
+			!strings.HasPrefix(typ.PkgPath(), module) {
+
+			return
+		}
+		seen[typ] = true
+
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+
+			// The YAML decoder falls back to the lowercased
+			// field name when there is no yaml tag.
+			key := strings.ToLower(field.Name)
+			yamlTag := strings.Split(field.Tag.Get("yaml"), ",")[0]
+			if yamlTag != "" {
+				key = yamlTag
+			}
+
+			name := typ.Name() + "." + field.Name
+			flag := field.Tag.Get("long")
+			if flag != "" && !exceptions[name] {
+				require.Equalf(
+					t, flag, key, "%s is read from %q "+
+						"in the config file, but its "+
+						"flag is %q", name, key, flag,
+				)
+			}
+
+			check(field.Type)
+		}
+	}
+
+	check(reflect.TypeOf(Config{}))
+}
+
+// TestSampleConfigKeysAreRead asserts that aperture reads every key in
+// sample-conf.yaml, since unknown keys are silently ignored.
+func TestSampleConfigKeysAreRead(t *testing.T) {
+	sample, err := os.ReadFile("sample-conf.yaml")
+	require.NoError(t, err)
+
+	err = yaml.UnmarshalWithOptions(
+		sample, NewConfig(), yaml.DisallowUnknownField(),
+	)
+	require.NoError(t, err)
 }
