@@ -18,7 +18,85 @@ var (
 	// ErrSecretNotFound is an error returned when we attempt to retrieve a
 	// secret by its key but it is not found.
 	ErrSecretNotFound = errors.New("secret not found")
+
+	// ErrInvalidPreimage is returned when the preimage presented with an
+	// L402 does not hash to the payment hash bound to it.
+	ErrInvalidPreimage = errors.New("invalid preimage")
+
+	// ErrInvalidSignature is returned when an L402's macaroon signature
+	// does not verify against its stored secret.
+	ErrInvalidSignature = errors.New("invalid signature")
+
+	// ErrChallengeFailed is returned when MintL402 fails to create the
+	// payment challenge.
+	ErrChallengeFailed = errors.New("challenge failed")
+
+	// ErrIdentifierFailed is returned when MintL402 fails to create the
+	// L402's unique identifier.
+	ErrIdentifierFailed = errors.New("identifier failed")
+
+	// ErrMintSecretFailed is returned when MintL402 fails to create the
+	// L402's secret.
+	ErrMintSecretFailed = errors.New("secret failed")
+
+	// ErrMacaroonFailed is returned when MintL402 fails to create the
+	// L402's macaroon.
+	ErrMacaroonFailed = errors.New("macaroon failed")
+
+	// ErrCaveatFailed is returned when MintL402 fails to derive or add the
+	// L402's caveats.
+	ErrCaveatFailed = errors.New("caveat failed")
 )
+
+// VerifyReason classifies why VerifyL402 rejected an L402.
+type VerifyReason string
+
+const (
+	// VerifyMalformedMacaroon means the macaroon's identifier could not
+	// be decoded.
+	VerifyMalformedMacaroon VerifyReason = "malformed_macaroon"
+
+	// VerifyBadPreimage means the preimage does not hash to the payment
+	// hash bound to the macaroon.
+	VerifyBadPreimage VerifyReason = "bad_preimage"
+
+	// VerifySecretNotFound means no secret is on record for the
+	// macaroon's identifier.
+	VerifySecretNotFound VerifyReason = "secret_not_found"
+
+	// VerifySecretLookupError means the secret store failed with an error
+	// other than ErrSecretNotFound. This is an infrastructure fault, not
+	// evidence of a bad credential.
+	VerifySecretLookupError VerifyReason = "secret_lookup_error"
+
+	// VerifyBadSignature means the macaroon's signature does not verify
+	// against its stored secret.
+	VerifyBadSignature VerifyReason = "bad_signature"
+
+	// VerifyCaveatUnsatisfied means a caveat (service, expiration, ...)
+	// was not satisfied.
+	VerifyCaveatUnsatisfied VerifyReason = "caveat_unsatisfied"
+)
+
+// VerifyError is returned by VerifyL402 and carries the reason the L402 was
+// rejected.
+type VerifyError struct {
+	// Reason is why the L402 was rejected.
+	Reason VerifyReason
+
+	// Err is the underlying error.
+	Err error
+}
+
+// Error returns the underlying error's message.
+func (e *VerifyError) Error() string {
+	return e.Err.Error()
+}
+
+// Unwrap returns the underlying error.
+func (e *VerifyError) Unwrap() error {
+	return e.Err
+}
 
 // Challenger is an interface used to present requesters of L402s with a
 // challenge that must be satisfied before an L402 can be validated. This
@@ -132,7 +210,7 @@ func (m *Mint) MintL402(ctx context.Context,
 	// payment request to present the requester of the L402 with.
 	paymentRequest, paymentHash, err := m.cfg.Challenger.NewChallenge(price)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrChallengeFailed, err)
 	}
 
 	// TODO(wilmer): remove invoice if any of the operations below fail?
@@ -141,12 +219,12 @@ func (m *Mint) MintL402(ctx context.Context,
 	// mapped to a unique secret.
 	id, err := createUniqueIdentifier(paymentHash)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrIdentifierFailed, err)
 	}
 	idHash := sha256.Sum256(id)
 	secret, err := m.cfg.Secrets.NewSecret(ctx, idHash)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrMintSecretFailed, err)
 	}
 	mac, err := macaroon.New(
 		secret[:], id, "lsat", macaroon.LatestVersion,
@@ -154,7 +232,7 @@ func (m *Mint) MintL402(ctx context.Context,
 	if err != nil {
 		// Attempt to revoke the secret to save space.
 		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrMacaroonFailed, err)
 	}
 
 	// Include any restrictions that should be immediately applied to the
@@ -166,13 +244,14 @@ func (m *Mint) MintL402(ctx context.Context,
 		if err != nil {
 			// Attempt to revoke the secret to save space.
 			_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
-			return nil, "", err
+			return nil, "", fmt.Errorf("%w: %w",
+				ErrCaveatFailed, err)
 		}
 	}
 	if err := l402.AddFirstPartyCaveats(mac, caveats...); err != nil {
 		// Attempt to revoke the secret to save space.
 		_ = m.cfg.Secrets.RevokeSecret(ctx, idHash)
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrCaveatFailed, err)
 	}
 
 	// If a transaction store is configured, record the transaction.
@@ -307,23 +386,36 @@ func (m *Mint) VerifyL402(ctx context.Context,
 	// was provided.
 	id, err := l402.DecodeIdentifier(bytes.NewReader(params.Macaroon.Id()))
 	if err != nil {
-		return err
+		return &VerifyError{Reason: VerifyMalformedMacaroon, Err: err}
 	}
 	if params.Preimage.Hash() != id.PaymentHash {
-		return fmt.Errorf("invalid preimage %v for %v", params.Preimage,
-			id.PaymentHash)
+		return &VerifyError{
+			Reason: VerifyBadPreimage,
+			Err: fmt.Errorf("%w %v for %v", ErrInvalidPreimage,
+				params.Preimage, id.PaymentHash),
+		}
 	}
 
-	// If there was, then we'll ensure the L402 was minted by us.
+	// If there was, then we'll ensure the L402 was minted by us. Only an
+	// actual "not found" is evidence of a bad credential; anything else
+	// (a store timeout, a cancelled context, ...) is our own infra
+	// failing, not the caller's fault, so it gets a distinct reason.
 	secret, err := m.cfg.Secrets.GetSecret(
 		ctx, sha256.Sum256(params.Macaroon.Id()),
 	)
 	if err != nil {
-		return err
+		reason := VerifySecretLookupError
+		if errors.Is(err, ErrSecretNotFound) {
+			reason = VerifySecretNotFound
+		}
+		return &VerifyError{Reason: reason, Err: err}
 	}
 	rawCaveats, err := params.Macaroon.VerifySignature(secret[:], nil)
 	if err != nil {
-		return err
+		return &VerifyError{
+			Reason: VerifyBadSignature,
+			Err:    fmt.Errorf("%w: %w", ErrInvalidSignature, err),
+		}
 	}
 
 	// With the L402 verified, we'll now inspect its caveats to ensure the
@@ -338,9 +430,14 @@ func (m *Mint) VerifyL402(ctx context.Context,
 		}
 		caveats = append(caveats, caveat)
 	}
-	return l402.VerifyCaveats(
+	err = l402.VerifyCaveats(
 		caveats,
 		l402.NewServicesSatisfier(params.TargetService),
 		l402.NewTimeoutSatisfier(params.TargetService, m.cfg.Now),
 	)
+	if err != nil {
+		return &VerifyError{Reason: VerifyCaveatUnsatisfied, Err: err}
+	}
+
+	return nil
 }
