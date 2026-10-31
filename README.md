@@ -133,6 +133,8 @@ changes under streaming, and the configuration reference.
 **lnd**
 
 * Make sure `lnd` ports are reachable.
+* No Lightning node? Aperture can create its invoices from a Wavelength wallet
+  instead; see [docs/wavelength.md](docs/wavelength.md).
 
 **aperture**
 
