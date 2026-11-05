@@ -852,7 +852,7 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 		}()
 		tlsCfg := manager.TLSConfig()
 		tlsCfg.CipherSuites = http2TLSCipherSuites
-		tlsCfg.MinVersion = tls.VersionTLS10
+		tlsCfg.MinVersion = tls.VersionTLS12
 
 		return tlsCfg, nil
 	}
@@ -956,7 +956,7 @@ func getTLSConfig(serverName, baseDir string, autoCert bool) (
 	return &tls.Config{
 		Certificates: []tls.Certificate{certData},
 		CipherSuites: http2TLSCipherSuites,
-		MinVersion:   tls.VersionTLS10,
+		MinVersion:   tls.VersionTLS12,
 	}, nil
 }
 
