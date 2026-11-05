@@ -349,7 +349,9 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	// spent on a more expensive model. The booked model is authoritative,
 	// and an unresolvable model fails closed: a model the rate source does
 	// not know cannot be proxied upstream on another model's bundle.
-	if booked, ok := s.store.Get(req.TokenId); ok {
+	ceiling := s.cfg.BundleTokens
+	booked, known := s.store.Get(req.TokenId)
+	if known {
 		requested, determinate := modelFromRequestText(
 			req.HttpRequestText,
 		)
@@ -389,21 +391,23 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 				), nil
 			}
 		}
+
+		ceiling = s.rates.BundleTokens(booked.Model)
 	}
 
-	// The reservation estimate bounds how far concurrent requests can
-	// overdraw a near-empty bundle before their usage is reported.
-	estimate := s.requestEstimate(req.HttpRequestText)
+	// The reservation covers the prompt as well as the completion.
+	estimate := s.reservationEstimate(req.HttpRequestText, ceiling)
 
-	remaining, found, err := s.store.Authorize(req.TokenId, estimate)
+	auth, found, err := s.store.Authorize(req.TokenId, estimate)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unable to update "+
 			"bundle state: %v", err)
 	}
 
-	if found && remaining > 0 {
-		log.Debugf("Authorized request for token %s, %d tokens "+
-			"available", req.TokenId, remaining)
+	if found && auth.Admitted {
+		log.Debugf("Authorized request for token %s reserving %d "+
+			"tokens, %d tokens available", req.TokenId, estimate,
+			auth.Available)
 
 		// The reserved estimate rides back to aperture, which echoes
 		// it in the matching usage report so the exact reservation is
@@ -414,9 +418,9 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		}, nil
 	}
 
-	// The token is unknown, its bundle is spent, or its balance is
-	// reserved by requests in flight. Quote the next bundle at the booked
-	// model's rate, or else the requested model's.
+	// The token is unknown, its bundle is spent, or in-flight
+	// reservations leave too little for this request. Quote the next
+	// bundle at the booked model's rate, or else the requested model's.
 	reason := "unknown L402 token"
 	var (
 		model      string
@@ -424,18 +428,18 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	)
 	if found {
 		reason = "token bundle exhausted"
-		if b, ok := s.store.Get(req.TokenId); ok {
-			model = b.Model
+		if known {
+			model = booked.Model
+		}
 
-			// A funded bundle frees up once requests in flight
-			// settle, so tell the buyer to retry. Without expiry a
-			// leak would never clear, so quote instead.
-			if b.RemainingTokens > 0 && s.reservationsExpire() {
-				retryLater = true
-				reason = fmt.Sprintf("token bundle has %d tokens "+
-					"left, all reserved by in-flight "+
-					"requests", b.RemainingTokens)
-			}
+		// A funded bundle frees up once requests in flight settle, so
+		// tell the buyer to retry. Without expiry a leak would never
+		// clear, so quote instead.
+		if auth.Remaining > 0 && s.reservationsExpire() {
+			retryLater = true
+			reason = fmt.Sprintf("token bundle has %d tokens "+
+				"available after in-flight reservations, "+
+				"request needs %d", auth.Available, estimate)
 		}
 	}
 	if model == "" {
@@ -474,15 +478,62 @@ func (s *Server) denyAuthorization(tokenID, model,
 	}
 }
 
-// requestEstimate derives the per-request token estimate to reserve on
-// authorization. It uses the request body's max_tokens when present, otherwise
-// the configured default estimate.
+// requestEstimate returns the completion part of a request's estimate.
 func (s *Server) requestEstimate(httpRequestText string) int64 {
-	if maxTokens := maxTokensFromRequestText(httpRequestText); maxTokens > 0 {
+	return s.completionEstimate(maxTokensFromRequestText(httpRequestText))
+}
+
+// completionEstimate returns max_tokens, or the configured default if unset.
+func (s *Server) completionEstimate(maxTokens int64) int64 {
+	if maxTokens > 0 {
 		return maxTokens
 	}
 
 	return s.cfg.EstimatedTokens
+}
+
+// reservationEstimate returns the tokens to reserve for a request: its body
+// size as a prompt bound (the whole ceiling if the size is unknown) plus its
+// completion estimate times n, clamped to [1, ceiling].
+func (s *Server) reservationEstimate(httpRequestText string,
+	ceiling int64) int64 {
+
+	if ceiling <= 0 {
+		ceiling = s.cfg.BundleTokens
+	}
+	if ceiling <= 0 {
+		ceiling = DefaultBundleTokens
+	}
+
+	bytesPerToken := s.cfg.PromptBytesPerToken
+	if bytesPerToken <= 0 {
+		bytesPerToken = DefaultPromptBytesPerToken
+	}
+
+	prompt := ceiling
+	if size, known := requestBodySize(httpRequestText); known {
+		prompt = size / bytesPerToken
+		if size%bytesPerToken != 0 {
+			prompt++
+		}
+	}
+
+	// Each of n choices can generate up to the completion ceiling.
+	// Compare by division so the product cannot overflow.
+	maxTokens, choices := completionFromRequestText(httpRequestText)
+	completion := min(max(s.completionEstimate(maxTokens), 0), ceiling)
+	if choices > 1 {
+		if completion > ceiling/choices {
+			completion = ceiling
+		} else {
+			completion *= choices
+		}
+	}
+
+	// Clamp each part before adding so the sum cannot overflow.
+	estimate := min(prompt, ceiling) + completion
+
+	return max(min(estimate, ceiling), 1)
 }
 
 // ReportUsage extracts the final usage object from the captured response
@@ -543,10 +594,9 @@ func (s *Server) ReportUsage(_ context.Context,
 	// usage arrives in the stream's final chunk, so abandoning the stream
 	// discards the bill for every token the upstream already produced and
 	// the seller already paid for. Settle those at the reservation
-	// estimate rather than zero. The estimate is what the request itself
-	// asked for (its max_tokens, or the configured default), so the buyer
-	// never pays past its own stated ceiling, and a response that produced
-	// no bytes at all still costs nothing.
+	// estimate rather than zero. The estimate includes the prompt bound,
+	// which usually overstates the prompt. A response that produced no
+	// bytes at all still costs nothing.
 	settleAtEstimate := !found && !req.Complete &&
 		len(req.ResponseTail) > 0 &&
 		req.HttpStatus >= 200 && req.HttpStatus < 300

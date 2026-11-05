@@ -13,12 +13,11 @@ type Store interface {
 	// created.
 	Book(tokenID, model string, tokens, priceSats int64) (bool, error)
 
-	// Authorize marks the token's bundle as used and, when the request
-	// is going to be allowed, reserves the given estimated per-request
-	// cost against its balance to bound concurrent overdraw. It returns
-	// the tokens available after existing reservations and whether the
-	// token is known.
-	Authorize(tokenID string, estimate int64) (int64, bool, error)
+	// Authorize marks the token's bundle as used and atomically decides,
+	// by AdmitReservation, whether a request reserving the estimate is
+	// admitted, reserving it only if so. It returns the outcome and
+	// whether the token is known.
+	Authorize(tokenID string, estimate int64) (Authorization, bool, error)
 
 	// Get returns a copy of the token's bundle.
 	Get(tokenID string) (Bundle, bool)
@@ -50,6 +49,38 @@ type ReservationExpirer interface {
 	// ReservationsExpire reports whether leaked reservations are
 	// eventually dropped.
 	ReservationsExpire() bool
+}
+
+// Authorization is the outcome of a Store.Authorize call.
+type Authorization struct {
+	// Remaining is the bundle's unspent balance at decision time.
+	Remaining int64
+
+	// Available is Remaining minus other in-flight reservations.
+	Available int64
+
+	// Admitted is whether the request may proceed, and so whether its
+	// estimate was reserved.
+	Admitted bool
+}
+
+// AdmitReservation reports whether a request reserving estimate tokens may
+// proceed. It is admitted when the balance left after in-flight reservations
+// covers it, or when nothing else is in flight and any balance is left, so a
+// remainder is not stranded. Stores apply it under their own lock.
+//
+// The estimate only bounds a request's cost when it has a max_tokens the
+// price server could read.
+func AdmitReservation(remaining, reserved, estimate int64) bool {
+	if remaining <= 0 {
+		return false
+	}
+
+	if reserved <= 0 {
+		return true
+	}
+
+	return remaining-reserved >= estimate
 }
 
 // Compile-time checks that JSONStore satisfies Store and reports whether its
