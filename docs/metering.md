@@ -181,9 +181,11 @@ is consulted twice per request rather than asked to keep state:
   the reported usage, and aperture reconciles the estimate against it, so the
   session ends up debited for what was actually served.
 
-When the tail carries no parseable usage, the session settles at the estimate
+When the tail has no parseable usage, the session settles at the estimate
 rather than at zero. That conservative fallback predates the streaming work
-and is the model the bundle path now follows for abandoned streams.
+and is the model the bundle path now follows for an abandoned or completed
+stream that reports no usage. Unlike a session, a bundle is not charged for a
+complete JSON body without usage.
 
 ## Streaming
 
@@ -214,6 +216,16 @@ report running totals per chunk sidestep the whole question, since even an
 abandoned tail then carries a parseable count and the exact partial usage is
 billed.
 
+A completed stream without usage, which is what a buyer gets by leaving out
+`stream_options: {"include_usage": true}` (the OpenAI SDK default), also
+settles at the estimate. Buyers who want to pay for what they used should ask
+for usage. A stream ending in an error event costs nothing, and only
+server-sent event streams are recognized.
+
+A complete JSON body without usage still costs nothing, with a warning:
+upstreams always report usage on a non-streaming generation, so it is a call
+like `GET /v1/models` that serves no tokens.
+
 One operator note belongs with this: aperture applies its configured
 `writetimeout` to proxied responses as a rolling window rather than a single
 absolute deadline, pushing the connection's write deadline forward on each
@@ -243,7 +255,7 @@ idle window described above) and the authenticator flags `enablempp` and
 `enablesessions` for the Payment doors.
 
 On the meterd side: `bundletokens` (bundle size), `estimatedtokens` (the
-reservation and abandonment fallback when a request names no `max_tokens`),
+reservation and stream fallback when a request names no `max_tokens`),
 `usagetailbytes` (tail capture, up to 1 MiB), and the per-model
 `inputmsatpertoken` / `outputmsatpertoken` rates. `meterd --help` carries the
 full list, and `sample-conf.yaml` shows the service stanza in context.

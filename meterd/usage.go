@@ -68,6 +68,41 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 	return counts, true
 }
 
+// isEventStream reports whether a content type is a server-sent event stream.
+func isEventStream(contentType string) bool {
+	return strings.Contains(
+		strings.ToLower(contentType), "text/event-stream",
+	)
+}
+
+// sseHasError reports whether an SSE tail has an error event, as some
+// upstreams send to fail a generation after answering 200.
+func sseHasError(tail []byte) bool {
+	for _, line := range bytes.Split(tail, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+
+		var chunk struct {
+			Error json.RawMessage `json:"error"`
+		}
+		payload := bytes.TrimSpace(line[len("data:"):])
+		if err := json.Unmarshal(payload, &chunk); err != nil {
+			continue
+		}
+
+		if len(chunk.Error) > 0 && !bytes.Equal(
+			chunk.Error, []byte("null"),
+		) {
+
+			return true
+		}
+	}
+
+	return false
+}
+
 // extractUsage extracts the final usage object from the captured response
 // tail. For SSE streams the data lines are scanned and the last parseable
 // chunk with a non-null usage object wins. For plain JSON bodies, and as a
@@ -75,7 +110,7 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 // located and the object following it is brace-matched, since the tail is
 // bounded and may be cut off at the front.
 func extractUsage(contentType string, tail []byte) (usageCounts, bool) {
-	if strings.Contains(contentType, "text/event-stream") {
+	if isEventStream(contentType) {
 		if counts, ok := usageFromSSELines(tail); ok {
 			return counts, ok
 		}

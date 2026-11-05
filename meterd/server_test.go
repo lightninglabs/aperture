@@ -242,7 +242,8 @@ func TestServerJSONUsageReport(t *testing.T) {
 }
 
 // TestServerUsageEdgeCases verifies the usage reports that must not debit
-// anything: missing usage objects, incomplete streams and unknown tokens.
+// anything: a complete JSON body without usage, an aborted stream whose report
+// has no reservation to settle at, and unknown tokens.
 func TestServerUsageEdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -261,8 +262,8 @@ func TestServerUsageEdgeCases(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// A complete 200 response without a usage object debits nothing, but
-	// still reports the untouched balance of 1000 tokens (1500 sats).
+	// A complete 200 JSON response without a usage object debits nothing,
+	// but still reports the untouched balance of 1000 tokens (1500 sats).
 	usageResp, err := client.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
 		TokenId:      tokenID,
 		HttpStatus:   200,
@@ -274,7 +275,7 @@ func TestServerUsageEdgeCases(t *testing.T) {
 	require.EqualValues(t, 0, usageResp.DebitedSats)
 	require.EqualValues(t, 1500, usageResp.RemainingSats)
 
-	// An aborted stream without a usage object debits nothing either.
+	// An aborted stream settles at the estimate, which is zero here.
 	usageResp, err = client.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
 		TokenId:      tokenID,
 		HttpStatus:   200,
@@ -835,4 +836,113 @@ func TestServerSettlesAbandonedStreamAtEstimate(t *testing.T) {
 		// 10*1000 + 10*2000 = 30000 msat = 30 sats.
 		require.EqualValues(t, 30, resp.DebitedSats)
 	})
+}
+
+// TestServerSettlesCompleteResponseWithoutUsage checks which complete
+// responses without usage settle at the estimate.
+func TestServerSettlesCompleteResponseWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig("")
+	cfg.EstimatedTokens = 200
+	client := newTestClient(t, cfg)
+
+	testCases := []struct {
+		name        string
+		tokenID     string
+		contentType string
+		tail        string
+		debited     int64
+		remaining   int64
+	}{{
+		name:        "stream without include_usage",
+		tokenID:     "c0de01",
+		contentType: sseContentType,
+		tail: sseChunk(
+			`{"choices":[{"delta":{"content":"hi"}}]}`,
+		) + sseChunk(
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		) + sseChunk(`[DONE]`),
+
+		// 200 tokens at the blended 1500 msat per token is 300 sats,
+		// leaving 800 tokens worth 1200 sats.
+		debited:   300,
+		remaining: 1200,
+	}, {
+		name:        "model listing without usage",
+		tokenID:     "c0de02",
+		contentType: "application/json",
+		tail: `{"object":"list","data":[{"id":"gpt-test",` +
+			`"object":"model"}]}`,
+		debited:   0,
+		remaining: 1500,
+	}, {
+		name:        "stream that failed after a 200",
+		tokenID:     "c0de03",
+		contentType: sseContentType,
+		tail: sseChunk(
+			`{"error":{"message":"overloaded"}}`,
+		) + sseChunk(`[DONE]`),
+		debited:   0,
+		remaining: 1500,
+	}, {
+		name:        "stream with a mixed case content type",
+		tokenID:     "c0de04",
+		contentType: "Text/Event-Stream; charset=utf-8",
+		tail: sseChunk(
+			`{"choices":[{"delta":{"content":"hi"}}]}`,
+		) + sseChunk(`[DONE]`),
+		debited:   300,
+		remaining: 1200,
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			reqText := chatRequestText("gpt-test")
+
+			_, err := client.ChallengeMinted(
+				ctx, &pricesrpc.ChallengeMintedRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tc.tokenID,
+					PriceSats:       1500,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+
+			auth, err := client.AuthorizeRequest(
+				ctx, &pricesrpc.AuthorizeRequestRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tc.tokenID,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, auth.Allowed)
+
+			resp, err := client.ReportUsage(
+				ctx, &pricesrpc.ReportUsageRequest{
+					TokenId:          tc.tokenID,
+					Path:             "/v1/chat/completions",
+					ServiceName:      "llm",
+					HttpStatus:       200,
+					ContentType:      tc.contentType,
+					Complete:         true,
+					ResponseTail:     []byte(tc.tail),
+					ReservedEstimate: auth.ReservedEstimate,
+				},
+			)
+			require.NoError(t, err)
+
+			require.EqualValues(t, tc.debited, resp.DebitedSats)
+			require.EqualValues(
+				t, tc.remaining, resp.RemainingSats,
+			)
+		})
+	}
 }
