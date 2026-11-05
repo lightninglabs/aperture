@@ -99,11 +99,18 @@ func NewServer(cfg *Config, opts ...ServerOption) (*Server, error) {
 			minEvictionAge = DefaultUnauthorizedBundleTTL
 		}
 
+		// Zero selects the default, negative disables expiry.
+		reservationTTL := cfg.ReservationTTL
+		if reservationTTL == 0 {
+			reservationTTL = DefaultReservationTTL
+		}
+
 		var err error
 		st, err = NewJSONStore(JSONStoreConfig{
 			StatePath:       cfg.StatePath,
 			MaxUnauthorized: cfg.MaxUnauthorizedBundles,
 			MinEvictionAge:  minEvictionAge,
+			ReservationTTL:  reservationTTL,
 		})
 		if err != nil {
 			return nil, err
@@ -209,7 +216,7 @@ func (s *Server) flusher() {
 }
 
 // janitor periodically expires bundles that were booked but never used by an
-// authorized request within the bundle TTL.
+// authorized request within the bundle TTL, and drops expired reservations.
 func (s *Server) janitor() {
 	defer s.wg.Done()
 
@@ -499,10 +506,9 @@ func (s *Server) ReportUsage(_ context.Context,
 	}
 
 	// Resolve the reservation to release up front, since an abandoned
-	// stream settles at exactly this estimate below. An exact release
-	// keeps mismatched estimates from accumulating into phantom exhaustion
-	// on a bundle with real balance left; the fallback covers reports
-	// predating the reservation echo.
+	// stream settles at exactly this estimate below. The store releases
+	// only a reservation of exactly this size; every aperture release
+	// echoes it, so the fallback is for other clients.
 	release := req.ReservedEstimate
 	if release <= 0 {
 		release = s.cfg.EstimatedTokens
