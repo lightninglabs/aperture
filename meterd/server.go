@@ -566,6 +566,25 @@ func ceilDiv(n, d int64) int64 {
 	return q
 }
 
+// settlesAtEstimate reports whether a successful report without usage settles
+// at the reservation estimate: an abandoned response, or a completed stream
+// that left out include_usage. A complete JSON body (like a model listing), a
+// stream ending in an error, and an empty response settle at zero.
+func settlesAtEstimate(req *pricesrpc.ReportUsageRequest) bool {
+	if len(req.ResponseTail) == 0 ||
+		req.HttpStatus < 200 || req.HttpStatus >= 300 {
+
+		return false
+	}
+
+	stream := isEventStream(req.ContentType)
+	if stream && sseHasError(req.ResponseTail) {
+		return false
+	}
+
+	return !req.Complete || stream
+}
+
 // ReportUsage extracts the final usage object from the captured response
 // tail and debits the token's bundle by the number of consumed tokens. The
 // informational satoshi amounts of the response are derived from the booked
@@ -594,10 +613,11 @@ func (s *Server) ReportUsage(_ context.Context,
 	}
 
 	counts, found := extractUsage(req.ContentType, req.ResponseTail)
-	if !found {
-		// A complete, successful response without a usage object
-		// deserves a warning, since it means usage goes unbilled.
-		// Incomplete or failed responses are expected to lack one.
+	settleAtEstimate := !found && settlesAtEstimate(req)
+
+	if !found && !settleAtEstimate {
+		// Warn: either a call that serves no tokens, or an upstream
+		// that never reports usage.
 		if req.Complete && req.HttpStatus == http.StatusOK {
 			log.Warnf("No usage object found in complete 200 "+
 				"response for token %s (path %s), nothing "+
@@ -627,18 +647,6 @@ func (s *Server) ReportUsage(_ context.Context,
 		settle = min(req.SettleEstimate, release)
 	}
 
-	// An incomplete successful response that carried bytes but no usage
-	// object is a streamed generation the client walked away from: the
-	// usage arrives in the stream's final chunk, so abandoning the stream
-	// discards the bill for every token the upstream already produced and
-	// the seller already paid for. Settle those at the settle estimate
-	// rather than zero: the completion ceiling the request named plus a
-	// realistic prompt figure, not the generous admission bound. A
-	// response that produced no bytes at all still costs nothing.
-	settleAtEstimate := !found && !req.Complete &&
-		len(req.ResponseTail) > 0 &&
-		req.HttpStatus >= 200 && req.HttpStatus < 300
-
 	// Resolve the booked model's rates up front, since the debit is
 	// weighted by direction when the usage split is known. A bundle whose
 	// model no longer resolves falls back to the raw token count.
@@ -650,8 +658,8 @@ func (s *Server) ReportUsage(_ context.Context,
 	}
 
 	// The number of tokens to debit is the prompt/completion sum, or the
-	// total count when the split is absent. An abandoned stream settles at
-	// the settle estimate instead.
+	// total count when the split is absent. A response without usage
+	// settles at the settle estimate instead.
 	var debitTokens int64
 	switch {
 	case found:
@@ -663,10 +671,17 @@ func (s *Server) ReportUsage(_ context.Context,
 
 	case settleAtEstimate:
 		debitTokens = settle
-		log.Warnf("Incomplete %d response for token %s (path %s) "+
-			"carried %d tail bytes but no usage object; settling "+
-			"at the estimate of %d tokens", req.HttpStatus,
-			req.TokenId, req.Path, len(req.ResponseTail), settle)
+
+		// A completed stream is ordinary client behavior; only
+		// warn for an abandoned one.
+		logf := log.Warnf
+		if req.Complete {
+			logf = log.Infof
+		}
+		logf("%d response for token %s (path %s, complete %v) had "+
+			"%d tail bytes but no usage object; settling at the "+
+			"estimate of %d tokens", req.HttpStatus, req.TokenId,
+			req.Path, req.Complete, len(req.ResponseTail), settle)
 	}
 
 	// The bundle was priced at the blended (input+output)/2 rate, but the
@@ -709,8 +724,8 @@ func (s *Server) ReportUsage(_ context.Context,
 
 	// The debited amount is priced exactly per direction when the split
 	// is known, and at the blended rate otherwise, which covers both a
-	// splitless usage object and an abandoned stream settled at the
-	// estimate. Millisatoshis round up to satoshis.
+	// splitless usage object and a response settled at the estimate.
+	// Millisatoshis round up to satoshis.
 	var debitedMsat int64
 	switch {
 	case !found && !settleAtEstimate:
