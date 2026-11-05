@@ -32,10 +32,11 @@ func TestStoreBookDebitExhaust(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, booked)
 
-	remaining, found, err := s.Authorize("token1", 0)
+	auth, found, err := s.Authorize("token1", 0)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.EqualValues(t, 1000, remaining)
+	require.True(t, auth.Admitted)
+	require.EqualValues(t, 1000, auth.Available)
 
 	// Draw the bundle down.
 	after, found, err := s.Debit("token1", 600, 0)
@@ -59,10 +60,11 @@ func TestStoreBookDebitExhaust(t *testing.T) {
 	require.EqualValues(t, 0, after.RemainingTokens)
 
 	// The exhausted bundle is still known, but has no balance left.
-	remaining, found, err = s.Authorize("token1", 0)
+	auth, found, err = s.Authorize("token1", 0)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.EqualValues(t, 0, remaining)
+	require.False(t, auth.Admitted)
+	require.EqualValues(t, 0, auth.Available)
 }
 
 // TestStoreIdempotentBooking verifies that booking the same token twice does
@@ -282,17 +284,19 @@ func TestStoreReservation(t *testing.T) {
 	require.NoError(t, err)
 
 	// First authorization sees the full balance and reserves 100.
-	available, found, err := s.Authorize("token", 100)
+	auth, found, err := s.Authorize("token", 100)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.EqualValues(t, 100, available)
+	require.True(t, auth.Admitted)
+	require.EqualValues(t, 100, auth.Available)
 
 	// The bundle now has 100 tokens all reserved, so a second concurrent
 	// authorization sees zero available and is denied.
-	available, found, err = s.Authorize("token", 100)
+	auth, found, err = s.Authorize("token", 100)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.EqualValues(t, 0, available)
+	require.False(t, auth.Admitted)
+	require.EqualValues(t, 0, auth.Available)
 
 	// Reporting the first request releases its reservation and debits the
 	// actual usage, freeing the balance again.
@@ -303,10 +307,93 @@ func TestStoreReservation(t *testing.T) {
 	require.EqualValues(t, 0, after.Reserved)
 
 	// With the reservation released, a fresh authorization sees the
-	// remaining balance.
-	available, _, err = s.Authorize("token", 100)
+	// remaining balance. Sixty tokens can't cover 100, but a lone
+	// request is admitted.
+	auth, _, err = s.Authorize("token", 100)
 	require.NoError(t, err)
-	require.EqualValues(t, 60, available)
+	require.True(t, auth.Admitted)
+	require.EqualValues(t, 60, auth.Available)
+}
+
+// TestStoreReservationMustCoverEstimate checks that with another request in
+// flight, only a covered estimate is admitted, and a denial reserves nothing.
+func TestStoreReservationMustCoverEstimate(t *testing.T) {
+	t.Parallel()
+
+	s, err := newStore("")
+	require.NoError(t, err)
+
+	_, err = s.Book("token", "gpt-test", 1000, 1500)
+	require.NoError(t, err)
+
+	// 600 of 1000 reserved, 400 left.
+	auth, _, err := s.Authorize("token", 600)
+	require.NoError(t, err)
+	require.True(t, auth.Admitted)
+
+	// 401 does not fit in the 400 left.
+	auth, _, err = s.Authorize("token", 401)
+	require.NoError(t, err)
+	require.False(t, auth.Admitted)
+	require.EqualValues(t, 400, auth.Available)
+
+	b, ok := s.Get("token")
+	require.True(t, ok)
+	require.EqualValues(t, 600, b.Reserved)
+
+	// Exactly 400 fits.
+	auth, _, err = s.Authorize("token", 400)
+	require.NoError(t, err)
+	require.True(t, auth.Admitted)
+
+	b, _ = s.Get("token")
+	require.EqualValues(t, 1000, b.Reserved)
+}
+
+// TestAdmitReservation pins the admission rule every Store implementation
+// shares.
+func TestAdmitReservation(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name                          string
+		remaining, reserved, estimate int64
+		want                          bool
+	}{{
+		name:      "covered",
+		remaining: 1000, reserved: 0, estimate: 1000,
+		want: true,
+	}, {
+		name:      "covered alongside in-flight",
+		remaining: 1000, reserved: 500, estimate: 500,
+		want: true,
+	}, {
+		name:      "uncovered alongside in-flight",
+		remaining: 1000, reserved: 500, estimate: 501,
+		want: false,
+	}, {
+		name:      "lone request on a short balance",
+		remaining: 10, reserved: 0, estimate: 5000,
+		want: true,
+	}, {
+		name:      "exhausted",
+		remaining: 0, reserved: 0, estimate: 1,
+		want: false,
+	}, {
+		name:      "fully reserved",
+		remaining: 100, reserved: 100, estimate: 1,
+		want: false,
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Equal(t, tc.want, AdmitReservation(
+				tc.remaining, tc.reserved, tc.estimate,
+			))
+		})
+	}
 }
 
 // newClockedStore returns a store with the given reservation TTL and a clock
@@ -353,15 +440,15 @@ func TestStoreReservationExpiry(t *testing.T) {
 
 	// Just inside the TTL the leak still holds its share.
 	*clock = clock.Add(10*time.Minute - time.Second)
-	available, _, err := s.Authorize("token", 0)
+	auth, _, err := s.Authorize("token", 0)
 	require.NoError(t, err)
-	require.EqualValues(t, 1000-400-200, available)
+	require.EqualValues(t, 1000-400-200, auth.Available)
 
 	// At the TTL the leak goes; the live reservation stays.
 	*clock = clock.Add(time.Second)
-	available, _, err = s.Authorize("token", 0)
+	auth, _, err = s.Authorize("token", 0)
 	require.NoError(t, err)
-	require.EqualValues(t, 1000-200, available)
+	require.EqualValues(t, 1000-200, auth.Available)
 
 	b, ok := s.Get("token")
 	require.True(t, ok)
@@ -431,14 +518,14 @@ func TestStoreEqualEstimateReleasesOldest(t *testing.T) {
 
 	// The younger survivor outlives the older one's expiry.
 	*clock = clock.Add(10 * time.Minute)
-	available, _, err := s.Authorize("token", 0)
+	auth, _, err := s.Authorize("token", 0)
 	require.NoError(t, err)
-	require.EqualValues(t, 900, available)
+	require.EqualValues(t, 900, auth.Available)
 
 	*clock = clock.Add(20 * time.Minute)
-	available, _, err = s.Authorize("token", 0)
+	auth, _, err = s.Authorize("token", 0)
 	require.NoError(t, err)
-	require.EqualValues(t, 1000, available)
+	require.EqualValues(t, 1000, auth.Available)
 }
 
 // TestStoreExpireStaleSweepsReservations checks that the janitor drops expired
@@ -477,9 +564,9 @@ func TestStoreReservationExpiryDisabled(t *testing.T) {
 	*clock = clock.Add(24 * time.Hour)
 	require.Zero(t, s.ExpireStale(time.Hour))
 
-	available, _, err := s.Authorize("token", 100)
+	auth, _, err := s.Authorize("token", 100)
 	require.NoError(t, err)
-	require.EqualValues(t, 0, available)
+	require.EqualValues(t, 0, auth.Available)
 }
 
 // TestStoreCoalescedPersistence verifies that bookings do not rewrite the state
