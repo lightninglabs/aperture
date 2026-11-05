@@ -90,6 +90,10 @@ type Proxy struct {
 	servicesMtx  sync.RWMutex
 	proxyBackend *httputil.ReverseProxy
 
+	// challengeLimiter bounds the challenges issued per client network. It
+	// is nil when no limit is configured.
+	challengeLimiter *RateLimiter
+
 	// priorityLocalServices are checked before proxy service matching.
 	// Use this for local endpoints that must not be intercepted by
 	// broad proxy path patterns.
@@ -1180,6 +1184,25 @@ func (p *Proxy) freshChallengeHeader(serviceName string,
 // to the client signaling that a payment is required to fulfil the request.
 func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 	target *Service, serviceName string, servicePrice int64) {
+
+	// Every challenge mints invoices before anyone has paid, so bound how
+	// many one client network can request before touching the invoice
+	// backend. Some backends cap their unpaid invoices, and a flood of
+	// challenges would then fail for every client until the invoices
+	// expire.
+	if p.challengeLimiter != nil {
+		remoteIP, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
+		key := ExtractRateLimitKey(r, remoteIP, false)
+		allowed, retryAfter := p.challengeLimiter.Allow(r, key)
+		if !allowed {
+			prefixLog.Infof("Challenge limit exceeded for key %s, "+
+				"retry after %v", key, retryAfter)
+			addCorsHeaders(w.Header())
+			sendRateLimitResponse(w, r, retryAfter)
+
+			return
+		}
+	}
 
 	// The intents a challenge can carry ask different questions of the
 	// pricer. L402 and the MPP charge intent quote a one-shot purchase,

@@ -358,6 +358,10 @@ type Config struct {
 	// strictly less than WsPingInterval when pings are enabled.
 	WsPongWait time.Duration `long:"wspongwait" description:"Duration to wait for a WebSocket pong response before closing the connection."`
 
+	// ChallengeRateLimit bounds the 402 challenges issued per client
+	// network, since each one mints invoices before anything is paid.
+	ChallengeRateLimit *proxy.ChallengeRateLimitConfig `group:"challengeratelimit" namespace:"challengeratelimit" description:"Limit on 402 challenges issued per client network."`
+
 	// Blocklist is a list of IPs to deny access to.
 	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
 }
@@ -420,19 +424,20 @@ func NewConfig() *Config {
 		Authenticator: &AuthConfig{
 			MPPChallengeExpiry: auth.DefaultChallengeExpiry,
 		},
-		Tor:              &TorConfig{},
-		HashMail:         &HashMailConfig{},
-		Prometheus:       &PrometheusConfig{},
-		Admin:            &AdminConfig{},
-		IdleTimeout:      defaultIdleTimeout,
-		ReadTimeout:      defaultReadTimeout,
-		WriteTimeout:     defaultWriteTimeout,
-		WsPingInterval:   defaultWsPingInterval,
-		WsPongWait:       defaultWsPongWait,
-		InvoiceBatchSize: defaultInvoiceBatchSize,
-		Logging:          build.DefaultLogConfig(),
-		Blocklist:        []string{},
-		StrictVerify:     defaultStrictVerify,
+		Tor:                &TorConfig{},
+		HashMail:           &HashMailConfig{},
+		Prometheus:         &PrometheusConfig{},
+		Admin:              &AdminConfig{},
+		IdleTimeout:        defaultIdleTimeout,
+		ReadTimeout:        defaultReadTimeout,
+		WriteTimeout:       defaultWriteTimeout,
+		WsPingInterval:     defaultWsPingInterval,
+		WsPongWait:         defaultWsPongWait,
+		InvoiceBatchSize:   defaultInvoiceBatchSize,
+		Logging:            build.DefaultLogConfig(),
+		Blocklist:          []string{},
+		StrictVerify:       defaultStrictVerify,
+		ChallengeRateLimit: proxy.DefaultChallengeRateLimitConfig(),
 	}
 }
 

@@ -157,6 +157,15 @@ authenticator:
 #   is set. Anyone who can reach that address gets admin access.
 #   dashboardallownonloopback: false
 
+# Limit on the 402 challenges issued per client network. Each challenge mints
+# invoices before anything is paid, so this bounds the unpaid invoices one
+# network can make the seller hold. Set requests to 0 to disable.
+challengeratelimit:
+  requests: 10
+  per: 1h
+  # Defaults to requests if not set.
+  burst: 10
+
 # List of IPs to block from accessing the proxy.
 blocklist:
   - "1.1.1.1"
