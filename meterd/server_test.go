@@ -180,6 +180,7 @@ func TestServerRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, authResp.Allowed)
+	require.False(t, authResp.RetryLater)
 	require.EqualValues(t, 1500, authResp.PriceSats)
 	require.Contains(t, authResp.Reason, "exhausted")
 
@@ -195,6 +196,7 @@ func TestServerRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, authResp.Allowed)
+	require.False(t, authResp.RetryLater)
 	require.EqualValues(t, 1500, authResp.PriceSats)
 	require.Contains(t, authResp.Reason, "unknown")
 }
@@ -472,6 +474,7 @@ func TestServerConcurrentOverdraw(t *testing.T) {
 		wg      sync.WaitGroup
 		mu      sync.Mutex
 		allowed int
+		refused []*pricesrpc.AuthorizeRequestResponse
 	)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -490,14 +493,23 @@ func TestServerConcurrentOverdraw(t *testing.T) {
 			)
 			require.NoError(t, err)
 
+			mu.Lock()
+			defer mu.Unlock()
+
 			if resp.Allowed {
-				mu.Lock()
 				allowed++
-				mu.Unlock()
+			} else {
+				refused = append(refused, resp)
 			}
 		}()
 	}
 	wg.Wait()
+
+	// The bundle is still funded, so every refusal says retry.
+	for _, resp := range refused {
+		require.True(t, resp.RetryLater)
+		require.Contains(t, resp.Reason, "in-flight")
+	}
 
 	// Without reservations all fifty would authorize on a one-token bundle.
 	// With a one-token reservation only the first sees a positive balance,
@@ -835,4 +847,50 @@ func TestServerSettlesAbandonedStreamAtEstimate(t *testing.T) {
 		// 10*1000 + 10*2000 = 30000 msat = 30 sats.
 		require.EqualValues(t, 30, resp.DebitedSats)
 	})
+}
+
+// TestServerNoRetryLaterWithoutExpiry checks that with expiry disabled a funded
+// bundle is quoted rather than told to retry.
+func TestServerNoRetryLaterWithoutExpiry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	cfg := testConfig("")
+	cfg.BundleTokens = 1
+	cfg.EstimatedTokens = 1
+	cfg.ReservationTTL = -1
+	client := newTestClient(t, cfg)
+
+	const tokenID = "2020"
+
+	_, err := client.ChallengeMinted(ctx, &pricesrpc.ChallengeMintedRequest{
+		Path:            "/v1/chat/completions",
+		HttpRequestText: chatRequestText("gpt-test"),
+		TokenId:         tokenID,
+		PriceSats:       2,
+		ServiceName:     "llm",
+	})
+	require.NoError(t, err)
+
+	authorize := func() *pricesrpc.AuthorizeRequestResponse {
+		resp, err := client.AuthorizeRequest(
+			ctx, &pricesrpc.AuthorizeRequestRequest{
+				Path:            "/v1/chat/completions",
+				HttpRequestText: chatRequestText("gpt-test"),
+				TokenId:         tokenID,
+				ServiceName:     "llm",
+			},
+		)
+		require.NoError(t, err)
+
+		return resp
+	}
+
+	require.True(t, authorize().Allowed)
+
+	refused := authorize()
+	require.False(t, refused.Allowed)
+	require.False(t, refused.RetryLater)
+	require.Positive(t, refused.PriceSats)
 }

@@ -91,10 +91,12 @@ request), which would hold its reservation until meterd restarts. So a
 reservation is dropped after `reservationttl` (default 30 minutes, negative to
 disable).
 
-When a request would overdraw the bundle, `AuthorizeRequest` refuses it and
-names the price of the next bundle, aperture mints a fresh 402, and the cycle
-starts again. Exhaustion, not any property of the credential, is what ends a
-bundle's life.
+When a bundle is spent, `AuthorizeRequest` refuses the request with the price
+of the next bundle and aperture mints a fresh 402. If the bundle still has a
+balance that requests in flight have reserved, it sets `retry_later` instead,
+and aperture answers 429 with `Retry-After`, so the buyer does not pay for a
+new bundle while the current one is funded. Exhaustion, not any property of
+the credential, is what ends a bundle's life.
 
 One consequence deserves emphasis: the credential and the balance are separate
 things joined by a key. Everything below is about what that key is for each

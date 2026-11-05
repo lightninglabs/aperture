@@ -1104,7 +1104,7 @@ func addCorsHeaders(header http.Header) {
 	mergeCorsList(header, "Access-Control-Allow-Methods",
 		"GET", "POST", "OPTIONS")
 	mergeCorsList(header, "Access-Control-Expose-Headers",
-		"WWW-Authenticate", "Payment-Receipt")
+		"WWW-Authenticate", "Payment-Receipt", "Retry-After")
 
 	// Content-Type has to be allowed for any JSON API behind the proxy. A
 	// POST carrying application/json is not a simple request, so the
@@ -1284,6 +1284,14 @@ func sendDirectResponse(w http.ResponseWriter, r *http.Request,
 func sendRateLimitResponse(w http.ResponseWriter, r *http.Request,
 	retryAfter time.Duration) {
 
+	sendRetryAfterResponse(w, r, retryAfter, "rate limit exceeded")
+}
+
+// sendRetryAfterResponse sends 429 with Retry-After and the given message, or
+// ResourceExhausted to gRPC clients.
+func sendRetryAfterResponse(w http.ResponseWriter, r *http.Request,
+	retryAfter time.Duration, msg string) {
+
 	// Round up to ensure clients don't retry before the limit resets.
 	retrySeconds := int(math.Ceil(retryAfter.Seconds()))
 	if retrySeconds < 1 {
@@ -1299,12 +1307,12 @@ func sendRateLimitResponse(w http.ResponseWriter, r *http.Request,
 			hdrGrpcStatus,
 			strconv.Itoa(int(codes.ResourceExhausted)),
 		)
-		w.Header().Set(hdrGrpcMessage, "rate limit exceeded")
+		w.Header().Set(hdrGrpcMessage, msg)
 
 		// gRPC requires 200 OK even for errors.
 		w.WriteHeader(http.StatusOK)
 	} else {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		http.Error(w, msg, http.StatusTooManyRequests)
 	}
 }
 
