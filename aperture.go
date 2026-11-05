@@ -1907,6 +1907,12 @@ func createProxy(cfg *Config, services []*proxy.Service,
 		authenticator, services, cfg.Blocklist,
 		adminPriorityServices, localServices...,
 	)
+	if err != nil {
+		return prxy, proxyCleanup, err
+	}
+
+	err = prxy.SetChallengeRateLimit(cfg.ChallengeRateLimit)
+
 	return prxy, proxyCleanup, err
 }
 
