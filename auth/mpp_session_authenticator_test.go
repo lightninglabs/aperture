@@ -1091,3 +1091,43 @@ func TestMultiAuthReceiptIntentDispatch(t *testing.T) {
 		t, hex.EncodeToString(paymentHash[:]), chargeReceipt.Reference,
 	)
 }
+
+// TestSessionReceiptForgedCredential verifies that no receipt is stamped from
+// a session credential that parses but was never verified.
+func TestSessionReceiptForgedCredential(t *testing.T) {
+	auth, _, _, hmacSecret := newTestSessionAuth(t)
+	preimage, paymentHash := testPreimageAndHash(t)
+	wrong, _ := testPreimageAndHash(t)
+
+	openPayload := func(p lntypes.Preimage) *mpp.SessionPayload {
+		return &mpp.SessionPayload{
+			Action:        mpp.SessionActionOpen,
+			Preimage:      hex.EncodeToString(p[:]),
+			ReturnInvoice: testReturnInvoice(t, paymentHash),
+		}
+	}
+
+	// A challenge ID that does not carry the server's HMAC.
+	forged, _ := buildSessionChallenge(t, hmacSecret, paymentHash, 300)
+	forged.ID = "forged-challenge-id"
+	h := buildSessionCredential(t, forged, openPayload(preimage))
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+
+	// A genuine challenge with a preimage that does not match.
+	genuine, _ := buildSessionChallenge(t, hmacSecret, paymentHash, 300)
+	h = buildSessionCredential(t, genuine, openPayload(wrong))
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+
+	// A bearer credential naming a session that does not exist.
+	h = buildSessionCredential(t, genuine, &mpp.SessionPayload{
+		Action:    mpp.SessionActionBearer,
+		SessionID: "no-such-session",
+		Preimage:  hex.EncodeToString(preimage[:]),
+	})
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+
+	// The genuine challenge bound to a different service.
+	h = buildSessionCredential(t, genuine, openPayload(preimage))
+	require.Nil(t, auth.ReceiptHeader(&h, "other-service"))
+	require.NotNil(t, auth.ReceiptHeader(&h, "test-service"))
+}

@@ -858,6 +858,12 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 		return nil
 	}
 
+	// Only attest to a credential that actually authenticated this request.
+	// See verifyReceiptCredential for what that means per action.
+	if !a.verifyReceiptCredential(cred, &payload, serviceName) {
+		return nil
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// For close actions, include refund information in a SessionReceipt.
@@ -920,6 +926,75 @@ func (a *MPPSessionAuthenticator) ReceiptHeader(header *http.Header,
 	}
 
 	return receiptHeader
+}
+
+// verifyReceiptCredential reports whether a session credential carries the
+// proofs Accept demanded for its action, without repeating any state change.
+// A request can carry credentials for several schemes, and only one of them
+// needs to have authenticated it, so a receipt must not be stamped from a
+// credential that merely parses. The challenge must be one this server minted
+// for this resource, and the preimage must match the payment hash it is tied
+// to: the challenge's own hash for open and topUp, the session's deposit hash
+// for bearer and close. A closed session still verifies, since a close
+// credential is only receipted after the close has run.
+func (a *MPPSessionAuthenticator) verifyReceiptCredential(cred *mpp.Credential,
+	payload *mpp.SessionPayload, serviceName string) bool {
+
+	params := cred.Challenge.ToChallengeParams()
+	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
+		return false
+	}
+	if err := verifyMPPChallengeBinding(
+		cred.Challenge.Opaque, serviceName,
+	); err != nil {
+		return false
+	}
+
+	switch payload.Action {
+	case mpp.SessionActionOpen, mpp.SessionActionTopUp:
+		preimageStr := payload.Preimage
+		if payload.Action == mpp.SessionActionTopUp {
+			preimageStr = payload.TopUpPreimage
+		}
+
+		var sessReq mpp.SessionRequest
+		if err := mpp.DecodeRequest(
+			cred.Challenge.Request, &sessReq,
+		); err != nil {
+			return false
+		}
+
+		hash, err := lntypes.MakeHashFromStr(sessReq.PaymentHash)
+		if err != nil {
+			return false
+		}
+		preimage, err := lntypes.MakePreimageFromStr(preimageStr)
+
+		return err == nil && preimage.Matches(hash)
+
+	case mpp.SessionActionBearer, mpp.SessionActionClose:
+		if payload.SessionID == "" {
+			return false
+		}
+
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 10*time.Second,
+		)
+		defer cancel()
+
+		session, err := a.sessionStore.GetSession(
+			ctx, payload.SessionID,
+		)
+		if err != nil {
+			return false
+		}
+		preimage, err := lntypes.MakePreimageFromStr(payload.Preimage)
+
+		return err == nil && preimage.Matches(session.PaymentHash)
+
+	default:
+		return false
+	}
 }
 
 // BearerSessionID returns the session a bearer credential in the header draws

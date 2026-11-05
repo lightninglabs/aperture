@@ -973,3 +973,34 @@ func TestMPPAuthenticatorReceiptWrongIntent(t *testing.T) {
 
 	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
 }
+
+// TestMPPAuthenticatorReceiptForgedCredential verifies that no receipt is
+// stamped from a credential that parses but was never verified: a challenge ID
+// the server did not mint, or a minted challenge presented with a preimage
+// that does not settle its payment hash.
+func TestMPPAuthenticatorReceiptForgedCredential(t *testing.T) {
+	preimage, paymentHash := testPreimageAndHash(t)
+	auth, _ := newTestChargeAuth(
+		t, &mockChallenger{}, newMockInvoiceChecker(),
+	)
+
+	// An attacker-chosen payment hash under a challenge ID that does not
+	// carry the server's HMAC.
+	forged := testChargeChallenge(t, paymentHash, testExpiry())
+	forged.ID = "forged-challenge-id"
+	h := buildTestCredential(t, forged, preimage)
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+
+	// A genuine challenge, but a preimage that does not match its hash.
+	genuine := testChargeChallenge(t, paymentHash, testExpiry())
+	wrong, _ := testPreimageAndHash(t)
+	h = buildTestCredential(t, genuine, wrong)
+	require.Nil(t, auth.ReceiptHeader(&h, "test-service"))
+
+	// The same genuine challenge bound to a different service.
+	h = buildTestCredential(t, genuine, preimage)
+	require.Nil(t, auth.ReceiptHeader(&h, "other-service"))
+
+	// Sanity check: the honest credential still earns a receipt.
+	require.NotNil(t, auth.ReceiptHeader(&h, "test-service"))
+}
