@@ -511,10 +511,42 @@ func (a *MPPAuthenticator) ReceiptHeader(header *http.Header,
 		return nil
 	}
 
+	// A request can carry credentials for several schemes and only one of
+	// them needs to have authenticated it, so a parseable charge credential
+	// is not evidence that this one did. Re-check that the challenge is one
+	// we minted for this resource and that the preimage settles its payment
+	// hash. Accept has already consumed the credential, so the consumption
+	// record and the invoice lookup are not repeated: the preimage match is
+	// the proof of payment and costs one HMAC and one hash.
 	var chargeReq mpp.ChargeRequest
 	if err := mpp.DecodeRequest(
 		cred.Challenge.Request, &chargeReq,
 	); err != nil {
+		return nil
+	}
+
+	params := cred.Challenge.ToChallengeParams()
+	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
+		return nil
+	}
+	if err := verifyMPPChallengeBinding(
+		cred.Challenge.Opaque, serviceName,
+	); err != nil {
+		return nil
+	}
+
+	var payload mpp.ChargePayload
+	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
+		return nil
+	}
+	preimage, err := lntypes.MakePreimageFromStr(payload.Preimage)
+	if err != nil {
+		return nil
+	}
+	paymentHash, err := lntypes.MakeHashFromStr(
+		chargeReq.MethodDetails.PaymentHash,
+	)
+	if err != nil || !preimage.Matches(paymentHash) {
 		return nil
 	}
 
