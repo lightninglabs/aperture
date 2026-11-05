@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 )
@@ -33,6 +34,26 @@ type Bundle struct {
 	// estimate that bounds concurrent overdraw, and is not persisted since
 	// it only tracks live requests.
 	Reserved int64 `json:"-"`
+
+	// reservations make up Reserved, oldest first. Not persisted.
+	reservations []reservation
+}
+
+// copy returns a copy of the bundle without its reservation entries.
+func (b *Bundle) copy() Bundle {
+	c := *b
+	c.reservations = nil
+
+	return c
+}
+
+// reservation is one in-flight request's hold on a bundle's balance.
+type reservation struct {
+	// estimate is the number of tokens reserved.
+	estimate int64
+
+	// at is when the reservation was taken.
+	at time.Time
 }
 
 // storeState is the JSON serialization of the store.
@@ -62,6 +83,11 @@ type JSONStoreConfig struct {
 	// retained state under spam is the mint rate times the TTL. A
 	// non-positive value disables the floor.
 	MinEvictionAge time.Duration
+
+	// ReservationTTL is how long a reservation is held before it is
+	// presumed leaked by a lost usage report and dropped. A non-positive
+	// value disables expiry.
+	ReservationTTL time.Duration
 }
 
 // store keeps the bundle balances, keyed by the hex-encoded L402 token ID, and
@@ -74,6 +100,9 @@ type JSONStore struct {
 	bundles map[string]*Bundle
 
 	cfg JSONStoreConfig
+
+	// now returns the current time, replaceable in tests.
+	now func() time.Time
 
 	// dirty is set when in-memory state has diverged from the persisted
 	// file and a flush is pending.
@@ -92,6 +121,7 @@ func NewJSONStore(cfg JSONStoreConfig) (*JSONStore, error) {
 	s := &JSONStore{
 		bundles: make(map[string]*Bundle),
 		cfg:     cfg,
+		now:     time.Now,
 	}
 	if cfg.StatePath == "" {
 		return s, nil
@@ -177,7 +207,7 @@ func (s *JSONStore) evictOldestUnauthorizedLocked() int {
 
 	var protectCutoff time.Time
 	if s.cfg.MinEvictionAge > 0 {
-		protectCutoff = time.Now().Add(-s.cfg.MinEvictionAge)
+		protectCutoff = s.now().Add(-s.cfg.MinEvictionAge)
 	}
 
 	// Count all un-authorized bundles against the cap, but only the ones
@@ -254,7 +284,7 @@ func (s *JSONStore) Book(tokenID, model string, tokens, priceSats int64) (bool,
 		Model:           model,
 		PriceSats:       priceSats,
 		RemainingTokens: tokens,
-		CreatedAt:       time.Now().UTC(),
+		CreatedAt:       s.now().UTC(),
 	}
 
 	// Bound the number of never-authorized bundles so unauthenticated
@@ -284,6 +314,9 @@ func (s *JSONStore) Authorize(tokenID string, estimate int64) (int64, bool, erro
 		return 0, false, nil
 	}
 
+	now := s.now()
+	s.expireReservationsLocked(tokenID, b, now)
+
 	// The available balance already nets out the tokens reserved by other
 	// in-flight requests, so N concurrent requests on a near-empty bundle
 	// cannot all authorize.
@@ -298,9 +331,63 @@ func (s *JSONStore) Authorize(tokenID string, estimate int64) (int64, bool, erro
 	// a denied request does not tie up balance.
 	if available > 0 && estimate > 0 {
 		b.Reserved += estimate
+		b.reservations = append(b.reservations, reservation{
+			estimate: estimate,
+			at:       now,
+		})
 	}
 
 	return available, true, nil
+}
+
+// expireReservationsLocked drops reservations held for the reservation TTL,
+// whose usage reports are presumed lost. The caller must hold the mutex.
+func (s *JSONStore) expireReservationsLocked(tokenID string, b *Bundle,
+	now time.Time) {
+
+	ttl := s.cfg.ReservationTTL
+	if ttl <= 0 || len(b.reservations) == 0 {
+		return
+	}
+
+	// Oldest first, so the expired ones are a prefix.
+	var (
+		expired  int
+		released int64
+	)
+	for expired < len(b.reservations) &&
+		now.Sub(b.reservations[expired].at) >= ttl {
+
+		released += b.reservations[expired].estimate
+		expired++
+	}
+	if expired == 0 {
+		return
+	}
+
+	b.reservations = slices.Delete(b.reservations, 0, expired)
+	b.Reserved = max(b.Reserved-released, 0)
+
+	log.Warnf("Dropped %d reservation(s) of %d tokens on token %s held "+
+		"for over %v, presumed leaked by lost usage reports", expired,
+		released, tokenID, ttl)
+}
+
+// releaseReservationLocked releases the oldest reservation of the given
+// estimate, so a remaining entry is never older than its request. A release
+// matching none changes nothing. Equal estimates cannot be told apart, so a
+// late release can free a live reservation of the same size. The caller must
+// hold the mutex.
+func (s *JSONStore) releaseReservationLocked(b *Bundle, estimate int64) {
+	i := slices.IndexFunc(b.reservations, func(r reservation) bool {
+		return r.estimate == estimate
+	})
+	if i < 0 {
+		return
+	}
+
+	b.reservations = slices.Delete(b.reservations, i, i+1)
+	b.Reserved = max(b.Reserved-estimate, 0)
 }
 
 // Get returns a copy of the token's bundle.
@@ -313,7 +400,7 @@ func (s *JSONStore) Get(tokenID string) (Bundle, bool) {
 		return Bundle{}, false
 	}
 
-	return *b, true
+	return b.copy(), true
 }
 
 // Debit subtracts the actual tokens consumed from the token's balance,
@@ -323,8 +410,7 @@ func (s *JSONStore) Get(tokenID string) (Bundle, bool) {
 // since it moves money.
 //
 // The proto does not correlate a report with the authorization that preceded
-// it, so the release is approximate: it subtracts the estimate the caller
-// passes, clamped at zero, rather than the exact amount this request reserved.
+// it, so the release is matched by size; see releaseReservationLocked.
 func (s *JSONStore) Debit(tokenID string, tokens, releaseEstimate int64) (Bundle,
 	bool, error) {
 
@@ -338,10 +424,7 @@ func (s *JSONStore) Debit(tokenID string, tokens, releaseEstimate int64) (Bundle
 
 	// Release the reservation taken on authorization.
 	if releaseEstimate > 0 {
-		b.Reserved -= releaseEstimate
-		if b.Reserved < 0 {
-			b.Reserved = 0
-		}
+		s.releaseReservationLocked(b, releaseEstimate)
 	}
 
 	var err error
@@ -358,23 +441,29 @@ func (s *JSONStore) Debit(tokenID string, tokens, releaseEstimate int64) (Bundle
 		err = s.persistLocked()
 	}
 
-	return *b, true, err
+	return b.copy(), true, err
 }
 
 // ExpireStale removes bundles that were never used by an authorized request
-// within the given TTL and returns the number of removed bundles.
+// within the given TTL and returns the number of removed bundles. It also
+// drops expired reservations.
 func (s *JSONStore) ExpireStale(ttl time.Duration) int {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	cutoff := time.Now().Add(-ttl)
+	now := s.now()
+	cutoff := now.Add(-ttl)
 
 	var removed int
 	for tokenID, b := range s.bundles {
 		if !b.Authorized && b.CreatedAt.Before(cutoff) {
 			delete(s.bundles, tokenID)
 			removed++
+
+			continue
 		}
+
+		s.expireReservationsLocked(tokenID, b, now)
 	}
 
 	if removed > 0 {
