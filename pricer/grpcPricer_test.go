@@ -103,3 +103,100 @@ func TestDumpRequestNoBody(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, reqText, "GET /v1/models")
 }
+
+// limitedReader serves a body of a fixed size and records how many bytes have
+// been read from it and whether it was closed.
+type limitedReader struct {
+	remaining int
+	read      int
+	closed    bool
+	byteAt    func(i int) byte
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > l.remaining {
+		n = l.remaining
+	}
+	for i := 0; i < n; i++ {
+		p[i] = l.byteAt(l.read + i)
+	}
+	l.read += n
+	l.remaining -= n
+
+	return n, nil
+}
+
+func (l *limitedReader) Close() error {
+	l.closed = true
+	return nil
+}
+
+// TestDumpRequestBoundsBodyRead verifies that dumping a request reads no more
+// than the pricer cap (plus a small slack) from the body, that the pricer text
+// is capped, and that the backend still receives the full body byte-identical
+// as the remainder streams through.
+func TestDumpRequestBoundsBodyRead(t *testing.T) {
+	t.Parallel()
+
+	const (
+		size  = maxPricerBodyBytes*8 + 123
+		slack = 4096
+	)
+
+	byteAt := func(i int) byte { return byte('a' + i%26) }
+	src := &limitedReader{remaining: size, byteAt: byteAt}
+
+	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	r.Body = src
+	r.ContentLength = size
+
+	reqText, err := dumpRequest(r)
+	require.NoError(t, err)
+
+	// Memory is bounded: nothing past the cap was pulled from the client's
+	// body before the backend started consuming it.
+	require.LessOrEqual(t, src.read, maxPricerBodyBytes+slack)
+	require.Less(t, len(reqText), maxPricerBodyBytes+1024)
+	require.Equal(t, int64(size), r.ContentLength)
+
+	// The backend gets every byte, identical, and closing the restored body
+	// closes the original.
+	got, err := io.ReadAll(r.Body)
+	require.NoError(t, err)
+	require.Len(t, got, size)
+	for i := range got {
+		if got[i] != byteAt(i) {
+			t.Fatalf("body differs at offset %d", i)
+		}
+	}
+
+	require.False(t, src.closed)
+	require.NoError(t, r.Body.Close())
+	require.True(t, src.closed)
+}
+
+// TestDumpRequestSmallBodyRepeated verifies that a body smaller than the cap
+// is still fully restored, including across repeated dumps as the proxy
+// serializes the same request more than once.
+func TestDumpRequestSmallBodyRepeated(t *testing.T) {
+	t.Parallel()
+
+	body := `{"model":"gpt-test","messages":[]}`
+	r := httptest.NewRequest(
+		"POST", "/v1/chat/completions", strings.NewReader(body),
+	)
+
+	for i := 0; i < 3; i++ {
+		reqText, err := dumpRequest(r)
+		require.NoError(t, err)
+		require.Contains(t, reqText, body)
+	}
+
+	got, err := io.ReadAll(r.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, string(got))
+}

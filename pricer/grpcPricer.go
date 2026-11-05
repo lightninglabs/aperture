@@ -131,11 +131,14 @@ func SerializeRequest(r *http.Request) (string, error) {
 }
 
 // dumpRequest serializes the request's headers and a bounded prefix of its
-// body, while leaving the request forwardable: the full body is buffered and
-// restored on the request so a later reverse-proxy pass still sees it. Only a
-// prefix of the body is serialized because the pricer needs no more than the
-// JSON head with the model field, and dumping a large body in full would put
-// it on the pricer's hot path and risk the gRPC message size limit.
+// body, while leaving the request forwardable: only that prefix is buffered,
+// and it is stitched back in front of the unread remainder so a later
+// reverse-proxy pass still sees every byte. Only a prefix of the body is
+// serialized because the pricer needs no more than the JSON head with the
+// model field, and dumping a large body in full would put it on the pricer's
+// hot path and risk the gRPC message size limit. Buffering only the prefix also
+// keeps the memory a client can pin bounded by the cap rather than by the size
+// of its upload.
 func dumpRequest(r *http.Request) (string, error) {
 	// Dump the request line and headers without the body.
 	head, err := httputil.DumpRequest(r, false)
@@ -149,38 +152,40 @@ func dumpRequest(r *http.Request) (string, error) {
 		return string(head), nil
 	}
 
-	// Read a bounded prefix of the body for the pricer, while buffering the
-	// full body so it can be restored on the request for the backend.
-	prefix, full, err := readBodyPrefix(r.Body, maxPricerBodyBytes)
+	// Read a bounded prefix of the body for the pricer and restore the
+	// request body for the backend.
+	prefix, err := readBodyPrefix(r, maxPricerBodyBytes)
 	if err != nil {
 		return "", err
 	}
-	r.Body = io.NopCloser(bytes.NewReader(full))
 
 	return string(head) + string(prefix), nil
 }
 
-// readBodyPrefix reads up to max leading bytes of the body for the pricer and
-// also returns the full body so the caller can restore it on the request. It
-// reads the whole body once and slices the prefix from it, so the backend
-// still receives every byte.
-func readBodyPrefix(body io.ReadCloser, max int) (prefix []byte, full []byte,
-	err error) {
+// readBodyPrefix reads up to max leading bytes of the request body and
+// replaces the body with the prefix followed by the unread remainder, so the
+// backend still receives every byte and the remainder streams without being
+// buffered. The original body stays open and is closed when the replacement
+// is. If the read fails the body is closed, since it can no longer be
+// restored.
+func readBodyPrefix(r *http.Request, max int) ([]byte, error) {
+	body := r.Body
 
-	defer func() {
-		_ = body.Close()
-	}()
-
-	full, err = io.ReadAll(body)
+	prefix, err := io.ReadAll(io.LimitReader(body, int64(max)))
 	if err != nil {
-		return nil, nil, err
+		_ = body.Close()
+		return nil, err
 	}
 
-	if len(full) > max {
-		return full[:max], full, nil
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.MultiReader(bytes.NewReader(prefix), body),
+		Closer: body,
 	}
 
-	return full, full, nil
+	return prefix, nil
 }
 
 // GetPrice queries the server for the price of a resource path and returns the

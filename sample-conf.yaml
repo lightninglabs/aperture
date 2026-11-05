@@ -305,7 +305,9 @@ services:
       # request and receive response usage reports, enabling draw-down of
       # prepaid token balances (metered mode). A metered price server must
       # implement the full pricesrpc.Prices service, including
-      # ChallengeMinted, AuthorizeRequest and ReportUsage.
+      # ChallengeMinted, AuthorizeRequest and ReportUsage. Metered services
+      # require the "model" key within the first 64 KiB of the request body,
+      # since the pricer only ever sees that prefix.
       # metered: true
 
       # The maximum number of trailing response body bytes captured for
