@@ -238,6 +238,11 @@ func (s *Server) janitor() {
 	}
 }
 
+// reservationsExpire reports whether leaked reservations are dropped.
+func (s *Server) reservationsExpire() bool {
+	return s.cfg.ReservationTTL >= 0
+}
+
 // unauthorizedBundleTTL returns how long a never-authorized bundle is retained
 // before the janitor reaps it, falling back to the default when unset.
 func (s *Server) unauthorizedBundleTTL() time.Duration {
@@ -406,15 +411,28 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		}, nil
 	}
 
-	// The token is unknown or its bundle is spent. Quote the next bundle
-	// at the booked model's rate when known, otherwise at the rate of the
-	// model named in the request.
+	// The token is unknown, its bundle is spent, or its balance is
+	// reserved by requests in flight. Quote the next bundle at the booked
+	// model's rate, or else the requested model's.
 	reason := "unknown L402 token"
-	var model string
+	var (
+		model      string
+		retryLater bool
+	)
 	if found {
 		reason = "token bundle exhausted"
 		if b, ok := s.store.Get(req.TokenId); ok {
 			model = b.Model
+
+			// A funded bundle frees up once requests in flight
+			// settle, so tell the buyer to retry. Without expiry a
+			// leak would never clear, so quote instead.
+			if b.RemainingTokens > 0 && s.reservationsExpire() {
+				retryLater = true
+				reason = fmt.Sprintf("token bundle has %d tokens "+
+					"left, all reserved by in-flight "+
+					"requests", b.RemainingTokens)
+			}
 		}
 	}
 	if model == "" {
@@ -424,7 +442,10 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		model, _ = modelFromRequestText(req.HttpRequestText)
 	}
 
-	return s.denyAuthorization(req.TokenId, model, reason), nil
+	resp := s.denyAuthorization(req.TokenId, model, reason)
+	resp.RetryLater = retryLater
+
+	return resp, nil
 }
 
 // denyAuthorization builds a denial response quoting the price of a fresh

@@ -116,6 +116,10 @@ message AuthorizeRequestResponse {
     // in the matching ReportUsageRequest so the exact reservation can be
     // released, rather than an approximate default.
     int64 reserved_estimate = 4;
+
+    // When not allowed, whether the balance is only reserved by requests in
+    // flight. Aperture then answers 429 with Retry-After instead of a 402.
+    bool retry_later = 5;
 }
 
 message ReportUsageRequest {

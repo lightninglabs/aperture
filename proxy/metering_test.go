@@ -334,6 +334,49 @@ func TestCheckMeteredAccess(t *testing.T) {
 		}
 	})
 
+	t.Run("busy token is told to retry, not to pay", func(t *testing.T) {
+		fake := newFakeMeteredPricer()
+		fake.authorizeResult = &pricer.AuthorizeResult{
+			Allowed:    false,
+			PriceSats:  1337,
+			Reason:     "balance held by in-flight requests",
+			RetryLater: true,
+		}
+		svc := newMeteredService(fake)
+		p := &Proxy{
+			authenticator: &fakeChallengeAuth{
+				t: t, mac: challengeMac,
+			},
+		}
+
+		w := httptest.NewRecorder()
+		_, proceed := p.checkMeteredAccess(
+			w, newRequest(), svc, "inference",
+		)
+
+		require.False(t, proceed)
+		require.Equal(t, http.StatusTooManyRequests, w.Code)
+		require.Equal(t, "5", w.Header().Get("Retry-After"))
+		require.Empty(t, w.Header().Get("WWW-Authenticate"))
+		require.Contains(t, w.Body.String(), "reserved by requests")
+
+		// Browsers must be able to read the 429 and Retry-After.
+		require.Equal(
+			t, "*", w.Header().Get("Access-Control-Allow-Origin"),
+		)
+		require.Contains(
+			t, w.Header().Get("Access-Control-Expose-Headers"),
+			"Retry-After",
+		)
+
+		// No challenge may be minted for a funded bundle.
+		select {
+		case minted := <-fake.mintedTokens:
+			t.Fatalf("unexpected challenge minted: %s", minted)
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
+
 	t.Run("pricer error fails closed", func(t *testing.T) {
 		fake := newFakeMeteredPricer()
 		fake.authorizeErr = fmt.Errorf("pricer down")

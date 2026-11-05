@@ -21,6 +21,10 @@ import (
 	"gopkg.in/macaroon.v2"
 )
 
+// meteredRetryAfter is the Retry-After sent when a token's balance is reserved
+// by requests in flight.
+const meteredRetryAfter = 5 * time.Second
+
 // errNoMeteredCredential marks a request that carries no credential the
 // metering pipeline can attribute usage to. Such a request is simply not
 // metered here: it is either unauthenticated, or authenticated under a scheme
@@ -340,6 +344,19 @@ func (p *Proxy) checkMeteredAccess(w http.ResponseWriter, r *http.Request,
 	if !result.Allowed {
 		log.Debugf("Metered pricer denied request for token %s: %s",
 			tokenID, result.Reason)
+
+		// The balance is only reserved, so tell the client to retry
+		// rather than pay for a new bundle.
+		if result.RetryLater {
+			addCorsHeaders(w.Header())
+			sendRetryAfterResponse(
+				w, r, meteredRetryAfter,
+				"token balance is reserved by requests in "+
+					"flight, retry later",
+			)
+
+			return r, false
+		}
 
 		// The token's balance is exhausted, so a fresh challenge is
 		// minted for the client to purchase a new bundle. If the
