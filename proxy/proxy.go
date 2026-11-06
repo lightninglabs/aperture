@@ -201,6 +201,14 @@ func (d *deadlineBumpingWriter) Write(b []byte) (int, error) {
 	return d.ResponseWriter.Write(b)
 }
 
+// Flush implements http.Flusher, which grpc-go's server handler requires of
+// its ResponseWriter. A flush is where the write deadline is enforced, so it
+// counts as a write for the rolling window.
+func (d *deadlineBumpingWriter) Flush() {
+	d.bump()
+	_ = d.controller.Flush()
+}
+
 // Unwrap exposes the wrapped writer to http.ResponseController.
 func (d *deadlineBumpingWriter) Unwrap() http.ResponseWriter {
 	return d.ResponseWriter

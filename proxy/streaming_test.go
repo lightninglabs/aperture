@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,9 @@ import (
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // newStreamingProxy stands up a proxy in front of the given backend handler
@@ -257,4 +261,38 @@ func TestProxyStreamKilledWhenStalled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("backend handler never finished")
 	}
+}
+
+// TestLocalGRPCServiceBehindDeadlineWriter checks that a local gRPC service is
+// reachable while the rolling write deadline is on. grpc-go answers 500 to any
+// writer that is not an http.Flusher.
+func TestLocalGRPCServiceBehindDeadlineWriter(t *testing.T) {
+	t.Parallel()
+
+	grpcServer := grpc.NewServer()
+	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
+	local := proxy.NewLocalService(
+		grpcServer, func(_ *http.Request) bool { return true },
+	)
+
+	p, err := proxy.New(
+		auth.NewMockAuthenticator(), nil, []string{}, nil, local,
+	)
+	require.NoError(t, err)
+	p.SetWriteDeadlineWindow(time.Second)
+
+	// An empty, uncompressed gRPC message frame.
+	body := bytes.NewReader([]byte{0, 0, 0, 0, 0})
+	req := httptest.NewRequest(
+		http.MethodPost, "/grpc.health.v1.Health/Check", body,
+	)
+	req.ProtoMajor, req.ProtoMinor, req.Proto = 2, 0, "HTTP/2.0"
+	req.Header.Set("Content-Type", "application/grpc")
+	req.Header.Set("TE", "trailers")
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "0", rec.Result().Trailer.Get("Grpc-Status"))
 }
