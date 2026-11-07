@@ -353,6 +353,12 @@ The setup is the same on mainnet, with a few differences:
 - `strictverify` is not supported with the Wavelength backend. Aperture
   refuses to start if it is set. Like the lnd backend's default, Aperture
   trusts that a valid preimage means the invoice was paid.
+- The seller's Wavelength wallet holds at most 32 pending receive intents,
+  and each `402` mints one invoice (up to three with MPP and sessions). Aperture
+  limits challenges per client network by default (`challengeratelimit`, 10
+  per hour) so one source cannot fill the cap. A flood from many networks
+  can still fill it until the invoices expire, so size `requests` for your
+  traffic. See "Challenge Rate Limiting" in the README.
 - The seller's balance lives in Ark, and payments below the operator's
   minimum coin size are held as credit by the swap server. See the Wavelength
   docs for how to move funds on-chain.
