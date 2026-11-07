@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -38,13 +39,31 @@ func NewL402Authenticator(minter Minter,
 //
 // NOTE: This is part of the Authenticator interface.
 func (l *L402Authenticator) Accept(header *http.Header, serviceName string) bool {
+	err := l.verify(header, serviceName)
+	recordVerify(err)
+	if err != nil {
+		log.Debugf("Deny: %v", err)
+		return false
+	}
+
+	return true
+}
+
+// verify checks the L402 credential in the header and returns a classified
+// error if the request must be denied.
+func (l *L402Authenticator) verify(header *http.Header,
+	serviceName string) error {
+
 	// Try reading the macaroon and preimage from the HTTP header. This can
 	// be in different header fields depending on the implementation and/or
 	// protocol.
 	mac, preimage, err := l402.FromHeader(header)
-	if err != nil {
-		log.Debugf("Deny: %v", err)
-		return false
+	switch {
+	case errors.Is(err, l402.ErrNoCredential):
+		return err
+
+	case err != nil:
+		return fmt.Errorf("%w: %w", errMalformedHeader, err)
 	}
 
 	verificationParams := &mint.VerificationParams{
@@ -54,8 +73,7 @@ func (l *L402Authenticator) Accept(header *http.Header, serviceName string) bool
 	}
 	err = l.minter.VerifyL402(context.Background(), verificationParams)
 	if err != nil {
-		log.Debugf("Deny: L402 validation failed: %v", err)
-		return false
+		return fmt.Errorf("L402 validation failed: %w", err)
 	}
 
 	// Make sure the backend has the invoice recorded as settled.
@@ -64,11 +82,10 @@ func (l *L402Authenticator) Accept(header *http.Header, serviceName string) bool
 		DefaultInvoiceLookupTimeout,
 	)
 	if err != nil {
-		log.Debugf("Deny: Invoice status mismatch: %v", err)
-		return false
+		return fmt.Errorf("%w: %w", errInvoiceUnsettled, err)
 	}
 
-	return true
+	return nil
 }
 
 // Scheme returns the authentication scheme identifier for the L402
@@ -102,6 +119,7 @@ func (l *L402Authenticator) FreshChallengeHeader(serviceName string,
 	mac, paymentRequest, err := l.minter.MintL402(
 		context.Background(), service,
 	)
+	recordMint(err)
 	if err != nil {
 		log.Errorf("Error minting L402: %v", err)
 		return nil, err
