@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -93,6 +94,7 @@ type MPPAuthenticator struct {
 // Compile-time interface checks.
 var _ Authenticator = (*MPPAuthenticator)(nil)
 var _ ReceiptProvider = (*MPPAuthenticator)(nil)
+var _ ProblemAuthenticator = (*MPPAuthenticator)(nil)
 
 const (
 	// defaultChallengeExpiry is the default challenge expiration duration.
@@ -244,12 +246,28 @@ func (a *MPPAuthenticator) Scheme() string {
 func (a *MPPAuthenticator) Accept(header *http.Header,
 	serviceName string) bool {
 
+	accepted, _ := a.AcceptWithProblem(header, serviceName)
+	return accepted
+}
+
+// AcceptWithProblem returns whether the header contains a valid Payment
+// credential for the Lightning charge intent and, if it refuses one, the
+// problem type that the 402 answering it carries.
+//
+// NOTE: This is part of the ProblemAuthenticator interface.
+func (a *MPPAuthenticator) AcceptWithProblem(header *http.Header,
+	serviceName string) (bool, string) {
+
 	// Try to parse a Payment credential from the header.
 	cred, err := mpp.ParseCredential(header)
-	if err != nil {
+	if errors.Is(err, mpp.ErrNoCredential) {
 		// Not an MPP credential, silently return false so other
 		// authenticators can try.
-		return false
+		return false, ""
+	}
+	if err != nil {
+		log.Debugf("MPP: Malformed credential: %v", err)
+		return false, mpp.ProblemMalformedCredential
 	}
 
 	// Only handle Lightning charge intent.
@@ -259,7 +277,7 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		log.Debugf("MPP: Ignoring credential with method=%s "+
 			"intent=%s", cred.Challenge.Method,
 			cred.Challenge.Intent)
-		return false
+		return false, ""
 	}
 
 	// Reconstruct the ChallengeParams from the echoed challenge to verify
@@ -267,13 +285,13 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 	params := cred.Challenge.ToChallengeParams()
 	if !mpp.VerifyChallengeID(a.hmacSecret, params, cred.Challenge.ID) {
 		log.Debugf("MPP: Challenge ID verification failed")
-		return false
+		return false, mpp.ProblemInvalidChallenge
 	}
 	if err := verifyMPPChallengeBinding(
 		cred.Challenge.Opaque, serviceName,
 	); err != nil {
 		log.Debugf("MPP: Challenge resource verification failed: %v", err)
-		return false
+		return false, mpp.ProblemInvalidChallenge
 	}
 
 	// Every challenge this authenticator mints carries an expiry, and the
@@ -288,36 +306,36 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 	// expiry would have to be remembered for all time.
 	if cred.Challenge.Expires == "" {
 		log.Debugf("MPP: Challenge carries no expiry")
-		return false
+		return false, mpp.ProblemInvalidChallenge
 	}
 
 	expiresAt, err := time.Parse(time.RFC3339, cred.Challenge.Expires)
 	if err != nil {
 		log.Debugf("MPP: Invalid expires format: %v", err)
-		return false
+		return false, mpp.ProblemInvalidChallenge
 	}
 	if time.Now().After(expiresAt) {
 		log.Debugf("MPP: Challenge expired at %v", expiresAt)
-		return false
+		return false, mpp.ProblemPaymentExpired
 	}
 
 	// Decode the charge payload to get the preimage.
 	var payload mpp.ChargePayload
 	if err := json.Unmarshal(cred.Payload, &payload); err != nil {
 		log.Debugf("MPP: Failed to decode charge payload: %v", err)
-		return false
+		return false, mpp.ProblemMalformedCredential
 	}
 
 	if payload.Preimage == "" {
 		log.Debugf("MPP: Missing preimage in payload")
-		return false
+		return false, mpp.ProblemMalformedCredential
 	}
 
 	// Parse the preimage from hex.
 	preimage, err := lntypes.MakePreimageFromStr(payload.Preimage)
 	if err != nil {
 		log.Debugf("MPP: Invalid preimage hex: %v", err)
-		return false
+		return false, mpp.ProblemMalformedCredential
 	}
 
 	// Decode the charge request to get the payment hash.
@@ -326,7 +344,7 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		cred.Challenge.Request, &chargeReq,
 	); err != nil {
 		log.Debugf("MPP: Failed to decode charge request: %v", err)
-		return false
+		return false, mpp.ProblemInvalidChallenge
 	}
 
 	// Get the payment hash from the charge request.
@@ -335,13 +353,13 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 	)
 	if err != nil {
 		log.Debugf("MPP: Invalid payment hash in request: %v", err)
-		return false
+		return false, mpp.ProblemInvalidChallenge
 	}
 
 	// Verify SHA256(preimage) == paymentHash.
 	if !preimage.Matches(paymentHash) {
 		log.Debugf("MPP: Preimage does not match payment hash")
-		return false
+		return false, mpp.ProblemVerificationFailed
 	}
 
 	// Verify the invoice is settled in the Lightning backend.
@@ -351,7 +369,7 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 	)
 	if err != nil {
 		log.Debugf("MPP: Invoice verification failed: %v", err)
-		return false
+		return false, mpp.ProblemVerificationFailed
 	}
 
 	// Everything above is a statement about the payment, and a payment that
@@ -379,7 +397,7 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		// cannot tell a first presentation from a replay.
 		log.Errorf("MPP: Unable to consume charge for payment hash "+
 			"%x: %v", paymentHash[:], err)
-		return false
+		return false, ""
 	}
 	if !consumed {
 		// On a metered service the credential is the key to a prepaid
@@ -398,13 +416,13 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 			log.Warnf("MPP: Refusing replayed charge credential "+
 				"for payment hash %x on service %s",
 				paymentHash[:], serviceName)
-			return false
+			return false, mpp.ProblemInvalidChallenge
 		}
 	}
 
 	log.Debugf("MPP: Charge credential accepted for service %s",
 		serviceName)
-	return true
+	return true, ""
 }
 
 // FreshChallengeHeader returns a WWW-Authenticate: Payment header containing a
