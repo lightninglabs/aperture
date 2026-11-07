@@ -205,6 +205,17 @@ Changes that need attention when upgrading from an earlier version:
   `OPTIONS *`).
 * A path containing a character that some backends normalize in a way that
   would change which resource it names is refused with 400.
+* `sqlite.dbfile`, `postgres.maxconnections` and `admin.corsorigin` are now
+  read from the config file. Startup fails if the config file uses the keys
+  that were read instead (`sqlite.databasefilename`,
+  `postgres.maxopenconnections`, `admin.corsorigins`), or if `sqlite.dbfile`
+  names a missing file while a database exists at `~/.aperture/aperture.db`.
+  Move that database, with its `-wal` and `-shm` files, to the configured
+  path, or remove `sqlite.dbfile`. `admin.corsorigin` must be a list: a single
+  string fails with `string was used where sequence is expected`.
+* `postgres.requireSSL`, from the old sample config, was never read, so
+  aperture connected to postgres without SSL. Startup now fails on it; use
+  `postgres.requiressl`, which requires SSL when set to `true`.
 
 ## Admin API
 
