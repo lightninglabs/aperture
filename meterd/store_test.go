@@ -309,6 +309,179 @@ func TestStoreReservation(t *testing.T) {
 	require.EqualValues(t, 60, available)
 }
 
+// newClockedStore returns a store with the given reservation TTL and a clock
+// the test controls.
+func newClockedStore(t *testing.T, ttl time.Duration) (*JSONStore,
+	*time.Time) {
+
+	t.Helper()
+
+	s, err := NewJSONStore(JSONStoreConfig{ReservationTTL: ttl})
+	require.NoError(t, err)
+
+	clock := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return clock }
+
+	return s, &clock
+}
+
+// TestStoreReservationExpiry checks that a leaked reservation expires on its own
+// age despite traffic, and younger ones stay.
+func TestStoreReservationExpiry(t *testing.T) {
+	t.Parallel()
+
+	const ttl = 30 * time.Minute
+	s, clock := newClockedStore(t, ttl)
+
+	_, err := s.Book("token", "gpt-test", 1000, 1500)
+	require.NoError(t, err)
+
+	// A request reserves 400 and its report never arrives.
+	_, _, err = s.Authorize("token", 400)
+	require.NoError(t, err)
+
+	// Short requests keep coming, and one long one stays in flight.
+	for i := 0; i < 2; i++ {
+		*clock = clock.Add(10 * time.Minute)
+		_, _, err = s.Authorize("token", 100)
+		require.NoError(t, err)
+		_, _, err = s.Debit("token", 0, 100)
+		require.NoError(t, err)
+	}
+	_, _, err = s.Authorize("token", 200)
+	require.NoError(t, err)
+
+	// Just inside the TTL the leak still holds its share.
+	*clock = clock.Add(10*time.Minute - time.Second)
+	available, _, err := s.Authorize("token", 0)
+	require.NoError(t, err)
+	require.EqualValues(t, 1000-400-200, available)
+
+	// At the TTL the leak goes; the live reservation stays.
+	*clock = clock.Add(time.Second)
+	available, _, err = s.Authorize("token", 0)
+	require.NoError(t, err)
+	require.EqualValues(t, 1000-200, available)
+
+	b, ok := s.Get("token")
+	require.True(t, ok)
+	require.EqualValues(t, 200, b.Reserved)
+}
+
+// TestStoreLateReleaseChangesNothing checks that a report arriving after its
+// reservation expired releases nothing.
+func TestStoreLateReleaseChangesNothing(t *testing.T) {
+	t.Parallel()
+
+	const ttl = 30 * time.Minute
+	s, clock := newClockedStore(t, ttl)
+
+	_, err := s.Book("token", "gpt-test", 1000, 1500)
+	require.NoError(t, err)
+
+	// A slow request reserves 300 and outlives the TTL.
+	_, _, err = s.Authorize("token", 300)
+	require.NoError(t, err)
+
+	*clock = clock.Add(ttl)
+	_, _, err = s.Authorize("token", 250)
+	require.NoError(t, err)
+	_, _, err = s.Authorize("token", 250)
+	require.NoError(t, err)
+
+	// Its late report debits but releases nothing.
+	after, _, err := s.Debit("token", 300, 300)
+	require.NoError(t, err)
+	require.EqualValues(t, 700, after.RemainingTokens)
+	require.EqualValues(t, 500, after.Reserved)
+
+	// A duplicate release of a live estimate releases one, not both.
+	after, _, err = s.Debit("token", 0, 250)
+	require.NoError(t, err)
+	require.EqualValues(t, 250, after.Reserved)
+	after, _, err = s.Debit("token", 0, 250)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, after.Reserved)
+	after, _, err = s.Debit("token", 0, 250)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, after.Reserved)
+}
+
+// TestStoreEqualEstimateReleasesOldest checks that a release matching several
+// reservations of the same size releases the oldest.
+func TestStoreEqualEstimateReleasesOldest(t *testing.T) {
+	t.Parallel()
+
+	const ttl = 30 * time.Minute
+	s, clock := newClockedStore(t, ttl)
+
+	_, err := s.Book("token", "gpt-test", 1000, 1500)
+	require.NoError(t, err)
+
+	_, _, err = s.Authorize("token", 100)
+	require.NoError(t, err)
+
+	*clock = clock.Add(20 * time.Minute)
+	_, _, err = s.Authorize("token", 100)
+	require.NoError(t, err)
+
+	// One of the two reports, releasing the older entry.
+	_, _, err = s.Debit("token", 0, 100)
+	require.NoError(t, err)
+
+	// The younger survivor outlives the older one's expiry.
+	*clock = clock.Add(10 * time.Minute)
+	available, _, err := s.Authorize("token", 0)
+	require.NoError(t, err)
+	require.EqualValues(t, 900, available)
+
+	*clock = clock.Add(20 * time.Minute)
+	available, _, err = s.Authorize("token", 0)
+	require.NoError(t, err)
+	require.EqualValues(t, 1000, available)
+}
+
+// TestStoreExpireStaleSweepsReservations checks that the janitor drops expired
+// reservations on an idle bundle.
+func TestStoreExpireStaleSweepsReservations(t *testing.T) {
+	t.Parallel()
+
+	const ttl = 30 * time.Minute
+	s, clock := newClockedStore(t, ttl)
+
+	_, err := s.Book("token", "gpt-test", 1000, 1500)
+	require.NoError(t, err)
+	_, _, err = s.Authorize("token", 400)
+	require.NoError(t, err)
+
+	*clock = clock.Add(ttl)
+	require.Zero(t, s.ExpireStale(time.Hour))
+
+	b, ok := s.Get("token")
+	require.True(t, ok)
+	require.Zero(t, b.Reserved)
+}
+
+// TestStoreReservationExpiryDisabled checks that a non-positive TTL keeps
+// reservations until released.
+func TestStoreReservationExpiryDisabled(t *testing.T) {
+	t.Parallel()
+
+	s, clock := newClockedStore(t, 0)
+
+	_, err := s.Book("token", "gpt-test", 100, 1500)
+	require.NoError(t, err)
+	_, _, err = s.Authorize("token", 100)
+	require.NoError(t, err)
+
+	*clock = clock.Add(24 * time.Hour)
+	require.Zero(t, s.ExpireStale(time.Hour))
+
+	available, _, err := s.Authorize("token", 100)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, available)
+}
+
 // TestStoreCoalescedPersistence verifies that bookings do not rewrite the state
 // file synchronously, that a debit flushes immediately, and that an explicit
 // flush drains pending state.

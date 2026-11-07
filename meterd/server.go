@@ -99,11 +99,18 @@ func NewServer(cfg *Config, opts ...ServerOption) (*Server, error) {
 			minEvictionAge = DefaultUnauthorizedBundleTTL
 		}
 
+		// Zero selects the default, negative disables expiry.
+		reservationTTL := cfg.ReservationTTL
+		if reservationTTL == 0 {
+			reservationTTL = DefaultReservationTTL
+		}
+
 		var err error
 		st, err = NewJSONStore(JSONStoreConfig{
 			StatePath:       cfg.StatePath,
 			MaxUnauthorized: cfg.MaxUnauthorizedBundles,
 			MinEvictionAge:  minEvictionAge,
+			ReservationTTL:  reservationTTL,
 		})
 		if err != nil {
 			return nil, err
@@ -209,7 +216,7 @@ func (s *Server) flusher() {
 }
 
 // janitor periodically expires bundles that were booked but never used by an
-// authorized request within the bundle TTL.
+// authorized request within the bundle TTL, and drops expired reservations.
 func (s *Server) janitor() {
 	defer s.wg.Done()
 
@@ -229,6 +236,11 @@ func (s *Server) janitor() {
 			return
 		}
 	}
+}
+
+// reservationsExpire reports whether leaked reservations are dropped.
+func (s *Server) reservationsExpire() bool {
+	return s.cfg.ReservationTTL >= 0
 }
 
 // unauthorizedBundleTTL returns how long a never-authorized bundle is retained
@@ -399,15 +411,28 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		}, nil
 	}
 
-	// The token is unknown or its bundle is spent. Quote the next bundle
-	// at the booked model's rate when known, otherwise at the rate of the
-	// model named in the request.
+	// The token is unknown, its bundle is spent, or its balance is
+	// reserved by requests in flight. Quote the next bundle at the booked
+	// model's rate, or else the requested model's.
 	reason := "unknown L402 token"
-	var model string
+	var (
+		model      string
+		retryLater bool
+	)
 	if found {
 		reason = "token bundle exhausted"
 		if b, ok := s.store.Get(req.TokenId); ok {
 			model = b.Model
+
+			// A funded bundle frees up once requests in flight
+			// settle, so tell the buyer to retry. Without expiry a
+			// leak would never clear, so quote instead.
+			if b.RemainingTokens > 0 && s.reservationsExpire() {
+				retryLater = true
+				reason = fmt.Sprintf("token bundle has %d tokens "+
+					"left, all reserved by in-flight "+
+					"requests", b.RemainingTokens)
+			}
 		}
 	}
 	if model == "" {
@@ -417,7 +442,10 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		model, _ = modelFromRequestText(req.HttpRequestText)
 	}
 
-	return s.denyAuthorization(req.TokenId, model, reason), nil
+	resp := s.denyAuthorization(req.TokenId, model, reason)
+	resp.RetryLater = retryLater
+
+	return resp, nil
 }
 
 // denyAuthorization builds a denial response quoting the price of a fresh
@@ -499,10 +527,9 @@ func (s *Server) ReportUsage(_ context.Context,
 	}
 
 	// Resolve the reservation to release up front, since an abandoned
-	// stream settles at exactly this estimate below. An exact release
-	// keeps mismatched estimates from accumulating into phantom exhaustion
-	// on a bundle with real balance left; the fallback covers reports
-	// predating the reservation echo.
+	// stream settles at exactly this estimate below. The store releases
+	// only a reservation of exactly this size; every aperture release
+	// echoes it, so the fallback is for other clients.
 	release := req.ReservedEstimate
 	if release <= 0 {
 		release = s.cfg.EstimatedTokens
