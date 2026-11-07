@@ -34,6 +34,14 @@ const (
 	// sooner than a paid, drawn-down bundle.
 	DefaultUnauthorizedBundleTTL = 10 * time.Minute
 
+	// DefaultReservationTTL is how long a reservation is held before it is
+	// presumed leaked and dropped.
+	DefaultReservationTTL = 30 * time.Minute
+
+	// MinReservationTTL is the shortest reservation TTL accepted, to catch
+	// a value given in the wrong unit.
+	MinReservationTTL = time.Minute
+
 	// MaxUsageTailBytes is the upper bound accepted for the configured
 	// usage tail size, guarding against an unbounded per-request capture.
 	MaxUsageTailBytes = 1 << 20
@@ -87,6 +95,11 @@ type Config struct {
 	// retained before the janitor reaps it. When zero, the default is
 	// used.
 	UnauthorizedBundleTTL time.Duration `yaml:"unauthorizedbundlettl" long:"unauthorizedbundlettl" description:"How long a never-authorized bundle is retained before it is reaped"`
+
+	// ReservationTTL is how long a reservation is held before it is
+	// presumed leaked and dropped. Zero uses the default, negative
+	// disables expiry. Only the built-in JSON store uses it.
+	ReservationTTL time.Duration `yaml:"reservationttl" long:"reservationttl" description:"How long a reservation is held before it is presumed leaked and dropped; negative disables"`
 
 	// Models maps a model identifier to its per-token rates.
 	Models map[string]*ModelConfig `yaml:"models"`
@@ -172,6 +185,12 @@ func (c *Config) validate() error {
 	if c.MaxUnauthorizedBundles < 0 {
 		return fmt.Errorf("maxunauthorizedbundles must not be "+
 			"negative, got %d", c.MaxUnauthorizedBundles)
+	}
+
+	if c.ReservationTTL > 0 && c.ReservationTTL < MinReservationTTL {
+		return fmt.Errorf("reservationttl must be at least %v, or "+
+			"negative to disable expiry, got %v",
+			MinReservationTTL, c.ReservationTTL)
 	}
 
 	if (c.TLSCertPath == "") != (c.TLSKeyPath == "") {

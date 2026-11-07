@@ -24,15 +24,16 @@ type Store interface {
 	Get(tokenID string) (Bundle, bool)
 
 	// Debit subtracts the actual tokens consumed from the token's
-	// balance, clamping at zero, and releases the given reservation
-	// estimate taken at authorization time. It returns a copy of the
-	// bundle after the debit and whether the token is known.
+	// balance, clamping at zero, and releases the reservation of the
+	// given estimate taken at authorization time, or nothing if none
+	// matches. It returns a copy of the bundle after the debit and whether
+	// the token is known.
 	Debit(tokenID string, tokens, releaseEstimate int64) (Bundle, bool,
 		error)
 
 	// ExpireStale removes bundles that were never used by an authorized
 	// request within the given TTL and returns the number of removed
-	// bundles.
+	// bundles. It should also drop reservations held past their TTL.
 	ExpireStale(ttl time.Duration) int
 
 	// Flush drains any pending state to durable storage. It is safe to
