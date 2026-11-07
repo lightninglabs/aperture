@@ -35,6 +35,17 @@ insecure: false
 # "missing selected ALPN property". With TCP passthrough, aperture negotiates
 # ALPN directly.
 
+# Inbound PROXY protocol v2 from a trusted TCP load balancer. When enabled,
+# every connection on listenaddr must send a v2 preamble before HTTP or TLS.
+# Keep the actual sender IP/CIDR allowlist narrow and restrict network access.
+# Local REST gateways also need their actual source IP in trustedproxies.
+# The embedded dashboard is unavailable through this listener when enabled.
+# See docs/proxy-protocol.md for HAProxy and health-check configuration.
+proxyprotocol:
+  enabled: false
+  trustedproxies: []
+  headertimeout: 5s
+
 # Whether we should verify the invoice status strictly or not. If set to true,
 # then this requires all invoices to be read from disk at start up.
 strictverify: false

@@ -554,6 +554,14 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 		}
 	}
 
+	// Wrap only the public listener, before ServeTLS adds its TLS layer.
+	// The onion listener and auxiliary servers retain their own transports.
+	if a.cfg.ProxyProtocol != nil && a.cfg.ProxyProtocol.Enabled {
+		serveFn = func() error {
+			return serveProxyProtocol(a.httpsServer, a.cfg)
+		}
+	}
+
 	// Finally run the server.
 	log.Infof("Starting the server, listening on %s.", a.cfg.ListenAddr)
 
@@ -1165,7 +1173,7 @@ func createAdminServer(cfg *Config,
 	mux := gateway.NewServeMux(customMarshalerOption)
 	err = adminrpc.RegisterAdminHandlerFromEndpoint(
 		ctxc, mux, dialAddr, []grpc.DialOption{
-			restProxyTLSOpt,
+			restProxyTLSOpt, proxyProtocolDialOption(cfg),
 		},
 	)
 	if err != nil {
@@ -1214,36 +1222,6 @@ func createAdminServer(cfg *Config,
 		// reach the admin REST API. The Go server strips this prefix
 		// and forwards internally to adminRESTPrefix.
 		const dashboardProxyPrefix = "/api/proxy/"
-
-		// requireLoopback rejects requests that do not originate
-		// from a loopback address (127.0.0.1 / ::1). The
-		// dashboard proxy injects admin credentials server-side,
-		// so it must only be accessible locally.
-		requireLoopback := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(
-				func(w http.ResponseWriter, r *http.Request) {
-					host, _, err := net.SplitHostPort(
-						r.RemoteAddr,
-					)
-					if err != nil {
-						http.Error(
-							w, "forbidden",
-							http.StatusForbidden,
-						)
-						return
-					}
-					ip := net.ParseIP(host)
-					if ip == nil || !ip.IsLoopback() {
-						http.Error(
-							w, "forbidden",
-							http.StatusForbidden,
-						)
-						return
-					}
-					next.ServeHTTP(w, r)
-				},
-			)
-		}
 
 		// addSecurityHeaders wraps a handler to set standard
 		// browser security headers on every response.
@@ -1995,7 +1973,7 @@ func createHashMailServer(cfg *Config) ([]proxy.LocalService, func(), error) {
 	mux := gateway.NewServeMux(customMarshalerOption)
 	err := hashmailrpc.RegisterHashMailHandlerFromEndpoint(
 		ctxc, mux, cfg.ListenAddr, []grpc.DialOption{
-			restProxyTLSOpt,
+			restProxyTLSOpt, proxyProtocolDialOption(cfg),
 		},
 	)
 	if err != nil {
@@ -2040,6 +2018,40 @@ func cleanup(server io.Closer, proxy io.Closer) {
 	if err != nil {
 		log.Errorf("Could not close log rotator: %v", err)
 	}
+}
+
+// requireLoopback restricts the dashboard and its credential-injecting proxy to
+// direct loopback connections. Forwarded addresses never grant local access.
+func requireLoopback(next http.Handler) http.Handler {
+	return http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Forwarded loopback addresses do not grant
+			// access to server-side admin credentials.
+			if isProxyProtocolRequest(r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			host, _, err := net.SplitHostPort(
+				r.RemoteAddr,
+			)
+			if err != nil {
+				http.Error(
+					w, "forbidden",
+					http.StatusForbidden,
+				)
+				return
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || !ip.IsLoopback() {
+				http.Error(
+					w, "forbidden",
+					http.StatusForbidden,
+				)
+				return
+			}
+			next.ServeHTTP(w, r)
+		},
+	)
 }
 
 // allowCORS wraps the given http.Handler with a function that adds the

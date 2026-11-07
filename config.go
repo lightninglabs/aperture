@@ -225,10 +225,25 @@ type AdminConfig struct {
 	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
 }
 
+// ProxyProtocolConfig controls inbound PROXY protocol v2 on the public listener.
+type ProxyProtocolConfig struct {
+	// Enabled requires a PROXY v2 header on every public connection.
+	Enabled bool `long:"enabled" description:"Require inbound PROXY protocol v2 on the public listener."`
+
+	// TrustedProxies lists the actual TCP peers allowed to supply headers.
+	TrustedProxies []string `long:"trustedproxy" description:"Trusted PROXY protocol sender IP or CIDR (repeatable)."`
+
+	// HeaderTimeout bounds the time spent reading the complete preamble.
+	HeaderTimeout time.Duration `long:"headertimeout" description:"Maximum time to read a PROXY protocol header."`
+}
+
 type Config struct {
 	// ListenAddr is the listening address that we should use to allow Aperture
 	// to listen for requests.
 	ListenAddr string `long:"listenaddr" description:"The interface we should listen on for client requests."`
+
+	// ProxyProtocol configures the public listener's PROXY v2 receiver.
+	ProxyProtocol *ProxyProtocolConfig `group:"proxyprotocol" namespace:"proxyprotocol"`
 
 	// ServerName can be set to a fully qualifying domain name that should
 	// be used while creating a certificate through Let's Encrypt.
@@ -335,6 +350,10 @@ type Config struct {
 }
 
 func (c *Config) validate() error {
+	if _, err := proxyProtocolNetworks(c.ProxyProtocol); err != nil {
+		return err
+	}
+
 	if !c.Authenticator.Disable {
 		if err := c.Authenticator.validate(); err != nil {
 			return err
@@ -375,6 +394,9 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
+		ProxyProtocol: &ProxyProtocolConfig{
+			HeaderTimeout: 5 * time.Second,
+		},
 		DatabaseBackend:  "etcd",
 		Etcd:             &EtcdConfig{},
 		Sqlite:           DefaultSqliteConfig(),
