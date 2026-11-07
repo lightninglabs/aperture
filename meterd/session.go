@@ -14,9 +14,9 @@ import (
 // Where GetPrice quotes a whole token bundle, this quotes the single request in
 // hand, at the same blended per-token rate the bundle is priced at. The
 // estimate is the request's max_tokens when it declares one and the configured
-// default otherwise, which is the same estimate the L402 path reserves against
-// a bundle. A session and a bundle therefore charge the same rate for the same
-// work; what differs is only who holds the balance.
+// default otherwise, the completion part of a bundle reservation. A session
+// and a bundle charge the same rate for the same work; what differs is only
+// who holds the balance.
 //
 // Nothing is booked or reserved here. The session's balance lives in aperture,
 // which deducts this estimate itself and refunds whatever is left when the

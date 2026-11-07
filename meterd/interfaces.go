@@ -13,31 +13,63 @@ type Store interface {
 	// created.
 	Book(tokenID, model string, tokens, priceSats int64) (bool, error)
 
-	// Authorize marks the token's bundle as used and, when the request
-	// is going to be allowed, reserves the given estimated per-request
-	// cost against its balance to bound concurrent overdraw. It returns
-	// the tokens available after existing reservations and whether the
-	// token is known.
-	Authorize(tokenID string, estimate int64) (int64, bool, error)
+	// Authorize marks the token's bundle as used and atomically decides,
+	// by AdmitReservation, whether a request reserving the estimate is
+	// admitted, reserving it only if so. It returns the outcome and
+	// whether the token is known.
+	Authorize(tokenID string, estimate int64) (Authorization, bool, error)
 
 	// Get returns a copy of the token's bundle.
 	Get(tokenID string) (Bundle, bool)
 
 	// Debit subtracts the actual tokens consumed from the token's
-	// balance, clamping at zero, and releases the given reservation
-	// estimate taken at authorization time. It returns a copy of the
-	// bundle after the debit and whether the token is known.
+	// balance, clamping at zero, and releases the reservation of the
+	// given estimate taken at authorization time, or nothing if none
+	// matches. It returns a copy of the bundle after the debit and whether
+	// the token is known.
 	Debit(tokenID string, tokens, releaseEstimate int64) (Bundle, bool,
 		error)
 
 	// ExpireStale removes bundles that were never used by an authorized
 	// request within the given TTL and returns the number of removed
-	// bundles.
+	// bundles. It should also drop reservations held past their TTL.
 	ExpireStale(ttl time.Duration) int
 
 	// Flush drains any pending state to durable storage. It is safe to
 	// call on an unchanged store.
 	Flush() error
+}
+
+// Authorization is the outcome of a Store.Authorize call.
+type Authorization struct {
+	// Remaining is the bundle's unspent balance at decision time.
+	Remaining int64
+
+	// Available is Remaining minus other in-flight reservations.
+	Available int64
+
+	// Admitted is whether the request may proceed, and so whether its
+	// estimate was reserved.
+	Admitted bool
+}
+
+// AdmitReservation reports whether a request reserving estimate tokens may
+// proceed. It is admitted when the balance left after in-flight reservations
+// covers it, or when nothing else is in flight and any balance is left, so a
+// remainder is not stranded. Stores apply it under their own lock.
+//
+// The estimate only bounds a request's cost when it has a max_tokens the
+// price server could read.
+func AdmitReservation(remaining, reserved, estimate int64) bool {
+	if remaining <= 0 {
+		return false
+	}
+
+	if reserved <= 0 {
+		return true
+	}
+
+	return remaining-reserved >= estimate
 }
 
 // A compile-time check that JSONStore satisfies Store.

@@ -24,6 +24,11 @@ const (
 	// overdraw.
 	DefaultEstimatedTokens = 4_096
 
+	// DefaultPromptBytesPerToken is the body bytes counted as one prompt
+	// token. One is an upper bound for text under byte-level BPE, but not
+	// for inputs the upstream expands, such as images.
+	DefaultPromptBytesPerToken = 1
+
 	// DefaultMaxUnauthorizedBundles caps the number of never-authorized
 	// (un-paid) bundles retained at once, bounding the state an
 	// unauthenticated challenge-mint spammer can accumulate.
@@ -33,6 +38,14 @@ const (
 	// retained before the janitor reaps it. Un-paid mint spam is reaped far
 	// sooner than a paid, drawn-down bundle.
 	DefaultUnauthorizedBundleTTL = 10 * time.Minute
+
+	// DefaultReservationTTL is how long a reservation is held before it is
+	// presumed leaked and dropped.
+	DefaultReservationTTL = 30 * time.Minute
+
+	// MinReservationTTL is the shortest reservation TTL accepted, to catch
+	// a value given in the wrong unit.
+	MinReservationTTL = time.Minute
 
 	// MaxUsageTailBytes is the upper bound accepted for the configured
 	// usage tail size, guarding against an unbounded per-request capture.
@@ -79,6 +92,11 @@ type Config struct {
 	// concurrent overdraw on a near-empty bundle.
 	EstimatedTokens int64 `yaml:"estimatedtokens" long:"estimatedtokens" description:"Per-request token estimate reserved on authorization to bound concurrent overdraw"`
 
+	// PromptBytesPerToken is the body bytes counted as one prompt token.
+	// Raising it trades overdraw protection for concurrency. Zero uses the
+	// default.
+	PromptBytesPerToken int64 `yaml:"promptbytespertoken" long:"promptbytespertoken" description:"Request body bytes counted as one prompt token when sizing the reservation"`
+
 	// MaxUnauthorizedBundles caps the number of never-authorized (un-paid)
 	// bundles retained at once. When zero, the default is used.
 	MaxUnauthorizedBundles int `yaml:"maxunauthorizedbundles" long:"maxunauthorizedbundles" description:"Maximum number of never-authorized bundles retained, bounding challenge-mint spam"`
@@ -87,6 +105,11 @@ type Config struct {
 	// retained before the janitor reaps it. When zero, the default is
 	// used.
 	UnauthorizedBundleTTL time.Duration `yaml:"unauthorizedbundlettl" long:"unauthorizedbundlettl" description:"How long a never-authorized bundle is retained before it is reaped"`
+
+	// ReservationTTL is how long a reservation is held before it is
+	// presumed leaked and dropped. Zero uses the default, negative
+	// disables expiry. Only the built-in JSON store uses it.
+	ReservationTTL time.Duration `yaml:"reservationttl" long:"reservationttl" description:"How long a reservation is held before it is presumed leaked and dropped; negative disables"`
 
 	// Models maps a model identifier to its per-token rates.
 	Models map[string]*ModelConfig `yaml:"models"`
@@ -110,6 +133,7 @@ func NewConfig() *Config {
 		ListenAddr:             DefaultListenAddr,
 		BundleTokens:           DefaultBundleTokens,
 		EstimatedTokens:        DefaultEstimatedTokens,
+		PromptBytesPerToken:    DefaultPromptBytesPerToken,
 		MaxUnauthorizedBundles: DefaultMaxUnauthorizedBundles,
 	}
 }
@@ -169,9 +193,20 @@ func (c *Config) validate() error {
 			"%d", c.EstimatedTokens)
 	}
 
+	if c.PromptBytesPerToken < 0 {
+		return fmt.Errorf("promptbytespertoken must not be negative, "+
+			"got %d", c.PromptBytesPerToken)
+	}
+
 	if c.MaxUnauthorizedBundles < 0 {
 		return fmt.Errorf("maxunauthorizedbundles must not be "+
 			"negative, got %d", c.MaxUnauthorizedBundles)
+	}
+
+	if c.ReservationTTL > 0 && c.ReservationTTL < MinReservationTTL {
+		return fmt.Errorf("reservationttl must be at least %v, or "+
+			"negative to disable expiry, got %v",
+			MinReservationTTL, c.ReservationTTL)
 	}
 
 	if (c.TLSCertPath == "") != (c.TLSKeyPath == "") {
