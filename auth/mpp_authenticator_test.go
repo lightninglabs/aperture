@@ -517,7 +517,7 @@ func TestMPPAuthenticatorFreshChallengeHeader(t *testing.T) {
 	expiresAt, err := time.Parse(time.RFC3339, params.Expires)
 	require.NoError(t, err)
 	require.WithinDuration(
-		t, time.Now().Add(defaultChallengeExpiry), expiresAt,
+		t, time.Now().Add(DefaultChallengeExpiry), expiresAt,
 		time.Minute,
 	)
 
@@ -1003,4 +1003,146 @@ func TestMPPAuthenticatorReceiptForgedCredential(t *testing.T) {
 
 	// Sanity check: the honest credential still earns a receipt.
 	require.NotNil(t, auth.ReceiptHeader(&h, "test-service"))
+}
+
+// TestMPPAuthenticatorChallengeExpiryValidation verifies that only positive
+// expiries up to the cap are accepted, and that 30 days works.
+func TestMPPAuthenticatorChallengeExpiryValidation(t *testing.T) {
+	auth, _ := newTestChargeAuth(
+		t, &mockChallenger{}, newMockInvoiceChecker(),
+	)
+
+	require.Error(t, auth.SetChallengeExpiry(0))
+	require.Error(t, auth.SetChallengeExpiry(-time.Minute))
+	require.Error(t, auth.SetChallengeExpiry(MaxChallengeExpiry+1))
+	require.NoError(t, auth.SetChallengeExpiry(30*24*time.Hour))
+	require.NoError(t, auth.SetChallengeExpiry(MaxChallengeExpiry))
+}
+
+// TestMPPAuthenticatorChallengeExpiryMintsAndBounds verifies that the
+// configured expiry is what a fresh challenge carries, that a metered
+// credential is accepted again past the old default but inside the
+// configured expiry, and that it is refused after the configured expiry.
+func TestMPPAuthenticatorChallengeExpiryMintsAndBounds(t *testing.T) {
+	const expiry = 30 * 24 * time.Hour
+
+	start := time.Now()
+	now := start
+
+	preimage, paymentHash := testPreimageAndHash(t)
+	checker := newMockInvoiceChecker()
+	checker.settledHashes[paymentHash] = true
+
+	auth, _ := newTestChargeAuth(t, &mockChallenger{
+		paymentRequest: "lnbcrt1000n1ptest...",
+		paymentHash:    paymentHash,
+	}, checker)
+	auth.now = func() time.Time { return now }
+	require.NoError(t, auth.SetChallengeExpiry(expiry))
+	auth.SetReusableChargePolicy(func(name string) bool {
+		return name == "test-service"
+	})
+
+	// Mint a real challenge and answer it with the preimage.
+	header, err := auth.FreshChallengeHeader("test-service", 100)
+	require.NoError(t, err)
+	params, err := mpp.ParseChallengeHeader(
+		header.Values("WWW-Authenticate")[0],
+	)
+	require.NoError(t, err)
+	expiresAt, err := time.Parse(time.RFC3339, params.Expires)
+	require.NoError(t, err)
+	require.WithinDuration(t, start.Add(expiry), expiresAt, 2*time.Second)
+
+	cred := buildTestCredential(t, mpp.ChallengeEcho{
+		ID:      params.ID,
+		Realm:   params.Realm,
+		Method:  params.Method,
+		Intent:  params.Intent,
+		Request: params.Request,
+		Expires: params.Expires,
+		Opaque:  params.Opaque,
+	}, preimage)
+
+	// First use, then re-presented well past the old 15 minute default
+	// but inside the configured expiry.
+	h := cred.Clone()
+	require.True(t, auth.Accept(&h, "test-service"))
+
+	now = start.Add(DefaultChallengeExpiry + time.Hour)
+	h = cred.Clone()
+	require.True(t, auth.Accept(&h, "test-service"))
+
+	now = start.Add(expiry - time.Hour)
+	h = cred.Clone()
+	require.True(t, auth.Accept(&h, "test-service"))
+
+	// Past the configured expiry the credential is refused.
+	now = start.Add(expiry + time.Minute)
+	h = cred.Clone()
+	require.False(t, auth.Accept(&h, "test-service"))
+}
+
+// TestMPPAuthenticatorLongExpiryStaysSingleUse verifies that a long expiry
+// does not let a charge credential be replayed on a service the reusable
+// policy does not name, at any point inside its validity window.
+func TestMPPAuthenticatorLongExpiryStaysSingleUse(t *testing.T) {
+	const expiry = 30 * 24 * time.Hour
+
+	start := time.Now()
+	now := start
+
+	preimage, paymentHash := testPreimageAndHash(t)
+	checker := newMockInvoiceChecker()
+	checker.settledHashes[paymentHash] = true
+
+	auth, store := newTestChargeAuth(t, &mockChallenger{
+		paymentRequest: "lnbcrt1000n1ptest...",
+		paymentHash:    paymentHash,
+	}, checker)
+	auth.now = func() time.Time { return now }
+	require.NoError(t, auth.SetChallengeExpiry(expiry))
+
+	// Only a different service is metered, so this one is strict.
+	auth.SetReusableChargePolicy(func(name string) bool {
+		return name == "metered-service"
+	})
+
+	header, err := auth.FreshChallengeHeader("test-service", 100)
+	require.NoError(t, err)
+	params, err := mpp.ParseChallengeHeader(
+		header.Values("WWW-Authenticate")[0],
+	)
+	require.NoError(t, err)
+	cred := buildTestCredential(t, mpp.ChallengeEcho{
+		ID:      params.ID,
+		Realm:   params.Realm,
+		Method:  params.Method,
+		Intent:  params.Intent,
+		Request: params.Request,
+		Expires: params.Expires,
+		Opaque:  params.Opaque,
+	}, preimage)
+
+	h := cred.Clone()
+	require.True(t, auth.Accept(&h, "test-service"))
+
+	// Replays are refused immediately, past the old default, and just
+	// before the long expiry.
+	for _, d := range []time.Duration{
+		0, DefaultChallengeExpiry + time.Minute, expiry - time.Minute,
+	} {
+		now = start.Add(d)
+		h = cred.Clone()
+		require.False(t, auth.Accept(&h, "test-service"))
+	}
+
+	// The consumption record survives a prune run well past the old
+	// default, because it is kept until the challenge's own expiry plus
+	// the retention margin.
+	now = start.Add(DefaultChallengeExpiry + 2*time.Hour)
+	auth.prune()
+	require.True(t, store.isConsumed(paymentHash))
+	h = cred.Clone()
+	require.False(t, auth.Accept(&h, "test-service"))
 }

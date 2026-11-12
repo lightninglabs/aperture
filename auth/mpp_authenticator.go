@@ -54,6 +54,10 @@ type MPPAuthenticator struct {
 	// challengeExpiry is the duration after which a challenge expires.
 	challengeExpiry time.Duration
 
+	// now returns the current time. It is a field so tests can move the
+	// clock without sleeping.
+	now func() time.Time
+
 	// chargeStore remembers which payments have already bought a request,
 	// which is what keeps a credential from being replayed. It is never
 	// nil: an authenticator without one would serve every replay, so the
@@ -95,8 +99,14 @@ var _ Authenticator = (*MPPAuthenticator)(nil)
 var _ ReceiptProvider = (*MPPAuthenticator)(nil)
 
 const (
-	// defaultChallengeExpiry is the default challenge expiration duration.
-	defaultChallengeExpiry = 15 * time.Minute
+	// DefaultChallengeExpiry is the default challenge expiration duration.
+	DefaultChallengeExpiry = 15 * time.Minute
+
+	// MaxChallengeExpiry is the longest challenge expiry that can be
+	// configured. It is far above any realistic service timeout, and
+	// exists to catch a unit typo such as hours written as days rather
+	// than to ration anything: a consumption record costs one row.
+	MaxChallengeExpiry = 365 * 24 * time.Hour
 
 	// defaultPruneInterval is how often the authenticator sweeps
 	// consumption records whose challenges can no longer be presented.
@@ -141,7 +151,8 @@ func NewMPPAuthenticator(challenger mint.Challenger, checker InvoiceChecker,
 		realm:           realm,
 		hmacSecret:      hmacSecret,
 		network:         network,
-		challengeExpiry: defaultChallengeExpiry,
+		challengeExpiry: DefaultChallengeExpiry,
+		now:             time.Now,
 		chargeStore:     chargeStore,
 		pruneInterval:   defaultPruneInterval,
 		retentionMargin: defaultRetentionMargin,
@@ -162,6 +173,41 @@ func (a *MPPAuthenticator) SetReusableChargePolicy(
 	policy func(serviceName string) bool) {
 
 	a.reusableChargePolicy = policy
+}
+
+// ValidateChallengeExpiry reports whether d is a usable challenge expiry.
+func ValidateChallengeExpiry(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("MPP challenge expiry must be positive, "+
+			"got %v", d)
+	}
+	if d > MaxChallengeExpiry {
+		return fmt.Errorf("MPP challenge expiry %v exceeds the "+
+			"maximum of %v", d, MaxChallengeExpiry)
+	}
+
+	return nil
+}
+
+// SetChallengeExpiry sets how long a freshly minted challenge, and so the
+// credential that answers it, stays presentable. It is meant to be called
+// once, between construction and Start.
+//
+// A metered service wants this near its service timeout: the credential is
+// the key to a prepaid bundle and cannot be presented after its challenge
+// expires, so a short expiry strands whatever part of the bundle is unspent.
+// A longer expiry does not weaken replay protection. A consumption record is
+// stored with the expiry of the challenge it records and is pruned only once
+// that expiry plus the retention margin has passed, so records live exactly
+// as long as the challenges they guard, and a single-use credential is
+// refused on its second presentation however long it remains valid.
+func (a *MPPAuthenticator) SetChallengeExpiry(d time.Duration) error {
+	if err := ValidateChallengeExpiry(d); err != nil {
+		return err
+	}
+	a.challengeExpiry = d
+
+	return nil
 }
 
 func (a *MPPAuthenticator) Start() {
@@ -215,7 +261,7 @@ func (a *MPPAuthenticator) prune() {
 	// reaches the store. So a record whose expiry is far enough in the past
 	// cannot change any future answer, and dropping it cannot open a
 	// replay.
-	cutoff := time.Now().UTC().Add(-a.retentionMargin)
+	cutoff := a.now().UTC().Add(-a.retentionMargin)
 
 	pruned, err := a.chargeStore.PruneConsumedCharges(ctx, cutoff)
 	if err != nil {
@@ -296,7 +342,7 @@ func (a *MPPAuthenticator) Accept(header *http.Header,
 		log.Debugf("MPP: Invalid expires format: %v", err)
 		return false
 	}
-	if time.Now().After(expiresAt) {
+	if a.now().After(expiresAt) {
 		log.Debugf("MPP: Challenge expired at %v", expiresAt)
 		return false
 	}
@@ -449,7 +495,7 @@ func (a *MPPAuthenticator) FreshChallengeHeader(serviceName string,
 	}
 
 	// Build challenge params with expiry.
-	expires := time.Now().Add(a.challengeExpiry).UTC().Format(
+	expires := a.now().Add(a.challengeExpiry).UTC().Format(
 		time.RFC3339,
 	)
 	params := &mpp.ChallengeParams{
