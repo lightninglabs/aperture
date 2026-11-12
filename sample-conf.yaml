@@ -156,8 +156,9 @@ dbbackend: "sqlite"
 # retrieve token information.
 sqlite:
     # The full path to the database. Defaults to aperture.db in the aperture
-    # data directory (~/.aperture on Linux), even when basedir is set.
-    # dbfile: "/path/to/.aperture/aperture.db"
+    # data directory, even when basedir is set. The location of that directory
+    # depends on the platform.
+    # dbfile: "/path/to/aperture.db"
 
     # Skip applying migrations on startup.
     skipmigrations: false
