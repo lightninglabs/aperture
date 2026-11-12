@@ -42,6 +42,7 @@ var _ Authenticator = (*MultiAuthenticator)(nil)
 var _ ReceiptProvider = (*MultiAuthenticator)(nil)
 var _ PricedChallenger = (*MultiAuthenticator)(nil)
 var _ SessionSettler = (*MultiAuthenticator)(nil)
+var _ ProblemAuthenticator = (*MultiAuthenticator)(nil)
 
 // NewMultiAuthenticator creates a new MultiAuthenticator that tries each
 // authenticator in order.
@@ -69,17 +70,53 @@ func (m *MultiAuthenticator) Accept(header *http.Header,
 func (m *MultiAuthenticator) AcceptForScheme(header *http.Header,
 	serviceName string, scheme string) bool {
 
+	accepted, _ := m.AcceptForSchemeWithProblem(header, serviceName, scheme)
+	return accepted
+}
+
+// AcceptWithProblem is Accept that also returns the problem type of the first
+// wrapped authenticator that refused a credential it handles. It delegates to
+// AcceptForSchemeWithProblem with an empty scheme, which tries all
+// authenticators.
+//
+// NOTE: This is part of the ProblemAuthenticator interface.
+func (m *MultiAuthenticator) AcceptWithProblem(header *http.Header,
+	serviceName string) (bool, string) {
+
+	return m.AcceptForSchemeWithProblem(header, serviceName, "")
+}
+
+// AcceptForSchemeWithProblem is AcceptForScheme that also returns, when no
+// matching authenticator accepts the request, the problem type of the first one
+// that refused a credential it handles. Authenticators that do not implement
+// ProblemAuthenticator never supply a problem type.
+func (m *MultiAuthenticator) AcceptForSchemeWithProblem(header *http.Header,
+	serviceName string, scheme string) (bool, string) {
+
+	var problem string
 	for _, a := range m.authenticators {
 		if !schemeMatches(a, scheme) {
 			continue
 		}
 
-		if a.Accept(header, serviceName) {
-			return true
+		pa, ok := a.(ProblemAuthenticator)
+		if !ok {
+			if a.Accept(header, serviceName) {
+				return true, ""
+			}
+			continue
+		}
+
+		accepted, p := pa.AcceptWithProblem(header, serviceName)
+		if accepted {
+			return true, ""
+		}
+		if problem == "" {
+			problem = p
 		}
 	}
 
-	return false
+	return false, problem
 }
 
 // schemeMatches returns true if the authenticator should be used for the given
