@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"encoding/json"
 
+	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/aperture/pricer"
@@ -1073,4 +1075,95 @@ func TestMeteringSeesEveryL402HeaderForm(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, hash, got)
 		})
+}
+
+// slowReportPricer is a metered pricer whose usage reports take a while to
+// land, standing in for a price server across a network hop.
+type slowReportPricer struct {
+	*fakeMeteredPricer
+
+	delay    time.Duration
+	reported atomic.Bool
+}
+
+func (s *slowReportPricer) ReportUsage(ctx context.Context,
+	usage *pricer.Usage) error {
+
+	time.Sleep(s.delay)
+	s.reported.Store(true)
+
+	return s.fakeMeteredPricer.ReportUsage(ctx, usage)
+}
+
+// TestMeteredResponseEndsAfterUsageReport checks that a metered response does
+// not finish before its usage report has landed. The report is what releases
+// the request's reservation, so a buyer that sends its next request as soon
+// as the previous response ends would otherwise find that reservation still
+// held and, in the second half of a bundle, be told to retry later.
+func TestMeteredResponseEndsAfterUsageReport(t *testing.T) {
+	t.Parallel()
+
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(
+				w, `{"usage":{"total_tokens":9}}`,
+			)
+		},
+	))
+	t.Cleanup(backend.Close)
+
+	token := newPublicAuthToken(t, 7)
+	authenticator := &publicAuthRecorder{
+		scheme:   auth.AuthSchemeL402,
+		accepted: map[l402.TokenID]bool{token.id: true},
+	}
+
+	fake := newFakeMeteredPricer()
+	fake.authorizeResult = &pricer.AuthorizeResult{
+		Allowed:          true,
+		ReservedEstimate: 10,
+	}
+	slow := &slowReportPricer{
+		fakeMeteredPricer: fake,
+		delay:             200 * time.Millisecond,
+	}
+
+	service := &Service{
+		Name:       "inference",
+		Auth:       "on",
+		HostRegexp: ".*",
+		Address:    strings.TrimPrefix(backend.URL, "http://"),
+		Protocol:   "http",
+	}
+	p, err := New(authenticator, []*Service{service}, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Close())
+	})
+
+	// The pricer is swapped in after New so it is not dialed.
+	service.pricer = slow
+	service.DynamicPrice.Enabled = true
+	service.DynamicPrice.Metered = true
+
+	req := httptest.NewRequest(
+		http.MethodPost, "http://proxy/v1/chat/completions",
+		strings.NewReader(`{"model":"m"}`),
+	)
+	req.RemoteAddr = "192.0.2.1:1234"
+	req.Header = token.header.Clone()
+	recorder := httptest.NewRecorder()
+	p.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "total_tokens")
+
+	// By the time the handler has returned, and so the client has the
+	// whole response, the reservation must already be released.
+	require.True(t, slow.reported.Load())
+
+	usage := <-fake.usageReports
+	require.True(t, usage.Complete)
+	require.EqualValues(t, 10, usage.ReservedEstimate)
 }

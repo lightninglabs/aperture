@@ -562,7 +562,7 @@ func releaseReservation(info *meteringInfo, httpStatus int) {
 		ReservedEstimate: info.reservedEstimate,
 	}
 
-	go reportUsageWithRetry(info.pricer, usage, defaultReportSchedule)
+	reportUsage(info.pricer, usage, defaultReportSchedule)
 }
 
 // usageObservingBody wraps a response body, captures a bounded tail of the
@@ -612,8 +612,55 @@ func (b *usageObservingBody) report(complete bool) {
 		usage.Complete = complete
 		usage.ResponseTail = b.tail.Bytes()
 
-		go reportUsageWithRetry(b.info.pricer, &usage, b.schedule)
+		reportUsage(b.info.pricer, &usage, b.schedule)
 	})
+}
+
+// reportUsage makes the first usage report attempt inline and hands any
+// retries to a goroutine.
+//
+// It runs on the handler goroutine, from the body read that hits EOF or from
+// the close that follows the copy, so the response does not end until the
+// first attempt is done. The report is what releases the request's
+// reservation, and a buyer that sends its next request as soon as the
+// previous response ends would otherwise race it: with the reservation still
+// held, a bundle in its second half reads as fully reserved and the buyer is
+// told to retry later. A failed attempt only delays the response by that one
+// attempt; the retries keep their backoff and run detached.
+func reportUsage(mp pricer.MeteredPricer, usage *pricer.Usage,
+	schedule reportSchedule) {
+
+	err := sendUsageReport(mp, usage)
+	if err == nil {
+		return
+	}
+
+	log.Warnf("Usage report for token %s failed on attempt 1/%d: %v",
+		usage.TokenID, schedule.maxAttempts, err)
+
+	if schedule.maxAttempts <= 1 {
+		log.Errorf("Giving up reporting usage for token %s after 1 "+
+			"attempt, this debit is lost: %v", usage.TokenID, err)
+
+		return
+	}
+
+	go func() {
+		time.Sleep(schedule.initialBackoff)
+		reportUsageWithRetry(mp, usage, reportSchedule{
+			maxAttempts:    schedule.maxAttempts - 1,
+			initialBackoff: 2 * schedule.initialBackoff,
+		})
+	}()
+}
+
+// sendUsageReport makes a single usage report attempt, bounded by the report
+// timeout.
+func sendUsageReport(mp pricer.MeteredPricer, usage *pricer.Usage) error {
+	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
+	defer cancel()
+
+	return mp.ReportUsage(ctx, usage)
 }
 
 // reportUsageWithRetry reports usage to the pricer, retrying with exponential
@@ -628,14 +675,7 @@ func reportUsageWithRetry(mp pricer.MeteredPricer, usage *pricer.Usage,
 
 	var err error
 	for attempt := 1; attempt <= schedule.maxAttempts; attempt++ {
-		func() {
-			ctx, cancel := context.WithTimeout(
-				context.Background(), reportTimeout,
-			)
-			defer cancel()
-
-			err = mp.ReportUsage(ctx, usage)
-		}()
+		err = sendUsageReport(mp, usage)
 		if err == nil {
 			return
 		}

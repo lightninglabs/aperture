@@ -84,7 +84,10 @@ From then on, every authenticated request runs the same loop:
    prompt/completion split is known, the debit is weighted by direction, so an
    all-output workload pays the output rate rather than hiding behind the
    blend. The division rounds up: the msat value drawn from the bundle always
-   covers the msat value served.
+   covers the msat value served. Aperture makes the first report attempt
+   before the response ends, so a buyer that sends its next request as soon
+   as the previous one finishes finds that reservation already released;
+   only retries of a failed report run in the background.
 
 A usage report can be lost (aperture gives up retrying, or restarts mid
 request), which would hold its reservation until meterd restarts. So a
