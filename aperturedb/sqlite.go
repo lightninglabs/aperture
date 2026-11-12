@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,10 +104,16 @@ func NewSqliteStore(cfg *SqliteConfig) (*SqliteStore, error) {
 	// Construct the DSN which is just the database file name, appended
 	// with the series of pragma options as a query URL string. For more
 	// details on the formatting here, see the modernc.org/sqlite docs:
-	// https://pkg.go.dev/modernc.org/sqlite#Driver.Open.
+	// https://pkg.go.dev/modernc.org/sqlite#Driver.Open. A file: URI may
+	// already carry a query, in which case our options are joined to it
+	// with &, as a second ? would make them part of the last value.
+	separator := "?"
+	if strings.Contains(cfg.DatabaseFileName, "?") {
+		separator = "&"
+	}
 	dsn := fmt.Sprintf(
-		"%v?%v&%v", cfg.DatabaseFileName, sqliteOptions.Encode(),
-		sqliteTxLockImmediate,
+		"%v%v%v&%v", cfg.DatabaseFileName, separator,
+		sqliteOptions.Encode(), sqliteTxLockImmediate,
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

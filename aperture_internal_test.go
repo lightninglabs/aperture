@@ -306,10 +306,61 @@ func TestCheckSqliteDatabaseMoved(t *testing.T) {
 			"but one exists at the default path "+defaultPath,
 	)
 
+	// In-memory databases are never refused.
+	for _, name := range []string{
+		":memory:", "file::memory:", "file:x.db?mode=memory",
+	} {
+		require.NoError(t, checkSqliteDatabaseMoved(name, defaultPath))
+	}
+
+	// A file: URI is checked against the file it opens.
+	err = checkSqliteDatabaseMoved("file:"+configuredPath, defaultPath)
+	require.ErrorContains(t, err, "sqlite database "+configuredPath)
+	err = checkSqliteDatabaseMoved("file:"+defaultPath, defaultPath)
+	require.NoError(t, err)
+
 	// Both exist: the configured database is used as it is.
 	createFile(configuredPath)
 	err = checkSqliteDatabaseMoved(configuredPath, defaultPath)
 	require.NoError(t, err)
+	err = checkSqliteDatabaseMoved(
+		"file://localhost"+configuredPath+"?cache=shared", defaultPath,
+	)
+	require.NoError(t, err)
+}
+
+// TestSqliteFilePath asserts that sqliteFilePath returns the file SQLite opens
+// for a database name.
+func TestSqliteFilePath(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		inFile bool
+	}{
+		{name: "/data/aperture.db", path: "/data/aperture.db", inFile: true},
+		{name: "aperture.db", path: "aperture.db", inFile: true},
+		{name: "file:aperture.db", path: "aperture.db", inFile: true},
+		{name: "file:/data/aperture.db", path: "/data/aperture.db",
+			inFile: true},
+		{name: "file:///data/aperture.db", path: "/data/aperture.db",
+			inFile: true},
+		{name: "file://localhost/data/aperture.db",
+			path: "/data/aperture.db", inFile: true},
+		{name: "file:/data/aperture.db?mode=rwc&cache=shared#x",
+			path: "/data/aperture.db", inFile: true},
+		{name: "file:/data/my%20db.db", path: "/data/my db.db",
+			inFile: true},
+		{name: ":memory:"},
+		{name: "file::memory:"},
+		{name: "file::memory:?cache=shared"},
+		{name: "file:aperture.db?mode=memory"},
+	}
+
+	for _, test := range tests {
+		path, inFile := sqliteFilePath(test.name)
+		require.Equal(t, test.inFile, inFile, test.name)
+		require.Equal(t, test.path, path, test.name)
+	}
 }
 
 // TestGetConfigExpandsDBFile asserts that a ~ in sqlite.dbfile is expanded to

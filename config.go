@@ -3,6 +3,7 @@ package aperture
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -453,11 +454,57 @@ func checkRenamedConfigKeys(configFile []byte) error {
 	return nil
 }
 
+// sqliteFilePath returns the file that SQLite opens for the database name
+// dbFile, which is a plain path, :memory: or a file: URI. It returns false if
+// the database is not kept in a file.
+func sqliteFilePath(dbFile string) (string, bool) {
+	if dbFile == ":memory:" {
+		return "", false
+	}
+
+	uri, ok := strings.CutPrefix(dbFile, "file:")
+	if !ok {
+		return dbFile, true
+	}
+
+	uri, _, _ = strings.Cut(uri, "#")
+	path, rawQuery, _ := strings.Cut(uri, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err == nil && query.Get("mode") == "memory" {
+		return "", false
+	}
+
+	// An authority, which SQLite only accepts empty or as localhost, comes
+	// before the path in file://localhost/path and file:///path.
+	if rest, ok := strings.CutPrefix(path, "//"); ok {
+		if i := strings.Index(rest, "/"); i >= 0 {
+			path = rest[i:]
+		} else {
+			path = ""
+		}
+	}
+
+	if unescaped, err := url.PathUnescape(path); err == nil {
+		path = unescaped
+	}
+	if path == "" || path == ":memory:" {
+		return "", false
+	}
+
+	return path, true
+}
+
 // checkSqliteDatabaseMoved returns an error if dbFile does not exist while a
 // database exists at defaultPath. Earlier versions ignored sqlite.dbfile in the
 // config file, so opening dbFile would start an empty database and lose the
-// secrets of every L402 issued so far.
+// secrets of every L402 issued so far. A database that is not kept in a file
+// is never refused.
 func checkSqliteDatabaseMoved(dbFile, defaultPath string) error {
+	dbFile, ok := sqliteFilePath(dbFile)
+	if !ok {
+		return nil
+	}
+
 	if filepath.Clean(dbFile) == filepath.Clean(defaultPath) {
 		return nil
 	}
