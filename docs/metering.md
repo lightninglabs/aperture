@@ -45,6 +45,13 @@ Three processes cooperate, joined by one gRPC surface:
   implementation replaces the state file with a database and the static rates
   with a live price feed without touching the protocol logic.
 
+  The `Store` interface is not frozen. As of v0.6.1, `Store.Authorize` takes
+  the reservation estimate and returns an `Authorization` (remaining balance,
+  available balance, and whether the request was admitted) instead of the
+  available balance alone, and a store must apply `AdmitReservation` under its
+  own lock. An embedder's store has to be updated to the new signature when it
+  moves to this release; the build fails until it is.
+
 The `pricesrpc` calls, in the order a bundle meets them:
 
 | RPC | Who calls it, when | What it does |
