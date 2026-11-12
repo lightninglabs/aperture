@@ -1374,3 +1374,66 @@ func TestServerAbandonedStreamSettlesRealistically(t *testing.T) {
 		})
 	}
 }
+
+// TestServerSequentialRequestBeforeReport pins down why aperture reports usage
+// before a response ends. A buyer's next request that arrives while the
+// previous request's report is still pending finds that reservation held, so
+// in the second half of a bundle it is told to retry later even though
+// nothing else is in flight. Once the report lands the same request is
+// admitted.
+func TestServerSequentialRequestBeforeReport(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	cfg := testConfig("")
+	cfg.BundleTokens = 1000
+	client := newTestClient(t, cfg)
+
+	const tokenID = "5e9e"
+	bookTestBundle(t, client, tokenID)
+
+	reqText := chatRequestTextRaw(
+		`{"model":"gpt-test","max_tokens":200,` +
+			`"messages":[{"role":"user","content":"hi"}]}`,
+	)
+	report := func(reserved int64, totalTokens int) {
+		t.Helper()
+
+		_, err := client.ReportUsage(
+			ctx, &pricesrpc.ReportUsageRequest{
+				TokenId:     tokenID,
+				Path:        "/v1/chat/completions",
+				ServiceName: "llm",
+				HttpStatus:  200,
+				ContentType: "application/json",
+				Complete:    true,
+				ResponseTail: []byte(fmt.Sprintf(
+					`{"usage":{"total_tokens":%d}}`,
+					totalTokens,
+				)),
+				ReservedEstimate: reserved,
+			},
+		)
+		require.NoError(t, err)
+	}
+
+	// Draw the bundle into its second half.
+	first := authorizeText(t, client, tokenID, reqText)
+	require.True(t, first.Allowed)
+	report(first.ReservedEstimate, 600)
+
+	// The previous request has finished but its report has not landed.
+	pending := authorizeText(t, client, tokenID, reqText)
+	require.True(t, pending.Allowed)
+	require.Less(t, int64(400), 2*pending.ReservedEstimate)
+
+	next := authorizeText(t, client, tokenID, reqText)
+	require.False(t, next.Allowed)
+	require.True(t, next.RetryLater)
+
+	// With the report in, the same request goes through.
+	report(pending.ReservedEstimate, 10)
+	next = authorizeText(t, client, tokenID, reqText)
+	require.True(t, next.Allowed)
+}
