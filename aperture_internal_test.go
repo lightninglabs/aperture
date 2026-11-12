@@ -488,3 +488,32 @@ func TestSampleConfigKeysAreRead(t *testing.T) {
 	)
 	require.NoError(t, err)
 }
+
+// TestStartChecksSqliteDatabaseMoved asserts that Start refuses to open a new
+// sqlite database while one exists at the default path.
+func TestStartChecksSqliteDatabaseMoved(t *testing.T) {
+	dir := t.TempDir()
+
+	oldDefault := defaultSqliteDatabasePath
+	defaultSqliteDatabasePath = filepath.Join(dir, "default", "aperture.db")
+	t.Cleanup(func() { defaultSqliteDatabasePath = oldDefault })
+
+	require.NoError(t, os.MkdirAll(
+		filepath.Dir(defaultSqliteDatabasePath), 0700,
+	))
+	require.NoError(t, os.WriteFile(defaultSqliteDatabasePath, nil, 0600))
+
+	configuredPath := filepath.Join(dir, "configured", "aperture.db")
+	a := NewAperture(&Config{
+		DatabaseBackend: "sqlite",
+		Prometheus:      &PrometheusConfig{},
+		Sqlite: &aperturedb.SqliteConfig{
+			DatabaseFileName: configuredPath,
+		},
+	})
+
+	err := a.Start(make(chan error, 1), make(chan struct{}))
+	require.ErrorContains(t, err, "does not exist, but one exists at the "+
+		"default path")
+	require.NoFileExists(t, configuredPath)
+}
