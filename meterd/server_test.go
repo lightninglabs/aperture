@@ -894,3 +894,90 @@ func TestServerNoRetryLaterWithoutExpiry(t *testing.T) {
 	require.False(t, refused.RetryLater)
 	require.Positive(t, refused.PriceSats)
 }
+
+// plainStore hides the wrapped store's ReservationExpirer, standing in for an
+// embedder's store that does not report reservation expiry.
+type plainStore struct {
+	Store
+}
+
+// expiringStore is an embedder's store that reports it drops reservations.
+type expiringStore struct {
+	Store
+}
+
+// ReservationsExpire reports that reservations are dropped.
+func (expiringStore) ReservationsExpire() bool {
+	return true
+}
+
+// TestServerRetryLaterFollowsStore checks that the retry signal comes from the
+// store rather than the config: a custom store keeps the 402 quote unless it
+// reports that its reservations expire, whatever reservationttl says.
+func TestServerRetryLaterFollowsStore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		wrap       func(Store) Store
+		retryLater bool
+	}{{
+		name:       "store without expiry",
+		wrap:       func(s Store) Store { return plainStore{s} },
+		retryLater: false,
+	}, {
+		name:       "store with expiry",
+		wrap:       func(s Store) Store { return expiringStore{s} },
+		retryLater: true,
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+
+			inner, err := NewJSONStore(JSONStoreConfig{})
+			require.NoError(t, err)
+
+			// The config leaves reservationttl at its default,
+			// which must not decide the answer for a custom store.
+			cfg := testConfig("")
+			cfg.BundleTokens = 1
+			cfg.EstimatedTokens = 1
+			server, err := NewServer(cfg, WithStore(tc.wrap(inner)))
+			require.NoError(t, err)
+
+			const tokenID = "3030"
+
+			_, err = server.ChallengeMinted(
+				ctx, &pricesrpc.ChallengeMintedRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: chatRequestText("gpt-test"),
+					TokenId:         tokenID,
+					PriceSats:       2,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+
+			req := &pricesrpc.AuthorizeRequestRequest{
+				Path:            "/v1/chat/completions",
+				HttpRequestText: chatRequestText("gpt-test"),
+				TokenId:         tokenID,
+				ServiceName:     "llm",
+			}
+			resp, err := server.AuthorizeRequest(ctx, req)
+			require.NoError(t, err)
+			require.True(t, resp.Allowed)
+
+			// The first request's reservation holds the whole
+			// balance, so the second is refused.
+			resp, err = server.AuthorizeRequest(ctx, req)
+			require.NoError(t, err)
+			require.False(t, resp.Allowed)
+			require.Equal(t, tc.retryLater, resp.RetryLater)
+			require.Positive(t, resp.PriceSats)
+		})
+	}
+}

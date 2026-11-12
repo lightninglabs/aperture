@@ -238,9 +238,12 @@ func (s *Server) janitor() {
 	}
 }
 
-// reservationsExpire reports whether leaked reservations are dropped.
+// reservationsExpire reports whether the store drops leaked reservations. A
+// store that does not say so is assumed to hold them forever.
 func (s *Server) reservationsExpire() bool {
-	return s.cfg.ReservationTTL >= 0
+	expirer, ok := s.store.(ReservationExpirer)
+
+	return ok && expirer.ReservationsExpire()
 }
 
 // unauthorizedBundleTTL returns how long a never-authorized bundle is retained

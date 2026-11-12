@@ -41,5 +41,20 @@ type Store interface {
 	Flush() error
 }
 
-// A compile-time check that JSONStore satisfies Store.
-var _ Store = (*JSONStore)(nil)
+// ReservationExpirer is an optional interface a Store implements to report
+// that it drops reservations whose usage report never arrives. Only then can
+// a funded bundle whose balance is all reserved be told to retry later, since
+// without expiry a leaked reservation would never clear and the buyer would
+// retry forever. A store that does not implement it keeps the 402 quote.
+type ReservationExpirer interface {
+	// ReservationsExpire reports whether leaked reservations are
+	// eventually dropped.
+	ReservationsExpire() bool
+}
+
+// Compile-time checks that JSONStore satisfies Store and reports whether its
+// reservations expire.
+var (
+	_ Store              = (*JSONStore)(nil)
+	_ ReservationExpirer = (*JSONStore)(nil)
+)

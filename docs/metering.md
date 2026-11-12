@@ -98,6 +98,13 @@ and aperture answers 429 with `Retry-After`, so the buyer does not pay for a
 new bundle while the current one is funded. Exhaustion, not any property of
 the credential, is what ends a bundle's life.
 
+The retry signal depends on the store dropping leaked reservations, since a
+reservation that never clears would leave the buyer retrying forever. The
+built-in JSON store reports this from `reservationttl`, so a negative value
+keeps the 402. A daemon that embeds meterd with its own `Store` keeps the 402
+unless that store implements `ReservationExpirer` and returns true from
+`ReservationsExpire`.
+
 One consequence deserves emphasis: the credential and the balance are separate
 things joined by a key. Everything below is about what that key is for each
 scheme, because the key is where the schemes differ.
