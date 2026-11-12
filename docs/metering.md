@@ -86,6 +86,11 @@ From then on, every authenticated request runs the same loop:
    blend. The division rounds up: the msat value drawn from the bundle always
    covers the msat value served.
 
+A usage report can be lost (aperture gives up retrying, or restarts mid
+request), which would hold its reservation until meterd restarts. So a
+reservation is dropped after `reservationttl` (default 30 minutes, negative to
+disable).
+
 When a request would overdraw the bundle, `AuthorizeRequest` refuses it and
 names the price of the next bundle, aperture mints a fresh 402, and the cycle
 starts again. Exhaustion, not any property of the credential, is what ends a
@@ -244,6 +249,8 @@ idle window described above) and the authenticator flags `enablempp` and
 
 On the meterd side: `bundletokens` (bundle size), `estimatedtokens` (the
 reservation and abandonment fallback when a request names no `max_tokens`),
+`reservationttl` (how long a reservation is held before it is presumed
+leaked),
 `usagetailbytes` (tail capture, up to 1 MiB), and the per-model
 `inputmsatpertoken` / `outputmsatpertoken` rates. `meterd --help` carries the
 full list, and `sample-conf.yaml` shows the service stanza in context.

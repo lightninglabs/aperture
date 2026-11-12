@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -138,6 +139,17 @@ func TestConfigValidate(t *testing.T) {
 			c.MaxUnauthorizedBundles = -1
 		},
 		wantErr: "maxunauthorizedbundles must not be negative",
+	}, {
+		name: "reservation ttl below the minimum",
+		mutate: func(c *Config) {
+			c.ReservationTTL = 10 * time.Second
+		},
+		wantErr: "reservationttl must be at least",
+	}, {
+		name: "negative reservation ttl disables expiry",
+		mutate: func(c *Config) {
+			c.ReservationTTL = -1
+		},
 	}, {
 		name: "price arithmetic overflows",
 		mutate: func(c *Config) {
