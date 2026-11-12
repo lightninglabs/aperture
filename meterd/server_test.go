@@ -1465,10 +1465,12 @@ func TestServerSettlesCompleteResponseWithoutUsage(t *testing.T) {
 			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
 		) + sseChunk(`[DONE]`),
 
-		// 200 tokens at the blended 1500 msat per token is 300 sats,
-		// leaving 800 tokens worth 1200 sats.
-		debited:   300,
-		remaining: 1200,
+		// The settle estimate is the 200 token completion default
+		// plus a prompt token per four bytes of the 64 byte body, 216
+		// tokens. At the blended 1500 msat per token that is 324 sats,
+		// leaving 784 tokens worth 1176 sats.
+		debited:   324,
+		remaining: 1176,
 	}, {
 		name:        "model listing without usage",
 		tokenID:     "c0de02",
@@ -1493,8 +1495,8 @@ func TestServerSettlesCompleteResponseWithoutUsage(t *testing.T) {
 		tail: sseChunk(
 			`{"choices":[{"delta":{"content":"hi"}}]}`,
 		) + sseChunk(`[DONE]`),
-		debited:   300,
-		remaining: 1200,
+		debited:   324,
+		remaining: 1176,
 	}}
 
 	for _, tc := range testCases {
@@ -1525,6 +1527,8 @@ func TestServerSettlesCompleteResponseWithoutUsage(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.True(t, auth.Allowed)
+			require.EqualValues(t, 264, auth.ReservedEstimate)
+			require.EqualValues(t, 216, auth.SettleEstimate)
 
 			resp, err := client.ReportUsage(
 				ctx, &pricesrpc.ReportUsageRequest{
@@ -1536,6 +1540,7 @@ func TestServerSettlesCompleteResponseWithoutUsage(t *testing.T) {
 					Complete:         true,
 					ResponseTail:     []byte(tc.tail),
 					ReservedEstimate: auth.ReservedEstimate,
+					SettleEstimate:   auth.SettleEstimate,
 				},
 			)
 			require.NoError(t, err)

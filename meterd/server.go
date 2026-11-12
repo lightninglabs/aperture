@@ -567,7 +567,7 @@ func ceilDiv(n, d int64) int64 {
 }
 
 // settlesAtEstimate reports whether a successful report without usage settles
-// at the reservation estimate: an abandoned response, or a completed stream
+// at the settle estimate: an abandoned response, or a completed stream
 // that left out include_usage. A complete JSON body (like a model listing), a
 // stream ending in an error, and an empty response settle at zero.
 func settlesAtEstimate(req *pricesrpc.ReportUsageRequest) bool {
