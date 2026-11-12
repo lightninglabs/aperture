@@ -112,8 +112,10 @@ is left, so the last few tokens are not stranded. That lone request may cost
 more than what is left; its debit retires the bundle.
 
 The reservation only bounds a request's cost when it has a `max_tokens` the
-price server can read. Aperture does not rewrite bodies, so a request without
-one, or with one past the forwarded prefix, can use more than it reserved.
+price server can read. Aperture does not add one, so a request without one, or
+with one past the forwarded prefix, can use more than it reserved. What keeps
+such a request honest is the usage object, which aperture asks streams for
+(see Streaming below).
 
 When a bundle is spent, `AuthorizeRequest` refuses the request with the price
 of the next bundle and aperture mints a fresh 402. If the bundle still has a
@@ -219,9 +221,11 @@ is consulted twice per request rather than asked to keep state:
   the reported usage, and aperture reconciles the estimate against it, so the
   session ends up debited for what was actually served.
 
-When the tail carries no parseable usage, the session settles at the estimate
+When the tail has no parseable usage, the session settles at the estimate
 rather than at zero. That conservative fallback predates the streaming work
-and is the model the bundle path now follows for abandoned streams.
+and is the model the bundle path now follows for an abandoned or completed
+stream that reports no usage. Unlike a session, a bundle is not charged for a
+complete JSON body without usage.
 
 ## Streaming
 
@@ -229,9 +233,20 @@ Streamed responses change nothing about the protocol and two things about the
 mechanics.
 
 The first is where the usage lives. A JSON response carries its usage object
-in the body; an SSE stream carries it in the final data chunk, when the client
+in the body; an SSE stream carries it in the final data chunk, when the request
 asked for it with `stream_options: {"include_usage": true}`, and some
-upstreams also report running totals on every chunk. The captured tail is
+upstreams also report running totals on every chunk. OpenAI-style clients leave
+that option out by default, so on a metered service aperture adds it: a JSON
+request body with `"stream": true` that does not set `include_usage` gets
+`include_usage: true` spliced in, with the rest of the body byte for byte as
+sent and `Content-Length` updated to match. Aperture does this before asking
+the price server to authorize, so the price server sizes the body the backend
+receives. A client that sets `include_usage` explicitly, even to `false`, is
+left alone, and so are non-JSON, content-encoded, non-streaming, and unmetered
+requests, and bodies over 4 MiB. Any metered JSON body aperture reads in full
+this way is forwarded with a `Content-Length`, so a chunked upload is sized
+from its real length instead of reserving, and settling at, the whole bundle.
+The captured tail is
 parsed accordingly: the extractor walks the `data:` lines, takes the last
 usage-bearing chunk, and falls back to brace-matching a usage object out of a
 tail that got truncated mid-line. Aperture also strips the client's
@@ -253,6 +268,21 @@ bytes still costs nothing, and a report that does not echo a settle estimate
 settles at the reservation. Upstreams that report running totals per chunk
 sidestep the whole question, since even an abandoned tail then carries a
 parseable count and the exact partial usage is billed.
+
+A completed stream without usage also settles at the settle estimate. With
+aperture asking for usage this is what a buyer gets by setting
+`include_usage: false`, sending a body aperture does not edit, or using an
+upstream that ignores the option. Such a stream is billed its `max_tokens`
+(or the 4,096-token `estimatedtokens` default) however long it ran, so a buyer
+who opts out of usage and names no `max_tokens` pays the default for any
+length. Aperture honors the opt-out rather than change the shape of a stream
+the client asked for; an operator who sees this used against them can raise
+`estimatedtokens`. A stream ending in an error event costs nothing, and only
+server-sent event streams are recognized.
+
+A complete JSON body without usage still costs nothing, with a warning:
+upstreams always report usage on a non-streaming generation, so it is a call
+like `GET /v1/models` that serves no tokens.
 
 One operator note belongs with this: aperture applies its configured
 `writetimeout` to proxied responses as a rolling window rather than a single
@@ -283,7 +313,8 @@ idle window described above) and the authenticator flags `enablempp` and
 `enablesessions` for the Payment doors.
 
 On the meterd side: `bundletokens` (bundle size), `estimatedtokens` (the
-completion part of the reservation when a request names no `max_tokens`),
+completion part of the reservation, and of the settle estimate for a stream
+without usage, when a request names no `max_tokens`),
 `promptbytespertoken` (body bytes per prompt token in the reservation,
 default 1; does not bound images), `reservationttl` (how long a reservation is
 held before it is presumed leaked),

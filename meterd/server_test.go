@@ -245,7 +245,8 @@ func TestServerJSONUsageReport(t *testing.T) {
 }
 
 // TestServerUsageEdgeCases verifies the usage reports that must not debit
-// anything: missing usage objects, incomplete streams and unknown tokens.
+// anything: a complete JSON body without usage, an aborted stream whose report
+// has no reservation to settle at, and unknown tokens.
 func TestServerUsageEdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -264,8 +265,8 @@ func TestServerUsageEdgeCases(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// A complete 200 response without a usage object debits nothing, but
-	// still reports the untouched balance of 1000 tokens (1500 sats).
+	// A complete 200 JSON response without a usage object debits nothing,
+	// but still reports the untouched balance of 1000 tokens (1500 sats).
 	usageResp, err := client.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
 		TokenId:      tokenID,
 		HttpStatus:   200,
@@ -277,7 +278,7 @@ func TestServerUsageEdgeCases(t *testing.T) {
 	require.EqualValues(t, 0, usageResp.DebitedSats)
 	require.EqualValues(t, 1500, usageResp.RemainingSats)
 
-	// An aborted stream without a usage object debits nothing either.
+	// An aborted stream settles at the estimate, which is zero here.
 	usageResp, err = client.ReportUsage(ctx, &pricesrpc.ReportUsageRequest{
 		TokenId:      tokenID,
 		HttpStatus:   200,
@@ -1436,4 +1437,118 @@ func TestServerSequentialRequestBeforeReport(t *testing.T) {
 	report(pending.ReservedEstimate, 10)
 	next = authorizeText(t, client, tokenID, reqText)
 	require.True(t, next.Allowed)
+}
+
+// TestServerSettlesCompleteResponseWithoutUsage checks which complete
+// responses without usage settle at the estimate.
+func TestServerSettlesCompleteResponseWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig("")
+	cfg.EstimatedTokens = 200
+	client := newTestClient(t, cfg)
+
+	testCases := []struct {
+		name        string
+		tokenID     string
+		contentType string
+		tail        string
+		debited     int64
+		remaining   int64
+	}{{
+		name:        "stream without include_usage",
+		tokenID:     "c0de01",
+		contentType: sseContentType,
+		tail: sseChunk(
+			`{"choices":[{"delta":{"content":"hi"}}]}`,
+		) + sseChunk(
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		) + sseChunk(`[DONE]`),
+
+		// The settle estimate is the 200 token completion default
+		// plus a prompt token per four bytes of the 64 byte body, 216
+		// tokens. At the blended 1500 msat per token that is 324 sats,
+		// leaving 784 tokens worth 1176 sats.
+		debited:   324,
+		remaining: 1176,
+	}, {
+		name:        "model listing without usage",
+		tokenID:     "c0de02",
+		contentType: "application/json",
+		tail: `{"object":"list","data":[{"id":"gpt-test",` +
+			`"object":"model"}]}`,
+		debited:   0,
+		remaining: 1500,
+	}, {
+		name:        "stream that failed after a 200",
+		tokenID:     "c0de03",
+		contentType: sseContentType,
+		tail: sseChunk(
+			`{"error":{"message":"overloaded"}}`,
+		) + sseChunk(`[DONE]`),
+		debited:   0,
+		remaining: 1500,
+	}, {
+		name:        "stream with a mixed case content type",
+		tokenID:     "c0de04",
+		contentType: "Text/Event-Stream; charset=utf-8",
+		tail: sseChunk(
+			`{"choices":[{"delta":{"content":"hi"}}]}`,
+		) + sseChunk(`[DONE]`),
+		debited:   324,
+		remaining: 1176,
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			reqText := chatRequestText("gpt-test")
+
+			_, err := client.ChallengeMinted(
+				ctx, &pricesrpc.ChallengeMintedRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tc.tokenID,
+					PriceSats:       1500,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+
+			auth, err := client.AuthorizeRequest(
+				ctx, &pricesrpc.AuthorizeRequestRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tc.tokenID,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, auth.Allowed)
+			require.EqualValues(t, 264, auth.ReservedEstimate)
+			require.EqualValues(t, 216, auth.SettleEstimate)
+
+			resp, err := client.ReportUsage(
+				ctx, &pricesrpc.ReportUsageRequest{
+					TokenId:          tc.tokenID,
+					Path:             "/v1/chat/completions",
+					ServiceName:      "llm",
+					HttpStatus:       200,
+					ContentType:      tc.contentType,
+					Complete:         true,
+					ResponseTail:     []byte(tc.tail),
+					ReservedEstimate: auth.ReservedEstimate,
+					SettleEstimate:   auth.SettleEstimate,
+				},
+			)
+			require.NoError(t, err)
+
+			require.EqualValues(t, tc.debited, resp.DebitedSats)
+			require.EqualValues(
+				t, tc.remaining, resp.RemainingSats,
+			)
+		})
+	}
 }

@@ -331,6 +331,20 @@ func (p *Proxy) checkMeteredAccess(w http.ResponseWriter, r *http.Request,
 		return r, false
 	}
 
+	// Ask the upstream to end a stream with its usage, so the pricer can
+	// debit what was served rather than an estimate. This runs before
+	// authorization so the pricer sizes the body the backend receives.
+	if err := requestStreamUsage(r); err != nil {
+		log.Errorf("Error preparing metered request for token %s: %v",
+			tokenID, err)
+		sendDirectResponse(
+			w, r, http.StatusBadRequest,
+			"failure reading request body",
+		)
+
+		return r, false
+	}
+
 	result, err := mp.AuthorizeRequest(
 		r.Context(), r, tokenID, target.Name,
 	)
