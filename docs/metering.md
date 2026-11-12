@@ -84,17 +84,29 @@ From then on, every authenticated request runs the same loop:
    prompt/completion split is known, the debit is weighted by direction, so an
    all-output workload pays the output rate rather than hiding behind the
    blend. The division rounds up: the msat value drawn from the bundle always
-   covers the msat value served.
+   covers the msat value served. Aperture makes the first report attempt
+   before the response ends, so a buyer that sends its next request as soon
+   as the previous one finishes finds that reservation already released;
+   only retries of a failed report run in the background.
 
 A usage report can be lost (aperture gives up retrying, or restarts mid
 request), which would hold its reservation until meterd restarts. So a
 reservation is dropped after `reservationttl` (default 30 minutes, negative to
 disable).
 
-When a request would overdraw the bundle, `AuthorizeRequest` refuses it and
-names the price of the next bundle, aperture mints a fresh 402, and the cycle
-starts again. Exhaustion, not any property of the credential, is what ends a
-bundle's life.
+When a bundle is spent, `AuthorizeRequest` refuses the request with the price
+of the next bundle and aperture mints a fresh 402. If the bundle still has a
+balance that requests in flight have reserved, it sets `retry_later` instead,
+and aperture answers 429 with `Retry-After`, so the buyer does not pay for a
+new bundle while the current one is funded. Exhaustion, not any property of
+the credential, is what ends a bundle's life.
+
+The retry signal depends on the store dropping leaked reservations, since a
+reservation that never clears would leave the buyer retrying forever. The
+built-in JSON store reports this from `reservationttl`, so a negative value
+keeps the 402. A daemon that embeds meterd with its own `Store` keeps the 402
+unless that store implements `ReservationExpirer` and returns true from
+`ReservationsExpire`.
 
 One consequence deserves emphasis: the credential and the balance are separate
 things joined by a key. Everything below is about what that key is for each

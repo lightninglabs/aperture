@@ -320,8 +320,11 @@ type AuthorizeRequestResponse struct {
 	// in the matching ReportUsageRequest so the exact reservation can be
 	// released, rather than an approximate default.
 	ReservedEstimate int64 `protobuf:"varint,4,opt,name=reserved_estimate,json=reservedEstimate,proto3" json:"reserved_estimate,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// When not allowed, whether the balance is only reserved by requests in
+	// flight. Aperture then answers 429 with Retry-After instead of a 402.
+	RetryLater    bool `protobuf:"varint,5,opt,name=retry_later,json=retryLater,proto3" json:"retry_later,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AuthorizeRequestResponse) Reset() {
@@ -380,6 +383,13 @@ func (x *AuthorizeRequestResponse) GetReservedEstimate() int64 {
 		return x.ReservedEstimate
 	}
 	return 0
+}
+
+func (x *AuthorizeRequestResponse) GetRetryLater() bool {
+	if x != nil {
+		return x.RetryLater
+	}
+	return false
 }
 
 type ReportUsageRequest struct {
@@ -894,13 +904,15 @@ const file_prices_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12*\n" +
 	"\x11http_request_text\x18\x02 \x01(\tR\x0fhttpRequestText\x12\x19\n" +
 	"\btoken_id\x18\x03 \x01(\tR\atokenId\x12!\n" +
-	"\fservice_name\x18\x04 \x01(\tR\vserviceName\"\x98\x01\n" +
+	"\fservice_name\x18\x04 \x01(\tR\vserviceName\"\xb9\x01\n" +
 	"\x18AuthorizeRequestResponse\x12\x18\n" +
 	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x1d\n" +
 	"\n" +
 	"price_sats\x18\x02 \x01(\x03R\tpriceSats\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12+\n" +
-	"\x11reserved_estimate\x18\x04 \x01(\x03R\x10reservedEstimate\"\xc3\x02\n" +
+	"\x11reserved_estimate\x18\x04 \x01(\x03R\x10reservedEstimate\x12\x1f\n" +
+	"\vretry_later\x18\x05 \x01(\bR\n" +
+	"retryLater\"\xc3\x02\n" +
 	"\x12ReportUsageRequest\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12!\n" +

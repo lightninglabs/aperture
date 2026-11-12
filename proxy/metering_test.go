@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"encoding/json"
 
+	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mpp"
 	"github.com/lightninglabs/aperture/pricer"
@@ -331,6 +333,49 @@ func TestCheckMeteredAccess(t *testing.T) {
 			require.Equal(t, challengeTokenID, minted)
 		case <-time.After(time.Second):
 			t.Fatal("pricer not notified of minted challenge")
+		}
+	})
+
+	t.Run("busy token is told to retry, not to pay", func(t *testing.T) {
+		fake := newFakeMeteredPricer()
+		fake.authorizeResult = &pricer.AuthorizeResult{
+			Allowed:    false,
+			PriceSats:  1337,
+			Reason:     "balance held by in-flight requests",
+			RetryLater: true,
+		}
+		svc := newMeteredService(fake)
+		p := &Proxy{
+			authenticator: &fakeChallengeAuth{
+				t: t, mac: challengeMac,
+			},
+		}
+
+		w := httptest.NewRecorder()
+		_, proceed := p.checkMeteredAccess(
+			w, newRequest(), svc, "inference",
+		)
+
+		require.False(t, proceed)
+		require.Equal(t, http.StatusTooManyRequests, w.Code)
+		require.Equal(t, "5", w.Header().Get("Retry-After"))
+		require.Empty(t, w.Header().Get("WWW-Authenticate"))
+		require.Contains(t, w.Body.String(), "reserved by requests")
+
+		// Browsers must be able to read the 429 and Retry-After.
+		require.Equal(
+			t, "*", w.Header().Get("Access-Control-Allow-Origin"),
+		)
+		require.Contains(
+			t, w.Header().Get("Access-Control-Expose-Headers"),
+			"Retry-After",
+		)
+
+		// No challenge may be minted for a funded bundle.
+		select {
+		case minted := <-fake.mintedTokens:
+			t.Fatalf("unexpected challenge minted: %s", minted)
+		case <-time.After(100 * time.Millisecond):
 		}
 	})
 
@@ -1030,4 +1075,95 @@ func TestMeteringSeesEveryL402HeaderForm(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, hash, got)
 		})
+}
+
+// slowReportPricer is a metered pricer whose usage reports take a while to
+// land, standing in for a price server across a network hop.
+type slowReportPricer struct {
+	*fakeMeteredPricer
+
+	delay    time.Duration
+	reported atomic.Bool
+}
+
+func (s *slowReportPricer) ReportUsage(ctx context.Context,
+	usage *pricer.Usage) error {
+
+	time.Sleep(s.delay)
+	s.reported.Store(true)
+
+	return s.fakeMeteredPricer.ReportUsage(ctx, usage)
+}
+
+// TestMeteredResponseEndsAfterUsageReport checks that a metered response does
+// not finish before its usage report has landed. The report is what releases
+// the request's reservation, so a buyer that sends its next request as soon
+// as the previous response ends would otherwise find that reservation still
+// held and, in the second half of a bundle, be told to retry later.
+func TestMeteredResponseEndsAfterUsageReport(t *testing.T) {
+	t.Parallel()
+
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(
+				w, `{"usage":{"total_tokens":9}}`,
+			)
+		},
+	))
+	t.Cleanup(backend.Close)
+
+	token := newPublicAuthToken(t, 7)
+	authenticator := &publicAuthRecorder{
+		scheme:   auth.AuthSchemeL402,
+		accepted: map[l402.TokenID]bool{token.id: true},
+	}
+
+	fake := newFakeMeteredPricer()
+	fake.authorizeResult = &pricer.AuthorizeResult{
+		Allowed:          true,
+		ReservedEstimate: 10,
+	}
+	slow := &slowReportPricer{
+		fakeMeteredPricer: fake,
+		delay:             200 * time.Millisecond,
+	}
+
+	service := &Service{
+		Name:       "inference",
+		Auth:       "on",
+		HostRegexp: ".*",
+		Address:    strings.TrimPrefix(backend.URL, "http://"),
+		Protocol:   "http",
+	}
+	p, err := New(authenticator, []*Service{service}, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Close())
+	})
+
+	// The pricer is swapped in after New so it is not dialed.
+	service.pricer = slow
+	service.DynamicPrice.Enabled = true
+	service.DynamicPrice.Metered = true
+
+	req := httptest.NewRequest(
+		http.MethodPost, "http://proxy/v1/chat/completions",
+		strings.NewReader(`{"model":"m"}`),
+	)
+	req.RemoteAddr = "192.0.2.1:1234"
+	req.Header = token.header.Clone()
+	recorder := httptest.NewRecorder()
+	p.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "total_tokens")
+
+	// By the time the handler has returned, and so the client has the
+	// whole response, the reservation must already be released.
+	require.True(t, slow.reported.Load())
+
+	usage := <-fake.usageReports
+	require.True(t, usage.Complete)
+	require.EqualValues(t, 10, usage.ReservedEstimate)
 }

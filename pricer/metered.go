@@ -24,6 +24,10 @@ type AuthorizeResult struct {
 	// It is echoed back in the matching usage report so the pricer can
 	// release the exact reservation it took.
 	ReservedEstimate int64
+
+	// RetryLater is set when a denied token's balance is reserved by
+	// requests in flight, so the client should retry rather than pay.
+	RetryLater bool
 }
 
 // Usage describes the outcome of a proxied request to a metered service, as

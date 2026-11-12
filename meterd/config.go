@@ -98,7 +98,8 @@ type Config struct {
 
 	// ReservationTTL is how long a reservation is held before it is
 	// presumed leaked and dropped. Zero uses the default, negative
-	// disables expiry. Only the built-in JSON store uses it.
+	// disables expiry. Only the built-in JSON store uses it; a custom store
+	// reports its own expiry through ReservationExpirer.
 	ReservationTTL time.Duration `yaml:"reservationttl" long:"reservationttl" description:"How long a reservation is held before it is presumed leaked and dropped; negative disables"`
 
 	// Models maps a model identifier to its per-token rates.

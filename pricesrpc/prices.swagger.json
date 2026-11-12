@@ -256,6 +256,10 @@
           "type": "string",
           "format": "int64",
           "description": "The per-request token estimate the price server reserved against the\ntoken's balance when allowing this request. Aperture echoes it back\nin the matching ReportUsageRequest so the exact reservation can be\nreleased, rather than an approximate default."
+        },
+        "retry_later": {
+          "type": "boolean",
+          "description": "When not allowed, whether the balance is only reserved by requests in\nflight. Aperture then answers 429 with Retry-After instead of a 402."
         }
       }
     },

@@ -261,6 +261,7 @@ func (c GRPCPricer) AuthorizeRequest(ctx context.Context, r *http.Request,
 		PriceSats:        resp.PriceSats,
 		Reason:           resp.Reason,
 		ReservedEstimate: resp.ReservedEstimate,
+		RetryLater:       resp.RetryLater,
 	}, nil
 }
 

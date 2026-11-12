@@ -390,6 +390,12 @@ func (s *JSONStore) releaseReservationLocked(b *Bundle, estimate int64) {
 	b.Reserved = max(b.Reserved-estimate, 0)
 }
 
+// ReservationsExpire reports whether reservations are dropped after the
+// configured reservation TTL.
+func (s *JSONStore) ReservationsExpire() bool {
+	return s.cfg.ReservationTTL > 0
+}
+
 // Get returns a copy of the token's bundle.
 func (s *JSONStore) Get(tokenID string) (Bundle, bool) {
 	s.mtx.Lock()
