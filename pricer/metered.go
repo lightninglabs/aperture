@@ -28,6 +28,11 @@ type AuthorizeResult struct {
 	// RetryLater is set when a denied token's balance is reserved by
 	// requests in flight, so the client should retry rather than pay.
 	RetryLater bool
+
+	// SettleEstimate is the token count the pricer debits when the
+	// response ends without a usage object. It is echoed back in the
+	// matching usage report.
+	SettleEstimate int64
 }
 
 // Usage describes the outcome of a proxied request to a metered service, as
@@ -67,6 +72,11 @@ type Usage struct {
 	// release the exact reservation it took. Zero when the authorization
 	// carried none.
 	ReservedEstimate int64
+
+	// SettleEstimate is the SettleEstimate value of the authorization that
+	// admitted this request, echoed back verbatim. Zero when the
+	// authorization carried none.
+	SettleEstimate int64
 }
 
 // MeteredPricer is an optional interface a Pricer can implement to support

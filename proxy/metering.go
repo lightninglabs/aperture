@@ -60,6 +60,10 @@ type meteringInfo struct {
 	// authorized this request, echoed back in the usage report so the
 	// pricer can release the exact reservation.
 	reservedEstimate int64
+
+	// settleEstimate is the token count the pricer debits if the response
+	// ends without a usage object, echoed back in the usage report.
+	settleEstimate int64
 }
 
 const (
@@ -401,6 +405,7 @@ func (p *Proxy) checkMeteredAccess(w http.ResponseWriter, r *http.Request,
 		pricer:           mp,
 		tailBytes:        target.usageTailBytes(),
 		reservedEstimate: result.ReservedEstimate,
+		settleEstimate:   result.SettleEstimate,
 	}
 	ctx := context.WithValue(r.Context(), meteringContextKey{}, info)
 
@@ -530,6 +535,7 @@ func attachUsageObserver(res *http.Response) {
 			ContentType:      res.Header.Get("Content-Type"),
 			ContentEncoding:  res.Header.Get("Content-Encoding"),
 			ReservedEstimate: info.reservedEstimate,
+			SettleEstimate:   info.settleEstimate,
 		},
 	}
 }

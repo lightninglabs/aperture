@@ -322,9 +322,15 @@ type AuthorizeRequestResponse struct {
 	ReservedEstimate int64 `protobuf:"varint,4,opt,name=reserved_estimate,json=reservedEstimate,proto3" json:"reserved_estimate,omitempty"`
 	// When not allowed, whether the balance is only reserved by requests in
 	// flight. Aperture then answers 429 with Retry-After instead of a 402.
-	RetryLater    bool `protobuf:"varint,5,opt,name=retry_later,json=retryLater,proto3" json:"retry_later,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RetryLater bool `protobuf:"varint,5,opt,name=retry_later,json=retryLater,proto3" json:"retry_later,omitempty"`
+	// The tokens the price server debits when this request's response ends
+	// without a usage object, such as a stream the client walked away from.
+	// It is a realistic cost estimate, no larger than reserved_estimate,
+	// which is sized generously for admission. Aperture echoes it in the
+	// matching ReportUsageRequest.
+	SettleEstimate int64 `protobuf:"varint,6,opt,name=settle_estimate,json=settleEstimate,proto3" json:"settle_estimate,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AuthorizeRequestResponse) Reset() {
@@ -392,6 +398,13 @@ func (x *AuthorizeRequestResponse) GetRetryLater() bool {
 	return false
 }
 
+func (x *AuthorizeRequestResponse) GetSettleEstimate() int64 {
+	if x != nil {
+		return x.SettleEstimate
+	}
+	return 0
+}
+
 type ReportUsageRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The hex-encoded L402 token ID the request authenticated with.
@@ -421,8 +434,13 @@ type ReportUsageRequest struct {
 	// the exact reservation it took at authorization time. Zero when the
 	// authorization predates this field.
 	ReservedEstimate int64 `protobuf:"varint,9,opt,name=reserved_estimate,json=reservedEstimate,proto3" json:"reserved_estimate,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The settle_estimate value the AuthorizeRequest response for this
+	// request carried, echoed back verbatim. It is what a successful response
+	// without a usage object is debited. Zero when the authorization predates
+	// this field, in which case the price server settles at the reservation.
+	SettleEstimate int64 `protobuf:"varint,10,opt,name=settle_estimate,json=settleEstimate,proto3" json:"settle_estimate,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ReportUsageRequest) Reset() {
@@ -514,6 +532,13 @@ func (x *ReportUsageRequest) GetContentEncoding() string {
 func (x *ReportUsageRequest) GetReservedEstimate() int64 {
 	if x != nil {
 		return x.ReservedEstimate
+	}
+	return 0
+}
+
+func (x *ReportUsageRequest) GetSettleEstimate() int64 {
+	if x != nil {
+		return x.SettleEstimate
 	}
 	return 0
 }
@@ -904,7 +929,7 @@ const file_prices_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12*\n" +
 	"\x11http_request_text\x18\x02 \x01(\tR\x0fhttpRequestText\x12\x19\n" +
 	"\btoken_id\x18\x03 \x01(\tR\atokenId\x12!\n" +
-	"\fservice_name\x18\x04 \x01(\tR\vserviceName\"\xb9\x01\n" +
+	"\fservice_name\x18\x04 \x01(\tR\vserviceName\"\xe2\x01\n" +
 	"\x18AuthorizeRequestResponse\x12\x18\n" +
 	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x1d\n" +
 	"\n" +
@@ -912,7 +937,8 @@ const file_prices_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12+\n" +
 	"\x11reserved_estimate\x18\x04 \x01(\x03R\x10reservedEstimate\x12\x1f\n" +
 	"\vretry_later\x18\x05 \x01(\bR\n" +
-	"retryLater\"\xc3\x02\n" +
+	"retryLater\x12'\n" +
+	"\x0fsettle_estimate\x18\x06 \x01(\x03R\x0esettleEstimate\"\xec\x02\n" +
 	"\x12ReportUsageRequest\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12!\n" +
@@ -923,7 +949,9 @@ const file_prices_proto_rawDesc = "" +
 	"\bcomplete\x18\x06 \x01(\bR\bcomplete\x12#\n" +
 	"\rresponse_tail\x18\a \x01(\fR\fresponseTail\x12)\n" +
 	"\x10content_encoding\x18\b \x01(\tR\x0fcontentEncoding\x12+\n" +
-	"\x11reserved_estimate\x18\t \x01(\x03R\x10reservedEstimate\"_\n" +
+	"\x11reserved_estimate\x18\t \x01(\x03R\x10reservedEstimate\x12'\n" +
+	"\x0fsettle_estimate\x18\n" +
+	" \x01(\x03R\x0esettleEstimate\"_\n" +
 	"\x13ReportUsageResponse\x12!\n" +
 	"\fdebited_sats\x18\x01 \x01(\x03R\vdebitedSats\x12%\n" +
 	"\x0eremaining_sats\x18\x02 \x01(\x03R\rremainingSats\"\x97\x01\n" +

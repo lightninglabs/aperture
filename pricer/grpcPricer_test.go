@@ -1,6 +1,7 @@
 package pricer
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -199,4 +200,35 @@ func TestDumpRequestSmallBodyRepeated(t *testing.T) {
 	got, err := io.ReadAll(r.Body)
 	require.NoError(t, err)
 	require.Equal(t, body, string(got))
+}
+
+// TestDumpRequestDeclaresBodySize checks that the pricer text keeps the full
+// Content-Length when the body is capped, since the reservation uses it.
+func TestDumpRequestDeclaresBodySize(t *testing.T) {
+	t.Parallel()
+
+	body := `{"model":"gpt-test","messages":[{"role":"user",` +
+		`"content":"` + strings.Repeat("a", maxPricerBodyBytes*2) +
+		`"}]}`
+
+	var reqText string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			var err error
+			reqText, err = dumpRequest(r)
+			require.NoError(t, err)
+		},
+	))
+	t.Cleanup(server.Close)
+
+	resp, err := http.Post(
+		server.URL, "application/json", strings.NewReader(body),
+	)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	require.Contains(
+		t, reqText, fmt.Sprintf("Content-Length: %d\r\n", len(body)),
+	)
+	require.Less(t, len(reqText), maxPricerBodyBytes+1024)
 }

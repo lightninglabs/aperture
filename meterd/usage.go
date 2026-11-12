@@ -420,17 +420,31 @@ func skipJSONValue(dec *json.Decoder) error {
 // max_tokens field and its newer max_completion_tokens alias are recognized,
 // preferring the larger of the two.
 func maxTokensFromRequestText(text string) int64 {
+	maxTokens, _ := completionFromRequestText(text)
+
+	return maxTokens
+}
+
+// completionFromRequestText returns a request's max_tokens hint and its n, in
+// one parse. Either is zero when absent or unparseable.
+func completionFromRequestText(text string) (int64, int64) {
 	body := requestBody(text)
 	if len(body) == 0 {
-		return 0
+		return 0, 0
 	}
 
 	var payload struct {
 		MaxTokens           *int64 `json:"max_tokens"`
 		MaxCompletionTokens *int64 `json:"max_completion_tokens"`
+		N                   *int64 `json:"n"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return 0
+		return 0, 0
+	}
+
+	var choices int64
+	if payload.N != nil {
+		choices = *payload.N
 	}
 
 	var maxTokens int64
@@ -443,7 +457,39 @@ func maxTokensFromRequestText(text string) int64 {
 		maxTokens = *payload.MaxCompletionTokens
 	}
 
-	return maxTokens
+	return maxTokens, choices
+}
+
+// requestBodySize returns a request's full body size and whether it is known.
+// Aperture forwards only a prefix, so a declared Content-Length wins; without
+// one, a body that parses as complete JSON is whole and anything else is
+// unknown.
+func requestBodySize(text string) (int64, bool) {
+	body := requestBody(text)
+
+	// Only a declared Content-Length counts: the parser reports zero for
+	// a request with no framing headers, as HTTP/2 serializes.
+	reader := bufio.NewReader(strings.NewReader(text))
+	if req, err := http.ReadRequest(reader); err == nil {
+		_ = req.Body.Close()
+
+		declared := req.Header.Get("Content-Length") != ""
+		if declared && req.ContentLength >= 0 &&
+			len(req.TransferEncoding) == 0 {
+
+			return max(req.ContentLength, int64(len(body))), true
+		}
+	}
+
+	if len(body) == 0 {
+		return 0, true
+	}
+
+	if json.Valid(body) {
+		return int64(len(body)), true
+	}
+
+	return 0, false
 }
 
 // requestBody returns the body of a serialized HTTP request. It first

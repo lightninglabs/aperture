@@ -299,37 +299,36 @@ func (s *JSONStore) Book(tokenID, model string, tokens, priceSats int64) (bool,
 	return true, nil
 }
 
-// Authorize marks the token's bundle as used and, when the request is going to
-// be allowed, reserves the given estimated per-request cost against its balance
-// to bound concurrent overdraw. It returns the tokens available after existing
-// reservations (remaining minus the total reserved) and whether the token is
-// known. The estimate is not applied to the returned availability, so a single
-// request against a bundle with any positive balance is still authorized.
-func (s *JSONStore) Authorize(tokenID string, estimate int64) (int64, bool, error) {
+// Authorize marks the token's bundle as used and, under one lock, decides by
+// AdmitReservation whether the request is admitted, reserving its estimate
+// only if so.
+func (s *JSONStore) Authorize(tokenID string, estimate int64) (Authorization,
+	bool, error) {
+
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
 	b, ok := s.bundles[tokenID]
 	if !ok {
-		return 0, false, nil
+		return Authorization{}, false, nil
 	}
 
 	now := s.now()
 	s.expireReservationsLocked(tokenID, b, now)
-
-	// The available balance already nets out the tokens reserved by other
-	// in-flight requests, so N concurrent requests on a near-empty bundle
-	// cannot all authorize.
-	available := b.RemainingTokens - b.Reserved
 
 	if !b.Authorized {
 		b.Authorized = true
 		s.dirty = true
 	}
 
-	// Reserve the estimate only when the request is going to be allowed, so
-	// a denied request does not tie up balance.
-	if available > 0 && estimate > 0 {
+	auth := Authorization{
+		Remaining: b.RemainingTokens,
+		Available: b.RemainingTokens - b.Reserved,
+		Admitted: AdmitReservation(
+			b.RemainingTokens, b.Reserved, estimate,
+		),
+	}
+	if auth.Admitted && estimate > 0 {
 		b.Reserved += estimate
 		b.reservations = append(b.reservations, reservation{
 			estimate: estimate,
@@ -337,7 +336,7 @@ func (s *JSONStore) Authorize(tokenID string, estimate int64) (int64, bool, erro
 		})
 	}
 
-	return available, true, nil
+	return auth, true, nil
 }
 
 // expireReservationsLocked drops reservations held for the reservation TTL,

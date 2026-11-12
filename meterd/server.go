@@ -32,6 +32,13 @@ const (
 	// default 4 MiB cap is raised so a legitimately large request head
 	// cannot trip a ResourceExhausted error on the metering path.
 	maxRecvMsgSize = 32 * 1024 * 1024
+
+	// settleBytesPerToken is the request body bytes counted as one prompt
+	// token when settling a response that carries no usage object. Four
+	// is the usual average for English text under byte-level BPE, so the
+	// settle figure tracks the real prompt instead of the one token per
+	// byte bound the reservation uses for admission.
+	settleBytesPerToken = 4
 )
 
 // Server implements the pricesrpc.Prices service with token bundle metering.
@@ -349,7 +356,9 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	// spent on a more expensive model. The booked model is authoritative,
 	// and an unresolvable model fails closed: a model the rate source does
 	// not know cannot be proxied upstream on another model's bundle.
-	if booked, ok := s.store.Get(req.TokenId); ok {
+	ceiling := s.cfg.BundleTokens
+	booked, known := s.store.Get(req.TokenId)
+	if known {
 		requested, determinate := modelFromRequestText(
 			req.HttpRequestText,
 		)
@@ -389,34 +398,39 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 				), nil
 			}
 		}
+
+		ceiling = s.rates.BundleTokens(booked.Model)
 	}
 
-	// The reservation estimate bounds how far concurrent requests can
-	// overdraw a near-empty bundle before their usage is reported.
-	estimate := s.requestEstimate(req.HttpRequestText)
+	// The reservation covers the prompt as well as the completion. The
+	// settle estimate is the realistic cost a response without usage is
+	// debited, kept apart from the generous bound used for admission.
+	estimate, settle := s.reservationEstimate(req.HttpRequestText, ceiling)
 
-	remaining, found, err := s.store.Authorize(req.TokenId, estimate)
+	auth, found, err := s.store.Authorize(req.TokenId, estimate)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unable to update "+
 			"bundle state: %v", err)
 	}
 
-	if found && remaining > 0 {
-		log.Debugf("Authorized request for token %s, %d tokens "+
-			"available", req.TokenId, remaining)
+	if found && auth.Admitted {
+		log.Debugf("Authorized request for token %s reserving %d "+
+			"tokens, %d tokens available", req.TokenId, estimate,
+			auth.Available)
 
-		// The reserved estimate rides back to aperture, which echoes
-		// it in the matching usage report so the exact reservation is
-		// released rather than an approximate default.
+		// The reserved and settle estimates ride back to aperture,
+		// which echoes them in the matching usage report so the exact
+		// reservation is released rather than an approximate default.
 		return &pricesrpc.AuthorizeRequestResponse{
 			Allowed:          true,
 			ReservedEstimate: estimate,
+			SettleEstimate:   settle,
 		}, nil
 	}
 
-	// The token is unknown, its bundle is spent, or its balance is
-	// reserved by requests in flight. Quote the next bundle at the booked
-	// model's rate, or else the requested model's.
+	// The token is unknown, its bundle is spent, or in-flight
+	// reservations leave too little for this request. Quote the next
+	// bundle at the booked model's rate, or else the requested model's.
 	reason := "unknown L402 token"
 	var (
 		model      string
@@ -424,18 +438,18 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 	)
 	if found {
 		reason = "token bundle exhausted"
-		if b, ok := s.store.Get(req.TokenId); ok {
-			model = b.Model
+		if known {
+			model = booked.Model
+		}
 
-			// A funded bundle frees up once requests in flight
-			// settle, so tell the buyer to retry. Without expiry a
-			// leak would never clear, so quote instead.
-			if b.RemainingTokens > 0 && s.reservationsExpire() {
-				retryLater = true
-				reason = fmt.Sprintf("token bundle has %d tokens "+
-					"left, all reserved by in-flight "+
-					"requests", b.RemainingTokens)
-			}
+		// A funded bundle frees up once requests in flight settle, so
+		// tell the buyer to retry. Without expiry a leak would never
+		// clear, so quote instead.
+		if auth.Remaining > 0 && s.reservationsExpire() {
+			retryLater = true
+			reason = fmt.Sprintf("token bundle has %d tokens "+
+				"available after in-flight reservations, "+
+				"request needs %d", auth.Available, estimate)
 		}
 	}
 	if model == "" {
@@ -474,15 +488,82 @@ func (s *Server) denyAuthorization(tokenID, model,
 	}
 }
 
-// requestEstimate derives the per-request token estimate to reserve on
-// authorization. It uses the request body's max_tokens when present, otherwise
-// the configured default estimate.
+// requestEstimate returns the completion part of a request's estimate.
 func (s *Server) requestEstimate(httpRequestText string) int64 {
-	if maxTokens := maxTokensFromRequestText(httpRequestText); maxTokens > 0 {
+	return s.completionEstimate(maxTokensFromRequestText(httpRequestText))
+}
+
+// completionEstimate returns max_tokens, or the configured default if unset.
+func (s *Server) completionEstimate(maxTokens int64) int64 {
+	if maxTokens > 0 {
 		return maxTokens
 	}
 
 	return s.cfg.EstimatedTokens
+}
+
+// reservationEstimate returns the tokens to reserve for a request and the
+// tokens to settle at if its response carries no usage object.
+//
+// The reservation is the body size as a prompt bound (the whole ceiling if the
+// size is unknown) plus the completion estimate times n, clamped to [1,
+// ceiling]. It is deliberately generous, since it gates admission. The settle
+// estimate counts settleBytesPerToken body bytes per prompt token instead,
+// clamped to [1, reservation], so a stream the client walks away from is
+// debited a realistic figure rather than the admission bound. With the size
+// unknown it equals the reservation.
+func (s *Server) reservationEstimate(httpRequestText string,
+	ceiling int64) (int64, int64) {
+
+	if ceiling <= 0 {
+		ceiling = s.cfg.BundleTokens
+	}
+	if ceiling <= 0 {
+		ceiling = DefaultBundleTokens
+	}
+
+	bytesPerToken := s.cfg.PromptBytesPerToken
+	if bytesPerToken <= 0 {
+		bytesPerToken = DefaultPromptBytesPerToken
+	}
+
+	// An unknown size leaves both prompt parts at the ceiling: the bytes
+	// past the forwarded prefix are unseen, and settling on the prefix
+	// alone would let a large chunked body go for the price of 64 KiB.
+	prompt, settlePrompt := ceiling, ceiling
+	if size, known := requestBodySize(httpRequestText); known {
+		prompt = ceilDiv(size, bytesPerToken)
+		settlePrompt = ceilDiv(size, settleBytesPerToken)
+	}
+
+	// Each of n choices can generate up to the completion ceiling.
+	// Compare by division so the product cannot overflow.
+	maxTokens, choices := completionFromRequestText(httpRequestText)
+	completion := min(max(s.completionEstimate(maxTokens), 0), ceiling)
+	if choices > 1 {
+		if completion > ceiling/choices {
+			completion = ceiling
+		} else {
+			completion *= choices
+		}
+	}
+
+	// Clamp each part before adding so the sum cannot overflow.
+	reserve := max(min(min(prompt, ceiling)+completion, ceiling), 1)
+	settle := max(min(min(settlePrompt, ceiling)+completion, reserve), 1)
+
+	return reserve, settle
+}
+
+// ceilDiv returns n divided by d, rounded up, for a non-negative n and a
+// positive d.
+func ceilDiv(n, d int64) int64 {
+	q := n / d
+	if n%d != 0 {
+		q++
+	}
+
+	return q
 }
 
 // ReportUsage extracts the final usage object from the captured response
@@ -538,15 +619,22 @@ func (s *Server) ReportUsage(_ context.Context,
 		release = s.cfg.EstimatedTokens
 	}
 
+	// A response without usage settles at the realistic estimate the
+	// authorization computed, never more than the reservation. A report
+	// predating the echo settles at the reservation.
+	settle := release
+	if req.SettleEstimate > 0 {
+		settle = min(req.SettleEstimate, release)
+	}
+
 	// An incomplete successful response that carried bytes but no usage
 	// object is a streamed generation the client walked away from: the
 	// usage arrives in the stream's final chunk, so abandoning the stream
 	// discards the bill for every token the upstream already produced and
-	// the seller already paid for. Settle those at the reservation
-	// estimate rather than zero. The estimate is what the request itself
-	// asked for (its max_tokens, or the configured default), so the buyer
-	// never pays past its own stated ceiling, and a response that produced
-	// no bytes at all still costs nothing.
+	// the seller already paid for. Settle those at the settle estimate
+	// rather than zero: the completion ceiling the request named plus a
+	// realistic prompt figure, not the generous admission bound. A
+	// response that produced no bytes at all still costs nothing.
 	settleAtEstimate := !found && !req.Complete &&
 		len(req.ResponseTail) > 0 &&
 		req.HttpStatus >= 200 && req.HttpStatus < 300
@@ -563,7 +651,7 @@ func (s *Server) ReportUsage(_ context.Context,
 
 	// The number of tokens to debit is the prompt/completion sum, or the
 	// total count when the split is absent. An abandoned stream settles at
-	// the reservation estimate instead.
+	// the settle estimate instead.
 	var debitTokens int64
 	switch {
 	case found:
@@ -574,12 +662,11 @@ func (s *Server) ReportUsage(_ context.Context,
 		}
 
 	case settleAtEstimate:
-		debitTokens = release
+		debitTokens = settle
 		log.Warnf("Incomplete %d response for token %s (path %s) "+
 			"carried %d tail bytes but no usage object; settling "+
-			"at the reserved estimate of %d tokens",
-			req.HttpStatus, req.TokenId, req.Path,
-			len(req.ResponseTail), release)
+			"at the estimate of %d tokens", req.HttpStatus,
+			req.TokenId, req.Path, len(req.ResponseTail), settle)
 	}
 
 	// The bundle was priced at the blended (input+output)/2 rate, but the

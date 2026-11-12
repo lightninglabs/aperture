@@ -262,6 +262,7 @@ func (c GRPCPricer) AuthorizeRequest(ctx context.Context, r *http.Request,
 		Reason:           resp.Reason,
 		ReservedEstimate: resp.ReservedEstimate,
 		RetryLater:       resp.RetryLater,
+		SettleEstimate:   resp.SettleEstimate,
 	}, nil
 }
 
@@ -278,6 +279,7 @@ func (c GRPCPricer) ReportUsage(ctx context.Context, usage *Usage) error {
 		Complete:         usage.Complete,
 		ResponseTail:     usage.ResponseTail,
 		ReservedEstimate: usage.ReservedEstimate,
+		SettleEstimate:   usage.SettleEstimate,
 	})
 
 	return err

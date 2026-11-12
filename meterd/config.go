@@ -24,6 +24,11 @@ const (
 	// overdraw.
 	DefaultEstimatedTokens = 4_096
 
+	// DefaultPromptBytesPerToken is the body bytes counted as one prompt
+	// token. One is an upper bound for text under byte-level BPE, but not
+	// for inputs the upstream expands, such as images.
+	DefaultPromptBytesPerToken = 1
+
 	// DefaultMaxUnauthorizedBundles caps the number of never-authorized
 	// (un-paid) bundles retained at once, bounding the state an
 	// unauthenticated challenge-mint spammer can accumulate.
@@ -87,6 +92,11 @@ type Config struct {
 	// concurrent overdraw on a near-empty bundle.
 	EstimatedTokens int64 `yaml:"estimatedtokens" long:"estimatedtokens" description:"Per-request token estimate reserved on authorization to bound concurrent overdraw"`
 
+	// PromptBytesPerToken is the body bytes counted as one prompt token.
+	// Raising it trades overdraw protection for concurrency. Zero uses the
+	// default.
+	PromptBytesPerToken int64 `yaml:"promptbytespertoken" long:"promptbytespertoken" description:"Request body bytes counted as one prompt token when sizing the reservation"`
+
 	// MaxUnauthorizedBundles caps the number of never-authorized (un-paid)
 	// bundles retained at once. When zero, the default is used.
 	MaxUnauthorizedBundles int `yaml:"maxunauthorizedbundles" long:"maxunauthorizedbundles" description:"Maximum number of never-authorized bundles retained, bounding challenge-mint spam"`
@@ -124,6 +134,7 @@ func NewConfig() *Config {
 		ListenAddr:             DefaultListenAddr,
 		BundleTokens:           DefaultBundleTokens,
 		EstimatedTokens:        DefaultEstimatedTokens,
+		PromptBytesPerToken:    DefaultPromptBytesPerToken,
 		MaxUnauthorizedBundles: DefaultMaxUnauthorizedBundles,
 	}
 }
@@ -181,6 +192,11 @@ func (c *Config) validate() error {
 	if c.EstimatedTokens < 0 {
 		return fmt.Errorf("estimatedtokens must not be negative, got "+
 			"%d", c.EstimatedTokens)
+	}
+
+	if c.PromptBytesPerToken < 0 {
+		return fmt.Errorf("promptbytespertoken must not be negative, "+
+			"got %d", c.PromptBytesPerToken)
 	}
 
 	if c.MaxUnauthorizedBundles < 0 {

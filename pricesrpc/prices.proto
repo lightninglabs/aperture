@@ -120,6 +120,13 @@ message AuthorizeRequestResponse {
     // When not allowed, whether the balance is only reserved by requests in
     // flight. Aperture then answers 429 with Retry-After instead of a 402.
     bool retry_later = 5;
+
+    // The tokens the price server debits when this request's response ends
+    // without a usage object, such as a stream the client walked away from.
+    // It is a realistic cost estimate, no larger than reserved_estimate,
+    // which is sized generously for admission. Aperture echoes it in the
+    // matching ReportUsageRequest.
+    int64 settle_estimate = 6;
 }
 
 message ReportUsageRequest {
@@ -158,6 +165,12 @@ message ReportUsageRequest {
     // the exact reservation it took at authorization time. Zero when the
     // authorization predates this field.
     int64 reserved_estimate = 9;
+
+    // The settle_estimate value the AuthorizeRequest response for this
+    // request carried, echoed back verbatim. It is what a successful response
+    // without a usage object is debited. Zero when the authorization predates
+    // this field, in which case the price server settles at the reservation.
+    int64 settle_estimate = 10;
 }
 
 message ReportUsageResponse {

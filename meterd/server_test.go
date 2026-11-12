@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -641,7 +642,7 @@ func TestServerReservationEcho(t *testing.T) {
 	client := newTestClient(t, testConfig(""))
 
 	const tokenID = "ec40"
-	body := `{"model":"gpt-test","max_tokens":400,` +
+	body := `{"model":"gpt-test","max_tokens":300,` +
 		`"messages":[{"role":"user","content":"hi"}]}`
 	reqText := "POST /v1/chat/completions HTTP/1.1\r\n" +
 		"Host: backend.example\r\n" +
@@ -672,18 +673,18 @@ func TestServerReservationEcho(t *testing.T) {
 		return resp
 	}
 
-	// The request's max_tokens is reserved and rides back on the
-	// response.
+	// The request's max_tokens plus a one-token-per-byte bound on its
+	// prompt is reserved and rides back on the response.
 	first := authorize()
 	require.True(t, first.Allowed)
-	require.EqualValues(t, 400, first.ReservedEstimate)
+	require.EqualValues(t, 300+len(body), first.ReservedEstimate)
 
 	second := authorize()
 	require.True(t, second.Allowed)
 
 	// Report both requests, echoing the estimates back. Each report
 	// debits ceil((10*1000 + 10*2000)/1500) = 20 tokens and releases its
-	// full 400-token reservation.
+	// full reservation.
 	tail := `{"usage":{"prompt_tokens":10,"completion_tokens":10,` +
 		`"total_tokens":20}}`
 	for _, est := range []int64{
@@ -704,8 +705,8 @@ func TestServerReservationEcho(t *testing.T) {
 
 	// With exact releases, no reservation residue eats the balance: two
 	// further requests still authorize (960 remaining against two fresh
-	// 400-token reservations). Were the releases dropped, the 800 tokens
-	// of residue would deny the second of these.
+	// reservations of 381 tokens). Were the releases dropped, the 762
+	// tokens of residue would leave 198 available and deny both.
 	require.True(t, authorize().Allowed)
 	require.True(t, authorize().Allowed)
 }
@@ -980,4 +981,459 @@ func TestServerRetryLaterFollowsStore(t *testing.T) {
 			require.Positive(t, resp.PriceSats)
 		})
 	}
+}
+
+// bookTestBundle books a bundle for the given token through ChallengeMinted.
+func bookTestBundle(t *testing.T, client pricesrpc.PricesClient,
+	tokenID string) {
+
+	t.Helper()
+
+	_, err := client.ChallengeMinted(
+		t.Context(), &pricesrpc.ChallengeMintedRequest{
+			Path:            "/v1/chat/completions",
+			HttpRequestText: chatRequestText("gpt-test"),
+			TokenId:         tokenID,
+			PriceSats:       1,
+			ServiceName:     "llm",
+		},
+	)
+	require.NoError(t, err)
+}
+
+// authorizeText runs one AuthorizeRequest for the given token and serialized
+// request.
+func authorizeText(t *testing.T, client pricesrpc.PricesClient, tokenID,
+	reqText string) *pricesrpc.AuthorizeRequestResponse {
+
+	t.Helper()
+
+	resp, err := client.AuthorizeRequest(
+		t.Context(), &pricesrpc.AuthorizeRequestRequest{
+			Path:            "/v1/chat/completions",
+			HttpRequestText: reqText,
+			TokenId:         tokenID,
+			ServiceName:     "llm",
+		},
+	)
+	require.NoError(t, err)
+
+	return resp
+}
+
+// largePromptBody returns a chat body with a prompt of promptBytes bytes.
+func largePromptBody(promptBytes, maxTokens int) string {
+	return fmt.Sprintf(`{"model":"gpt-test","max_tokens":%d,`+
+		`"messages":[{"role":"user","content":%q}]}`, maxTokens,
+		strings.Repeat("a", promptBytes))
+}
+
+// TestServerPromptReservationBoundsOverdraw checks that many large-prompt,
+// tiny-max_tokens requests cannot all be admitted against one bundle.
+func TestServerPromptReservationBoundsOverdraw(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bundleTokens = 100_000
+		promptBytes  = 15_000
+		n            = 200
+		tokenID      = "0verd2a"
+	)
+
+	cfg := testConfig("")
+	cfg.BundleTokens = bundleTokens
+	client := newTestClient(t, cfg)
+	bookTestBundle(t, client, tokenID)
+
+	reqText := chatRequestTextRaw(largePromptBody(promptBytes, 1))
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		allowed  int
+		reserved int64
+	)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			resp, err := client.AuthorizeRequest(
+				t.Context(), &pricesrpc.AuthorizeRequestRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tokenID,
+					ServiceName:     "llm",
+				},
+			)
+			if err != nil || !resp.Allowed {
+				return
+			}
+
+			mu.Lock()
+			allowed++
+			reserved += resp.ReservedEstimate
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	// Six requests fit, not two hundred.
+	require.GreaterOrEqual(t, allowed, 1)
+	require.LessOrEqual(t, reserved, int64(bundleTokens))
+	require.LessOrEqual(t, allowed, bundleTokens/promptBytes)
+}
+
+// TestServerTruncatedBodyReservation checks that a truncated body reserves its
+// declared size, or the whole bundle when none is declared.
+func TestServerTruncatedBodyReservation(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bundleTokens = 1_000_000
+		declared     = 200_000
+		capBytes     = 64 * 1024
+	)
+
+	cfg := testConfig("")
+	cfg.BundleTokens = bundleTokens
+	cfg.EstimatedTokens = 10
+	client := newTestClient(t, cfg)
+
+	// The body as the backend sees it, and the prefix aperture forwards.
+	body := largePromptBody(declared, 1)
+	prefix := body[:capBytes]
+
+	t.Run("declared length", func(t *testing.T) {
+		t.Parallel()
+
+		const tokenID = "7c01"
+		bookTestBundle(t, client, tokenID)
+
+		reqText := "POST /v1/chat/completions HTTP/1.1\r\n" +
+			"Host: backend.example\r\n" +
+			"Content-Type: application/json\r\n" +
+			fmt.Sprintf("Content-Length: %d\r\n", len(body)) +
+			"\r\n" + prefix
+
+		// The prefix cuts the JSON, so max_tokens is unreadable and
+		// the completion part is the configured default. The prompt
+		// part is the declared length, not the prefix, which a parser
+		// that ignored Content-Length could not produce: it would see
+		// an unparseable prefix and reserve the whole bundle.
+		resp := authorizeText(t, client, tokenID, reqText)
+		require.True(t, resp.Allowed)
+		require.EqualValues(
+			t, int64(len(body))+cfg.EstimatedTokens,
+			resp.ReservedEstimate,
+		)
+		require.EqualValues(
+			t, int64((len(body)+3)/4)+cfg.EstimatedTokens,
+			resp.SettleEstimate,
+		)
+	})
+
+	t.Run("unknown length", func(t *testing.T) {
+		t.Parallel()
+
+		const tokenID = "7c02"
+		bookTestBundle(t, client, tokenID)
+
+		reqText := "POST /v1/chat/completions HTTP/1.1\r\n" +
+			"Host: backend.example\r\n" +
+			"Content-Type: application/json\r\n" +
+			"Transfer-Encoding: chunked\r\n" +
+			"\r\n" + prefix
+
+		resp := authorizeText(t, client, tokenID, reqText)
+		require.True(t, resp.Allowed)
+		require.EqualValues(t, bundleTokens, resp.ReservedEstimate)
+
+		// The bytes past the prefix are unseen, so the settle figure
+		// cannot be smaller than the reservation either.
+		require.EqualValues(t, bundleTokens, resp.SettleEstimate)
+
+		// With the whole bundle reserved, nothing else fits while
+		// that request is in flight.
+		other := authorizeText(
+			t, client, tokenID, chatRequestText("gpt-test"),
+		)
+		require.False(t, other.Allowed)
+	})
+}
+
+// TestServerAdmissionNeedsCoverage checks the admission rule end to end:
+// covered, lone, busy and exhausted.
+func TestServerAdmissionNeedsCoverage(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig("")
+	cfg.BundleTokens = 1000
+	client := newTestClient(t, cfg)
+
+	const tokenID = "adm1"
+	bookTestBundle(t, client, tokenID)
+
+	// Roughly 600 tokens of reservation each.
+	big := chatRequestTextRaw(largePromptBody(500, 50))
+
+	first := authorizeText(t, client, tokenID, big)
+	require.True(t, first.Allowed)
+	require.Greater(t, first.ReservedEstimate, int64(500))
+
+	// About 400 left can't cover a second one; the buyer should retry.
+	second := authorizeText(t, client, tokenID, big)
+	require.False(t, second.Allowed)
+	require.True(t, second.RetryLater)
+	require.Contains(t, second.Reason, "in-flight")
+
+	// The first request reports 990 tokens of usage, leaving 10.
+	tail := `{"usage":{"total_tokens":990}}`
+	_, err := client.ReportUsage(t.Context(), &pricesrpc.ReportUsageRequest{
+		TokenId:          tokenID,
+		HttpStatus:       200,
+		ContentType:      "application/json",
+		Complete:         true,
+		ResponseTail:     []byte(tail),
+		ReservedEstimate: first.ReservedEstimate,
+	})
+	require.NoError(t, err)
+
+	// Ten tokens can't cover it, but a lone request is admitted.
+	lone := authorizeText(t, client, tokenID, big)
+	require.True(t, lone.Allowed)
+
+	// Its settlement clamps the balance at zero.
+	_, err = client.ReportUsage(t.Context(), &pricesrpc.ReportUsageRequest{
+		TokenId:          tokenID,
+		HttpStatus:       200,
+		ContentType:      "application/json",
+		Complete:         true,
+		ResponseTail:     []byte(`{"usage":{"total_tokens":600}}`),
+		ReservedEstimate: lone.ReservedEstimate,
+	})
+	require.NoError(t, err)
+
+	exhausted := authorizeText(t, client, tokenID, big)
+	require.False(t, exhausted.Allowed)
+	require.False(t, exhausted.RetryLater)
+	require.EqualValues(t, 1500, exhausted.PriceSats)
+	require.Contains(t, exhausted.Reason, "exhausted")
+}
+
+// TestServerReservationCountsChoices checks that n choices reserve max_tokens
+// each.
+func TestServerReservationCountsChoices(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig("")
+	client := newTestClient(t, cfg)
+
+	const tokenID = "c401"
+	bookTestBundle(t, client, tokenID)
+
+	body := `{"model":"gpt-test","max_tokens":100,"n":4,` +
+		`"messages":[{"role":"user","content":"hi"}]}`
+
+	resp := authorizeText(t, client, tokenID, chatRequestTextRaw(body))
+	require.True(t, resp.Allowed)
+	require.EqualValues(t, len(body)+400, resp.ReservedEstimate)
+}
+
+// TestReservationEstimateChoicesOverflow checks that a huge max_tokens times n
+// cannot overflow into a tiny reservation.
+func TestReservationEstimateChoicesOverflow(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = int64(4_000_000_000)
+
+	cfg := testConfig("")
+	s := &Server{cfg: cfg}
+
+	body := fmt.Sprintf(`{"model":"gpt-test","max_tokens":%d,"n":%d,`+
+		`"messages":[]}`, ceiling, ceiling)
+
+	got, _ := s.reservationEstimate(chatRequestTextRaw(body), ceiling)
+	require.Equal(t, ceiling, got)
+}
+
+// TestServerAbandonedStreamSettlesRealistically checks that a stream the
+// client walks away from is debited the settle estimate, a realistic prompt
+// figure plus the completion ceiling, rather than the one token per byte
+// reservation that gates admission. A report without the echoed settle
+// estimate keeps settling at the reservation, and an echoed value larger
+// than the reservation is clamped to it.
+func TestServerAbandonedStreamSettlesRealistically(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bundleTokens = 500_000
+		promptBytes  = 150_000
+		estimated    = 10_000
+		prefixBytes  = 64 * 1024
+	)
+
+	// Aperture forwards only a 64 KiB prefix of the body with its full
+	// Content-Length, so the cut JSON hides max_tokens and the completion
+	// part is the configured default.
+	body := largePromptBody(promptBytes, 1)
+	full := chatRequestTextRaw(body)
+	reqText := full[:len(full)-len(body)+prefixBytes]
+	reserve := int64(len(body) + estimated)
+	settle := int64((len(body)+3)/4 + estimated)
+
+	abandonedTail := []byte(sseChunk(
+		`{"choices":[{"delta":{"content":"hi"}}],"usage":null}`,
+	))
+
+	tests := []struct {
+		name       string
+		echo       func(resp *pricesrpc.AuthorizeRequestResponse) int64
+		wantDebits int64
+	}{{
+		name: "echoed settle estimate",
+		echo: func(r *pricesrpc.AuthorizeRequestResponse) int64 {
+			return r.SettleEstimate
+		},
+		wantDebits: settle,
+	}, {
+		name: "report predating the echo",
+		echo: func(*pricesrpc.AuthorizeRequestResponse) int64 {
+			return 0
+		},
+		wantDebits: reserve,
+	}, {
+		name: "settle estimate past the reservation",
+		echo: func(r *pricesrpc.AuthorizeRequestResponse) int64 {
+			return r.ReservedEstimate + 1
+		},
+		wantDebits: reserve,
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+
+			cfg := testConfig("")
+			cfg.BundleTokens = bundleTokens
+			cfg.EstimatedTokens = estimated
+			server, err := NewServer(cfg)
+			require.NoError(t, err)
+
+			const tokenID = "5e77"
+			_, err = server.ChallengeMinted(
+				ctx, &pricesrpc.ChallengeMintedRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tokenID,
+					PriceSats:       1,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+
+			auth, err := server.AuthorizeRequest(
+				ctx, &pricesrpc.AuthorizeRequestRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tokenID,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, auth.Allowed)
+			require.Equal(t, reserve, auth.ReservedEstimate)
+			require.Equal(t, settle, auth.SettleEstimate)
+
+			_, err = server.ReportUsage(
+				ctx, &pricesrpc.ReportUsageRequest{
+					TokenId:          tokenID,
+					Path:             "/v1/chat/completions",
+					ServiceName:      "llm",
+					HttpStatus:       200,
+					ContentType:      sseContentType,
+					Complete:         false,
+					ResponseTail:     abandonedTail,
+					ReservedEstimate: auth.ReservedEstimate,
+					SettleEstimate:   tc.echo(auth),
+				},
+			)
+			require.NoError(t, err)
+
+			// The debit is the expected figure and the reservation
+			// is released in full.
+			b, ok := server.store.Get(tokenID)
+			require.True(t, ok)
+			require.Equal(
+				t, bundleTokens-tc.wantDebits,
+				b.RemainingTokens,
+			)
+			require.Zero(t, b.Reserved)
+		})
+	}
+}
+
+// TestServerSequentialRequestBeforeReport pins down why aperture reports usage
+// before a response ends. A buyer's next request that arrives while the
+// previous request's report is still pending finds that reservation held, so
+// in the second half of a bundle it is told to retry later even though
+// nothing else is in flight. Once the report lands the same request is
+// admitted.
+func TestServerSequentialRequestBeforeReport(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	cfg := testConfig("")
+	cfg.BundleTokens = 1000
+	client := newTestClient(t, cfg)
+
+	const tokenID = "5e9e"
+	bookTestBundle(t, client, tokenID)
+
+	reqText := chatRequestTextRaw(
+		`{"model":"gpt-test","max_tokens":200,` +
+			`"messages":[{"role":"user","content":"hi"}]}`,
+	)
+	report := func(reserved int64, totalTokens int) {
+		t.Helper()
+
+		_, err := client.ReportUsage(
+			ctx, &pricesrpc.ReportUsageRequest{
+				TokenId:     tokenID,
+				Path:        "/v1/chat/completions",
+				ServiceName: "llm",
+				HttpStatus:  200,
+				ContentType: "application/json",
+				Complete:    true,
+				ResponseTail: []byte(fmt.Sprintf(
+					`{"usage":{"total_tokens":%d}}`,
+					totalTokens,
+				)),
+				ReservedEstimate: reserved,
+			},
+		)
+		require.NoError(t, err)
+	}
+
+	// Draw the bundle into its second half.
+	first := authorizeText(t, client, tokenID, reqText)
+	require.True(t, first.Allowed)
+	report(first.ReservedEstimate, 600)
+
+	// The previous request has finished but its report has not landed.
+	pending := authorizeText(t, client, tokenID, reqText)
+	require.True(t, pending.Allowed)
+	require.Less(t, int64(400), 2*pending.ReservedEstimate)
+
+	next := authorizeText(t, client, tokenID, reqText)
+	require.False(t, next.Allowed)
+	require.True(t, next.RetryLater)
+
+	// With the report in, the same request goes through.
+	report(pending.ReservedEstimate, 10)
+	next = authorizeText(t, client, tokenID, reqText)
+	require.True(t, next.Allowed)
 }

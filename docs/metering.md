@@ -45,6 +45,13 @@ Three processes cooperate, joined by one gRPC surface:
   implementation replaces the state file with a database and the static rates
   with a live price feed without touching the protocol logic.
 
+  The `Store` interface is not frozen. As of v0.6.1, `Store.Authorize` takes
+  the reservation estimate and returns an `Authorization` (remaining balance,
+  available balance, and whether the request was admitted) instead of the
+  available balance alone, and a store must apply `AdmitReservation` under its
+  own lock. An embedder's store has to be updated to the new signature when it
+  moves to this release; the build fails until it is.
+
 The `pricesrpc` calls, in the order a bundle meets them:
 
 | RPC | Who calls it, when | What it does |
@@ -69,11 +76,16 @@ retried too late.
 
 From then on, every authenticated request runs the same loop:
 
-1. `AuthorizeRequest` checks the balance. If the bundle covers the request, it
-   *reserves* an estimate: the request's own `max_tokens` when the body names
-   one, the configured `estimatedtokens` (default 4,096) otherwise. The
-   reservation is what keeps ten concurrent requests from each being admitted
-   against the same last thousand tokens; it is a hold, not a charge.
+1. `AuthorizeRequest` *reserves* the request's `max_tokens` (or
+   `estimatedtokens`, default 4,096) plus one token per byte of request body
+   for the prompt, which the upstream bills regardless of `max_tokens`. The
+   body size is the declared `Content-Length`, so the prefix aperture
+   forwards cannot shrink it; a cut body with no declared length reserves the
+   whole bundle. The reservation is a hold, not a charge. Alongside it the
+   server returns a *settle estimate*, the same completion part plus one
+   prompt token per four body bytes, capped at the reservation; with the body
+   size unknown it is the reservation, since the unseen bytes could be any
+   size. Aperture echoes both in the usage report.
 2. The request proxies to the backend, and aperture wraps the response body so
    the final bytes are captured as they pass. Nothing is buffered and nothing
    is rewritten; the wrapper keeps a bounded tail (16 KiB by default,
@@ -94,12 +106,21 @@ request), which would hold its reservation until meterd restarts. So a
 reservation is dropped after `reservationttl` (default 30 minutes, negative to
 disable).
 
+A request is admitted only if the balance left after in-flight reservations
+covers its whole reservation, or if nothing else is in flight and any balance
+is left, so the last few tokens are not stranded. That lone request may cost
+more than what is left; its debit retires the bundle.
+
+The reservation only bounds a request's cost when it has a `max_tokens` the
+price server can read. Aperture does not rewrite bodies, so a request without
+one, or with one past the forwarded prefix, can use more than it reserved.
+
 When a bundle is spent, `AuthorizeRequest` refuses the request with the price
 of the next bundle and aperture mints a fresh 402. If the bundle still has a
-balance that requests in flight have reserved, it sets `retry_later` instead,
-and aperture answers 429 with `Retry-After`, so the buyer does not pay for a
-new bundle while the current one is funded. Exhaustion, not any property of
-the credential, is what ends a bundle's life.
+balance but in-flight reservations leave too little for this request, it sets
+`retry_later` instead, and aperture answers 429 with `Retry-After`, so the
+buyer does not pay for a new bundle while the current one is funded.
+Exhaustion, not any property of the credential, is what ends a bundle's life.
 
 The retry signal depends on the store dropping leaked reservations, since a
 reservation that never clears would leave the buyer retrying forever. The
@@ -223,13 +244,15 @@ The second is what happens when nobody waits for that final chunk. A client
 that disconnects mid-generation takes the usage object with it: the upstream
 already produced (and billed the seller for) every token up to the
 disconnect, and the tail holds content chunks with no usage. Those responses,
-incomplete but successful and non-empty, settle at the reservation estimate,
-exactly as sessions always have. The estimate is the ceiling the request named
-in its own `max_tokens`, so the buyer chooses the abandonment penalty, and a
-response that produced no bytes at all still costs nothing. Upstreams that
-report running totals per chunk sidestep the whole question, since even an
-abandoned tail then carries a parseable count and the exact partial usage is
-billed.
+incomplete but successful and non-empty, settle at the settle estimate: the
+completion ceiling the request named plus a realistic prompt figure. The
+reservation's one token per byte prompt bound is kept for admission only,
+since it overstates a text prompt about fourfold and would make walking away
+from a large prompt cost several times what it should. A response with no
+bytes still costs nothing, and a report that does not echo a settle estimate
+settles at the reservation. Upstreams that report running totals per chunk
+sidestep the whole question, since even an abandoned tail then carries a
+parseable count and the exact partial usage is billed.
 
 One operator note belongs with this: aperture applies its configured
 `writetimeout` to proxied responses as a rolling window rather than a single
@@ -260,9 +283,10 @@ idle window described above) and the authenticator flags `enablempp` and
 `enablesessions` for the Payment doors.
 
 On the meterd side: `bundletokens` (bundle size), `estimatedtokens` (the
-reservation and abandonment fallback when a request names no `max_tokens`),
-`reservationttl` (how long a reservation is held before it is presumed
-leaked),
+completion part of the reservation when a request names no `max_tokens`),
+`promptbytespertoken` (body bytes per prompt token in the reservation,
+default 1; does not bound images), `reservationttl` (how long a reservation is
+held before it is presumed leaked),
 `usagetailbytes` (tail capture, up to 1 MiB), and the per-model
 `inputmsatpertoken` / `outputmsatpertoken` rates. `meterd --help` carries the
 full list, and `sample-conf.yaml` shows the service stanza in context.
