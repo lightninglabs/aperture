@@ -212,6 +212,35 @@ Changes that need attention when upgrading from an earlier version:
   `OPTIONS *`).
 * A path containing a character that some backends normalize in a way that
   would change which resource it names is refused with 400.
+* The config file keys `sqlite.dbfile`, `postgres.maxconnections` and
+  `admin.corsorigin` are now read. Earlier versions read other names for them
+  and silently ignored these, so a deployment that sets one of them may
+  behave differently after the upgrade. The old names are rejected at startup
+  with an error that names the replacement:
+
+  | Old key                        | New key                      |
+  | ------------------------------ | ---------------------------- |
+  | `sqlite.databasefilename`      | `sqlite.dbfile`              |
+  | `postgres.maxopenconnections`  | `postgres.maxconnections`    |
+  | `admin.corsorigins`            | `admin.corsorigin`           |
+
+  `admin.corsorigin` must be a list: a single string fails with `string was
+  used where sequence is expected`. A leading `~/` in `sqlite.dbfile` is
+  expanded to the home directory.
+* Because `sqlite.dbfile` was ignored, an existing database may sit at the
+  default path (the `aperture.db` file in the aperture data directory, whose
+  location depends on the platform) rather than at the configured one. If
+  `sqlite.dbfile` names a missing file while a database exists at the default
+  path, startup fails and the error message prints both paths. There are two
+  supported ways to proceed: stop aperture and move the database, together
+  with its `-wal` and `-shm` files, to the configured path, or unset
+  `sqlite.dbfile` to keep using the default path. Do not create an empty file
+  at the configured path to get past the check. The check only looks for the
+  file, so an empty file starts a new database and the secrets of every L402
+  issued so far are lost.
+* `postgres.requireSSL`, from the old sample config, was never read, so
+  aperture connected to postgres without SSL. Startup now fails on it; use
+  `postgres.requiressl`, which requires SSL when set to `true`.
 
 ## Admin API
 

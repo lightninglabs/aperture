@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/v2"
+	"github.com/goccy/go-yaml"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/proxy"
@@ -236,7 +238,7 @@ type AdminConfig struct {
 
 	// CORSOrigins controls which origins are allowed to call the admin REST
 	// API. If empty, CORS is disabled and browsers can only use same-origin.
-	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API."`
+	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API." yaml:"corsorigin"`
 }
 
 type Config struct {
@@ -410,4 +412,64 @@ func NewConfig() *Config {
 		Blocklist:        []string{},
 		StrictVerify:     defaultStrictVerify,
 	}
+}
+
+// renamedConfigKeys lists config file keys that aperture does not read, with
+// the documented key that replaces each.
+var renamedConfigKeys = []struct {
+	oldKey string
+	newKey string
+}{
+	{oldKey: "sqlite.databasefilename", newKey: "sqlite.dbfile"},
+	{
+		oldKey: "postgres.maxopenconnections",
+		newKey: "postgres.maxconnections",
+	},
+	{oldKey: "postgres.requireSSL", newKey: "postgres.requiressl"},
+	{oldKey: "admin.corsorigins", newKey: "admin.corsorigin"},
+}
+
+// checkRenamedConfigKeys returns an error if the config file uses a key from
+// renamedConfigKeys, instead of silently ignoring it.
+func checkRenamedConfigKeys(configFile []byte) error {
+	var sections map[string]any
+	if err := yaml.Unmarshal(configFile, &sections); err != nil {
+		return err
+	}
+
+	for _, renamed := range renamedConfigKeys {
+		name, key, _ := strings.Cut(renamed.oldKey, ".")
+		section, ok := sections[name].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if _, ok := section[key]; ok {
+			return fmt.Errorf("config key %s is not read, use %s "+
+				"instead", renamed.oldKey, renamed.newKey)
+		}
+	}
+
+	return nil
+}
+
+// checkSqliteDatabaseMoved returns an error if dbFile does not exist while a
+// database exists at defaultPath. Earlier versions ignored sqlite.dbfile in the
+// config file, so opening dbFile would start an empty database and lose the
+// secrets of every L402 issued so far.
+func checkSqliteDatabaseMoved(dbFile, defaultPath string) error {
+	if filepath.Clean(dbFile) == filepath.Clean(defaultPath) {
+		return nil
+	}
+
+	if fileExists(dbFile) || !fileExists(defaultPath) {
+		return nil
+	}
+
+	return fmt.Errorf("sqlite database %s does not exist, but one exists "+
+		"at the default path %s, where versions that ignored "+
+		"sqlite.dbfile in the config file kept it: stop aperture and "+
+		"move it together with its -wal and -shm files to %s, or "+
+		"unset sqlite.dbfile to keep using it", dbFile, defaultPath,
+		dbFile)
 }

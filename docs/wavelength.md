@@ -188,7 +188,7 @@ authenticator:
 
 dbbackend: "sqlite"
 sqlite:
-  databasefilename: "/home/you/.aperture-demo/aperture.db"
+  dbfile: "/home/you/.aperture-demo/aperture.db"
 
 services:
   - name: "quotes"
@@ -356,6 +356,3 @@ The setup is the same on mainnet, with a few differences:
 - The seller's balance lives in Ark, and payments below the operator's
   minimum coin size are held as credit by the swap server. See the Wavelength
   docs for how to move funds on-chain.
-- `aperture.yaml` uses `databasefilename` under `sqlite`. The `dbfile` key
-  shown in `sample-conf.yaml` is not read from the config file, and Aperture
-  then falls back to `~/.aperture/aperture.db` even when `basedir` is set.
