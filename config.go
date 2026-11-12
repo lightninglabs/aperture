@@ -240,6 +240,17 @@ type AdminConfig struct {
 	// CORSOrigins controls which origins are allowed to call the admin REST
 	// API. If empty, CORS is disabled and browsers can only use same-origin.
 	CORSOrigins []string `long:"corsorigin" description:"Allowed CORS origins for the admin REST API." yaml:"corsorigin"`
+
+	// DashboardListen, when set, serves the embedded dashboard and its
+	// credential-injecting /api/proxy/ path only on a separate listener
+	// at this host:port, and not on the main listener. It must be a
+	// loopback address unless DashboardAllowNonLoopback is set.
+	DashboardListen string `long:"dashboardlisten" description:"Serve the embedded dashboard only on this loopback host:port instead of the main listener. Set this whenever aperture runs behind a reverse proxy." yaml:"dashboardlisten"`
+
+	// DashboardAllowNonLoopback lets DashboardListen bind a non-loopback
+	// address and drops the loopback peer check on that listener. Anyone
+	// who can reach such a listener gets admin access.
+	DashboardAllowNonLoopback bool `long:"dashboardallownonloopback" description:"DANGEROUS: allow admin.dashboardlisten to bind a non-loopback address, giving admin access to anyone who can reach it." yaml:"dashboardallownonloopback"`
 }
 
 type Config struct {
@@ -376,6 +387,16 @@ func (c *Config) validate() error {
 		return fmt.Errorf("wspongwait (%v) must be less than "+
 			"wspinginterval (%v)", c.WsPongWait,
 			c.WsPingInterval)
+	}
+
+	if c.Admin != nil && c.Admin.DashboardListen != "" {
+		err := validateDashboardListen(
+			c.Admin.DashboardListen,
+			c.Admin.DashboardAllowNonLoopback,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
