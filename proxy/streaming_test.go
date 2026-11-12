@@ -3,6 +3,8 @@ package proxy_test
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,8 +18,11 @@ import (
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 )
 
 // newStreamingProxy stands up a proxy in front of the given backend handler
@@ -295,4 +300,118 @@ func TestLocalGRPCServiceBehindDeadlineWriter(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, "0", rec.Result().Trailer.Get("Grpc-Status"))
+}
+
+// TestLocalGRPCStreamOutlivesWriteTimeout checks that a server-streaming gRPC
+// call through the proxy keeps its messages flowing past the server's write
+// timeout. Each message is sent well inside the rolling window, so the stream
+// stays alive only if each write and flush moves the deadline forward.
+func TestLocalGRPCStreamOutlivesWriteTimeout(t *testing.T) {
+	t.Parallel()
+
+	const (
+		writeTimeout = 400 * time.Millisecond
+		updates      = 6
+		updateGap    = 150 * time.Millisecond
+
+		serving    = healthpb.HealthCheckResponse_SERVING
+		notServing = healthpb.HealthCheckResponse_NOT_SERVING
+	)
+
+	// watchHealth streams health updates through a proxy and returns how
+	// many arrived and the error that ended the stream, if any.
+	watchHealth := func(t *testing.T, rolling bool) (int, error) {
+		healthServer := health.NewServer()
+		grpcServer := grpc.NewServer()
+		healthpb.RegisterHealthServer(grpcServer, healthServer)
+		local := proxy.NewLocalService(
+			grpcServer, func(_ *http.Request) bool { return true },
+		)
+
+		p, err := proxy.New(
+			auth.NewMockAuthenticator(), nil, []string{}, nil,
+			local,
+		)
+		require.NoError(t, err)
+		if rolling {
+			p.SetWriteDeadlineWindow(writeTimeout)
+		}
+
+		server := httptest.NewUnstartedServer(
+			http.HandlerFunc(p.ServeHTTP),
+		)
+		server.EnableHTTP2 = true
+		server.Config.WriteTimeout = writeTimeout
+		server.StartTLS()
+		t.Cleanup(server.Close)
+
+		pool := x509.NewCertPool()
+		pool.AddCert(server.Certificate())
+		conn, err := grpc.NewClient(
+			strings.TrimPrefix(server.URL, "https://"),
+			grpc.WithTransportCredentials(
+				credentials.NewClientTLSFromCert(pool, ""),
+			),
+		)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 5*time.Second,
+		)
+		t.Cleanup(cancel)
+
+		stream, err := healthpb.NewHealthClient(conn).Watch(
+			ctx, &healthpb.HealthCheckRequest{},
+		)
+		require.NoError(t, err)
+
+		// The first message is the current status.
+		if _, err := stream.Recv(); err != nil {
+			return 0, err
+		}
+
+		// Flip the status so that each update is a new message.
+		go func() {
+			next := notServing
+			for i := 0; i < updates; i++ {
+				time.Sleep(updateGap)
+				healthServer.SetServingStatus("", next)
+				if next == serving {
+					next = notServing
+				} else {
+					next = serving
+				}
+			}
+		}()
+
+		received := 0
+		for received < updates {
+			if _, err := stream.Recv(); err != nil {
+				return received, err
+			}
+			received++
+		}
+
+		return received, nil
+	}
+
+	t.Run("rolling window carries the stream", func(t *testing.T) {
+		t.Parallel()
+
+		received, err := watchHealth(t, true)
+		require.NoError(t, err)
+		require.Equal(t, updates, received)
+	})
+
+	t.Run("absolute deadline kills the same stream", func(t *testing.T) {
+		t.Parallel()
+
+		// The control: without the rolling window the server's write
+		// timeout resets the stream after the first updates arrive.
+		received, err := watchHealth(t, false)
+		require.Equal(t, codes.Internal, status.Code(err), err)
+		require.Positive(t, received)
+		require.Less(t, received, updates)
+	})
 }
