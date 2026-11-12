@@ -1789,6 +1789,12 @@ func createProxy(cfg *Config, services []*proxy.Service,
 		if err != nil {
 			return nil, nil, err
 		}
+		err = mppAuth.SetChallengeExpiry(
+			cfg.Authenticator.MPPChallengeExpiry,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		// On metered services the charge credential is the key to a
 		// prepaid usage bundle, so it stays presentable until the

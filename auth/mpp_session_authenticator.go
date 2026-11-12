@@ -810,7 +810,7 @@ func (a *MPPSessionAuthenticator) FreshChallengeHeaderWithPrices(
 		return nil, err
 	}
 
-	expires := time.Now().Add(defaultChallengeExpiry).UTC().Format(
+	expires := time.Now().Add(DefaultChallengeExpiry).UTC().Format(
 		time.RFC3339,
 	)
 	params := &mpp.ChallengeParams{

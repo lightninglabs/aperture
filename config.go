@@ -8,6 +8,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/v2"
 	"github.com/lightninglabs/aperture/aperturedb"
+	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightningnetwork/lnd/build"
 )
@@ -100,6 +101,11 @@ type AuthConfig struct {
 	// the server's listen address if empty.
 	MPPRealm string `long:"mpprealm" description:"Realm string for MPP challenges"`
 
+	// MPPChallengeExpiry is how long an MPP challenge, and the credential
+	// that answers it, stays presentable. Metered sellers should set it
+	// near their service timeout.
+	MPPChallengeExpiry time.Duration `long:"mppchallengeexpiry" description:"How long an MPP challenge and its credential stay valid, e.g. 720h" default-mask:"15m"`
+
 	// EnableSessions enables the MPP session intent, which provides
 	// prepaid sessions with deposit, bearer, top-up, and close
 	// operations.
@@ -124,6 +130,14 @@ func (a *AuthConfig) validate() error {
 	if a.EnableSessions && !a.EnableMPP {
 		return errors.New("enablesessions requires enablempp " +
 			"to be set")
+	}
+
+	if a.EnableMPP {
+		if err := auth.ValidateChallengeExpiry(
+			a.MPPChallengeExpiry,
+		); err != nil {
+			return err
+		}
 	}
 
 	switch {
@@ -375,11 +389,13 @@ func DefaultSqliteConfig() *aperturedb.SqliteConfig {
 // NewConfig initializes a new Config variable.
 func NewConfig() *Config {
 	return &Config{
-		DatabaseBackend:  "etcd",
-		Etcd:             &EtcdConfig{},
-		Sqlite:           DefaultSqliteConfig(),
-		Postgres:         &aperturedb.PostgresConfig{},
-		Authenticator:    &AuthConfig{},
+		DatabaseBackend: "etcd",
+		Etcd:            &EtcdConfig{},
+		Sqlite:          DefaultSqliteConfig(),
+		Postgres:        &aperturedb.PostgresConfig{},
+		Authenticator: &AuthConfig{
+			MPPChallengeExpiry: auth.DefaultChallengeExpiry,
+		},
 		Tor:              &TorConfig{},
 		HashMail:         &HashMailConfig{},
 		Prometheus:       &PrometheusConfig{},

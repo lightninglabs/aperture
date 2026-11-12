@@ -113,6 +113,17 @@ authenticator:
   # listen address.
   # mpprealm: "api.example.com"
 
+  # How long an MPP challenge, and the credential that answers it, stays
+  # valid. Default: 15m. A credential cannot be presented after its challenge
+  # expires, so a metered service, where one payment buys a usage bundle that
+  # is spent down over many requests, should set this near its service
+  # timeout (for example 720h for 30 days). Otherwise the unspent part of a
+  # bundle is stranded when the challenge expires, which never happens to an
+  # L402 token on the same service. Single-use charges on non-metered
+  # services stay single use whatever this is set to. Must be positive and at
+  # most 8760h.
+  # mppchallengeexpiry: 720h
+
   # Enable MPP session intent for prepaid sessions with deposit, bearer,
   # top-up, and close operations. Requires enablempp to be true.
   # enablesessions: true

@@ -41,6 +41,13 @@ many requests draw against, refunding whatever is left when the buyer closes it.
 Sessions and charge consumption records both need a real database, so `--dbbackend`
 must be `sqlite` or `postgres`; etcd is refused at startup.
 
+A Payment credential cannot be presented after its challenge expires, which is
+15 minutes after the challenge is minted unless `--authenticator.mppchallengeexpiry`
+says otherwise. On a metered service one payment buys a usage bundle that is spent
+down over many requests, so the expiry caps how long the bundle stays usable. Set it
+near the service `timeout` (for example `720h`), as an L402 token on the same service
+already lasts that long. Single-use charges on other services stay single use.
+
 Each Payment challenge binds its HMAC to the exact resource that Aperture priced.
 For a dynamic-price service, that resource includes the request path. A credential
 issued for one resource is refused when a client presents it for another.
