@@ -1116,10 +1116,20 @@ func TestServerTruncatedBodyReservation(t *testing.T) {
 			fmt.Sprintf("Content-Length: %d\r\n", len(body)) +
 			"\r\n" + prefix
 
+		// The prefix cuts the JSON, so max_tokens is unreadable and
+		// the completion part is the configured default. The prompt
+		// part is the declared length, not the prefix, which a parser
+		// that ignored Content-Length could not produce: it would see
+		// an unparseable prefix and reserve the whole bundle.
 		resp := authorizeText(t, client, tokenID, reqText)
 		require.True(t, resp.Allowed)
-		require.GreaterOrEqual(
-			t, resp.ReservedEstimate, int64(len(body)),
+		require.EqualValues(
+			t, int64(len(body))+cfg.EstimatedTokens,
+			resp.ReservedEstimate,
+		)
+		require.EqualValues(
+			t, int64((len(body)+3)/4)+cfg.EstimatedTokens,
+			resp.SettleEstimate,
 		)
 	})
 
@@ -1138,6 +1148,10 @@ func TestServerTruncatedBodyReservation(t *testing.T) {
 		resp := authorizeText(t, client, tokenID, reqText)
 		require.True(t, resp.Allowed)
 		require.EqualValues(t, bundleTokens, resp.ReservedEstimate)
+
+		// The bytes past the prefix are unseen, so the settle figure
+		// cannot be smaller than the reservation either.
+		require.EqualValues(t, bundleTokens, resp.SettleEstimate)
 
 		// With the whole bundle reserved, nothing else fits while
 		// that request is in flight.
@@ -1239,6 +1253,124 @@ func TestReservationEstimateChoicesOverflow(t *testing.T) {
 	body := fmt.Sprintf(`{"model":"gpt-test","max_tokens":%d,"n":%d,`+
 		`"messages":[]}`, ceiling, ceiling)
 
-	got := s.reservationEstimate(chatRequestTextRaw(body), ceiling)
+	got, _ := s.reservationEstimate(chatRequestTextRaw(body), ceiling)
 	require.Equal(t, ceiling, got)
+}
+
+// TestServerAbandonedStreamSettlesRealistically checks that a stream the
+// client walks away from is debited the settle estimate, a realistic prompt
+// figure plus the completion ceiling, rather than the one token per byte
+// reservation that gates admission. A report without the echoed settle
+// estimate keeps settling at the reservation, and an echoed value larger
+// than the reservation is clamped to it.
+func TestServerAbandonedStreamSettlesRealistically(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bundleTokens = 500_000
+		promptBytes  = 150_000
+		estimated    = 10_000
+		prefixBytes  = 64 * 1024
+	)
+
+	// Aperture forwards only a 64 KiB prefix of the body with its full
+	// Content-Length, so the cut JSON hides max_tokens and the completion
+	// part is the configured default.
+	body := largePromptBody(promptBytes, 1)
+	full := chatRequestTextRaw(body)
+	reqText := full[:len(full)-len(body)+prefixBytes]
+	reserve := int64(len(body) + estimated)
+	settle := int64((len(body)+3)/4 + estimated)
+
+	abandonedTail := []byte(sseChunk(
+		`{"choices":[{"delta":{"content":"hi"}}],"usage":null}`,
+	))
+
+	tests := []struct {
+		name       string
+		echo       func(resp *pricesrpc.AuthorizeRequestResponse) int64
+		wantDebits int64
+	}{{
+		name: "echoed settle estimate",
+		echo: func(r *pricesrpc.AuthorizeRequestResponse) int64 {
+			return r.SettleEstimate
+		},
+		wantDebits: settle,
+	}, {
+		name: "report predating the echo",
+		echo: func(*pricesrpc.AuthorizeRequestResponse) int64 {
+			return 0
+		},
+		wantDebits: reserve,
+	}, {
+		name: "settle estimate past the reservation",
+		echo: func(r *pricesrpc.AuthorizeRequestResponse) int64 {
+			return r.ReservedEstimate + 1
+		},
+		wantDebits: reserve,
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+
+			cfg := testConfig("")
+			cfg.BundleTokens = bundleTokens
+			cfg.EstimatedTokens = estimated
+			server, err := NewServer(cfg)
+			require.NoError(t, err)
+
+			const tokenID = "5e77"
+			_, err = server.ChallengeMinted(
+				ctx, &pricesrpc.ChallengeMintedRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tokenID,
+					PriceSats:       1,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+
+			auth, err := server.AuthorizeRequest(
+				ctx, &pricesrpc.AuthorizeRequestRequest{
+					Path:            "/v1/chat/completions",
+					HttpRequestText: reqText,
+					TokenId:         tokenID,
+					ServiceName:     "llm",
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, auth.Allowed)
+			require.Equal(t, reserve, auth.ReservedEstimate)
+			require.Equal(t, settle, auth.SettleEstimate)
+
+			_, err = server.ReportUsage(
+				ctx, &pricesrpc.ReportUsageRequest{
+					TokenId:          tokenID,
+					Path:             "/v1/chat/completions",
+					ServiceName:      "llm",
+					HttpStatus:       200,
+					ContentType:      sseContentType,
+					Complete:         false,
+					ResponseTail:     abandonedTail,
+					ReservedEstimate: auth.ReservedEstimate,
+					SettleEstimate:   tc.echo(auth),
+				},
+			)
+			require.NoError(t, err)
+
+			// The debit is the expected figure and the reservation
+			// is released in full.
+			b, ok := server.store.Get(tokenID)
+			require.True(t, ok)
+			require.Equal(
+				t, bundleTokens-tc.wantDebits,
+				b.RemainingTokens,
+			)
+			require.Zero(t, b.Reserved)
+		})
+	}
 }

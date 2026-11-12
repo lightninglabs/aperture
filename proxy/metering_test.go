@@ -1123,6 +1123,7 @@ func TestMeteredResponseEndsAfterUsageReport(t *testing.T) {
 	fake.authorizeResult = &pricer.AuthorizeResult{
 		Allowed:          true,
 		ReservedEstimate: 10,
+		SettleEstimate:   5,
 	}
 	slow := &slowReportPricer{
 		fakeMeteredPricer: fake,
@@ -1166,4 +1167,5 @@ func TestMeteredResponseEndsAfterUsageReport(t *testing.T) {
 	usage := <-fake.usageReports
 	require.True(t, usage.Complete)
 	require.EqualValues(t, 10, usage.ReservedEstimate)
+	require.EqualValues(t, 5, usage.SettleEstimate)
 }

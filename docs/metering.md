@@ -74,7 +74,11 @@ From then on, every authenticated request runs the same loop:
    for the prompt, which the upstream bills regardless of `max_tokens`. The
    body size is the declared `Content-Length`, so the prefix aperture
    forwards cannot shrink it; a cut body with no declared length reserves the
-   whole bundle. The reservation is a hold, not a charge.
+   whole bundle. The reservation is a hold, not a charge. Alongside it the
+   server returns a *settle estimate*, the same completion part plus one
+   prompt token per four body bytes, capped at the reservation; with the body
+   size unknown it is the reservation, since the unseen bytes could be any
+   size. Aperture echoes both in the usage report.
 2. The request proxies to the backend, and aperture wraps the response body so
    the final bytes are captured as they pass. Nothing is buffered and nothing
    is rewritten; the wrapper keeps a bounded tail (16 KiB by default,
@@ -233,12 +237,15 @@ The second is what happens when nobody waits for that final chunk. A client
 that disconnects mid-generation takes the usage object with it: the upstream
 already produced (and billed the seller for) every token up to the
 disconnect, and the tail holds content chunks with no usage. Those responses,
-incomplete but successful and non-empty, settle at the reservation estimate,
-exactly as sessions always have. That includes the prompt bound, which usually
-overstates the prompt, and a response with no bytes still costs nothing.
-Upstreams that report running totals per chunk sidestep the whole question, since even an
-abandoned tail then carries a parseable count and the exact partial usage is
-billed.
+incomplete but successful and non-empty, settle at the settle estimate: the
+completion ceiling the request named plus a realistic prompt figure. The
+reservation's one token per byte prompt bound is kept for admission only,
+since it overstates a text prompt about fourfold and would make walking away
+from a large prompt cost several times what it should. A response with no
+bytes still costs nothing, and a report that does not echo a settle estimate
+settles at the reservation. Upstreams that report running totals per chunk
+sidestep the whole question, since even an abandoned tail then carries a
+parseable count and the exact partial usage is billed.
 
 One operator note belongs with this: aperture applies its configured
 `writetimeout` to proxied responses as a rolling window rather than a single

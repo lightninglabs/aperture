@@ -32,6 +32,13 @@ const (
 	// default 4 MiB cap is raised so a legitimately large request head
 	// cannot trip a ResourceExhausted error on the metering path.
 	maxRecvMsgSize = 32 * 1024 * 1024
+
+	// settleBytesPerToken is the request body bytes counted as one prompt
+	// token when settling a response that carries no usage object. Four
+	// is the usual average for English text under byte-level BPE, so the
+	// settle figure tracks the real prompt instead of the one token per
+	// byte bound the reservation uses for admission.
+	settleBytesPerToken = 4
 )
 
 // Server implements the pricesrpc.Prices service with token bundle metering.
@@ -395,8 +402,10 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 		ceiling = s.rates.BundleTokens(booked.Model)
 	}
 
-	// The reservation covers the prompt as well as the completion.
-	estimate := s.reservationEstimate(req.HttpRequestText, ceiling)
+	// The reservation covers the prompt as well as the completion. The
+	// settle estimate is the realistic cost a response without usage is
+	// debited, kept apart from the generous bound used for admission.
+	estimate, settle := s.reservationEstimate(req.HttpRequestText, ceiling)
 
 	auth, found, err := s.store.Authorize(req.TokenId, estimate)
 	if err != nil {
@@ -409,12 +418,13 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 			"tokens, %d tokens available", req.TokenId, estimate,
 			auth.Available)
 
-		// The reserved estimate rides back to aperture, which echoes
-		// it in the matching usage report so the exact reservation is
-		// released rather than an approximate default.
+		// The reserved and settle estimates ride back to aperture,
+		// which echoes them in the matching usage report so the exact
+		// reservation is released rather than an approximate default.
 		return &pricesrpc.AuthorizeRequestResponse{
 			Allowed:          true,
 			ReservedEstimate: estimate,
+			SettleEstimate:   settle,
 		}, nil
 	}
 
@@ -492,11 +502,18 @@ func (s *Server) completionEstimate(maxTokens int64) int64 {
 	return s.cfg.EstimatedTokens
 }
 
-// reservationEstimate returns the tokens to reserve for a request: its body
-// size as a prompt bound (the whole ceiling if the size is unknown) plus its
-// completion estimate times n, clamped to [1, ceiling].
+// reservationEstimate returns the tokens to reserve for a request and the
+// tokens to settle at if its response carries no usage object.
+//
+// The reservation is the body size as a prompt bound (the whole ceiling if the
+// size is unknown) plus the completion estimate times n, clamped to [1,
+// ceiling]. It is deliberately generous, since it gates admission. The settle
+// estimate counts settleBytesPerToken body bytes per prompt token instead,
+// clamped to [1, reservation], so a stream the client walks away from is
+// debited a realistic figure rather than the admission bound. With the size
+// unknown it equals the reservation.
 func (s *Server) reservationEstimate(httpRequestText string,
-	ceiling int64) int64 {
+	ceiling int64) (int64, int64) {
 
 	if ceiling <= 0 {
 		ceiling = s.cfg.BundleTokens
@@ -510,12 +527,13 @@ func (s *Server) reservationEstimate(httpRequestText string,
 		bytesPerToken = DefaultPromptBytesPerToken
 	}
 
-	prompt := ceiling
+	// An unknown size leaves both prompt parts at the ceiling: the bytes
+	// past the forwarded prefix are unseen, and settling on the prefix
+	// alone would let a large chunked body go for the price of 64 KiB.
+	prompt, settlePrompt := ceiling, ceiling
 	if size, known := requestBodySize(httpRequestText); known {
-		prompt = size / bytesPerToken
-		if size%bytesPerToken != 0 {
-			prompt++
-		}
+		prompt = ceilDiv(size, bytesPerToken)
+		settlePrompt = ceilDiv(size, settleBytesPerToken)
 	}
 
 	// Each of n choices can generate up to the completion ceiling.
@@ -531,9 +549,21 @@ func (s *Server) reservationEstimate(httpRequestText string,
 	}
 
 	// Clamp each part before adding so the sum cannot overflow.
-	estimate := min(prompt, ceiling) + completion
+	reserve := max(min(min(prompt, ceiling)+completion, ceiling), 1)
+	settle := max(min(min(settlePrompt, ceiling)+completion, reserve), 1)
 
-	return max(min(estimate, ceiling), 1)
+	return reserve, settle
+}
+
+// ceilDiv returns n divided by d, rounded up, for a non-negative n and a
+// positive d.
+func ceilDiv(n, d int64) int64 {
+	q := n / d
+	if n%d != 0 {
+		q++
+	}
+
+	return q
 }
 
 // ReportUsage extracts the final usage object from the captured response
@@ -589,14 +619,22 @@ func (s *Server) ReportUsage(_ context.Context,
 		release = s.cfg.EstimatedTokens
 	}
 
+	// A response without usage settles at the realistic estimate the
+	// authorization computed, never more than the reservation. A report
+	// predating the echo settles at the reservation.
+	settle := release
+	if req.SettleEstimate > 0 {
+		settle = min(req.SettleEstimate, release)
+	}
+
 	// An incomplete successful response that carried bytes but no usage
 	// object is a streamed generation the client walked away from: the
 	// usage arrives in the stream's final chunk, so abandoning the stream
 	// discards the bill for every token the upstream already produced and
-	// the seller already paid for. Settle those at the reservation
-	// estimate rather than zero. The estimate includes the prompt bound,
-	// which usually overstates the prompt. A response that produced no
-	// bytes at all still costs nothing.
+	// the seller already paid for. Settle those at the settle estimate
+	// rather than zero: the completion ceiling the request named plus a
+	// realistic prompt figure, not the generous admission bound. A
+	// response that produced no bytes at all still costs nothing.
 	settleAtEstimate := !found && !req.Complete &&
 		len(req.ResponseTail) > 0 &&
 		req.HttpStatus >= 200 && req.HttpStatus < 300
@@ -613,7 +651,7 @@ func (s *Server) ReportUsage(_ context.Context,
 
 	// The number of tokens to debit is the prompt/completion sum, or the
 	// total count when the split is absent. An abandoned stream settles at
-	// the reservation estimate instead.
+	// the settle estimate instead.
 	var debitTokens int64
 	switch {
 	case found:
@@ -624,12 +662,11 @@ func (s *Server) ReportUsage(_ context.Context,
 		}
 
 	case settleAtEstimate:
-		debitTokens = release
+		debitTokens = settle
 		log.Warnf("Incomplete %d response for token %s (path %s) "+
 			"carried %d tail bytes but no usage object; settling "+
-			"at the reserved estimate of %d tokens",
-			req.HttpStatus, req.TokenId, req.Path,
-			len(req.ResponseTail), release)
+			"at the estimate of %d tokens", req.HttpStatus,
+			req.TokenId, req.Path, len(req.ResponseTail), settle)
 	}
 
 	// The bundle was priced at the blended (input+output)/2 rate, but the

@@ -260,6 +260,11 @@
         "retry_later": {
           "type": "boolean",
           "description": "When not allowed, whether the balance is only reserved by requests in\nflight. Aperture then answers 429 with Retry-After instead of a 402."
+        },
+        "settle_estimate": {
+          "type": "string",
+          "format": "int64",
+          "description": "The tokens the price server debits when this request's response ends\nwithout a usage object, such as a stream the client walked away from.\nIt is a realistic cost estimate, no larger than reserved_estimate,\nwhich is sized generously for admission. Aperture echoes it in the\nmatching ReportUsageRequest."
         }
       }
     },
@@ -389,6 +394,11 @@
           "type": "string",
           "format": "int64",
           "description": "The reserved_estimate value the AuthorizeRequest response for this\nrequest carried, echoed back verbatim. Lets the price server release\nthe exact reservation it took at authorization time. Zero when the\nauthorization predates this field."
+        },
+        "settle_estimate": {
+          "type": "string",
+          "format": "int64",
+          "description": "The settle_estimate value the AuthorizeRequest response for this\nrequest carried, echoed back verbatim. It is what a successful response\nwithout a usage object is debited. Zero when the authorization predates\nthis field, in which case the price server settles at the reservation."
         }
       }
     },
