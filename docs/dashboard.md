@@ -24,7 +24,8 @@ means the standard build works without Node.js or npm installed.
 ## Accessing
 
 When the admin API is enabled (`admin.enabled: true`), the dashboard is served
-at the root path of the aperture listen address:
+at the root path of the aperture listen address to requests that come directly
+from the local machine (see [Security](#security)):
 
 ```
 http://localhost:8081/
@@ -93,7 +94,7 @@ The dashboard uses a server-side proxy pattern for authentication:
 ```
 Browser → /api/proxy/stats
          ↓
-[Loopback check]     Must be 127.0.0.1 / ::1
+[Loopback check]     Peer must be 127.0.0.1 / ::1 and no proxy headers
 [CSRF check]         X-Requested-With header required on mutations
 [Security headers]   X-Frame-Options, CSP, etc.
          ↓
@@ -110,14 +111,49 @@ This means:
 
 - **No client-side credentials**: The browser never sees or stores the admin
   macaroon. Authentication is handled server-side by the proxy.
-- **Loopback only**: The dashboard proxy only accepts requests from
-  `127.0.0.1` or `::1`. It cannot be accessed from remote machines.
+- **Loopback only**: The dashboard proxy only accepts direct requests from
+  `127.0.0.1` or `::1`. See [Security](#security) for what direct means.
 - **CSRF protection**: Mutating requests (POST, PUT, DELETE) require the
   `X-Requested-With` header, which cannot be set by simple cross-origin
   requests (form posts, img tags).
 - **Security headers**: Every dashboard response includes `X-Frame-Options:
   DENY`, `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, and
   `Referrer-Policy`.
+
+## Security
+
+The dashboard attaches the admin macaroon to its API calls on the server side,
+so anyone who can use the dashboard has full admin access. A loopback peer
+address is not proof that the user is local: a reverse proxy running on the
+same machine connects to aperture from `127.0.0.1` for every request it
+relays, including public ones.
+
+Two layers protect against this:
+
+- **Direct loopback only.** When `admin.dashboardlisten` is not set, the
+  dashboard stays on the main listener, but it only answers a request whose
+  peer address is loopback and which carries none of `X-Forwarded-For`,
+  `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP`, `Forwarded` or `Via`.
+  Every other request falls through to the static file server (or a 404), so
+  the public landing page keeps working. This relies on the reverse proxy
+  adding at least one of those headers, which common proxies do by default.
+- **Dedicated listener.** When `admin.dashboardlisten` is set, the dashboard
+  and its `/api/proxy/` path are served only on that address and are not
+  mounted on the main listener at all. The address must be a loopback IP
+  literal. aperture refuses to start otherwise, unless
+  `admin.dashboardallownonloopback` is set, which is dangerous and off by
+  default: anyone who can reach that address gets admin access.
+
+If aperture runs behind a reverse proxy, always set `admin.dashboardlisten`
+and reach it through an SSH tunnel:
+
+```
+ssh -L 8090:127.0.0.1:8090 your-host
+# then browse to http://127.0.0.1:8090/
+```
+
+The admin gRPC and REST APIs on the main listener are separately protected by
+macaroons and are not affected by these settings.
 
 ## Data Refresh
 
@@ -146,7 +182,14 @@ admin:
     - "http://localhost:3000"
 ```
 
-No additional dashboard-specific configuration is needed. The dashboard
+To serve the dashboard on its own listener, add:
+
+```yaml
+admin:
+  dashboardlisten: "127.0.0.1:8090"
+```
+
+Otherwise no additional dashboard-specific configuration is needed. The dashboard
 automatically detects the network (mainnet, testnet, regtest) and displays
 it as a badge in the navigation bar.
 

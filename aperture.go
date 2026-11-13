@@ -451,6 +451,14 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 	// safely read and update the service list concurrently with the
 	// proxy.
 	svcHolder := &serviceHolder{services: initialServices}
+
+	// The embedded dashboard is nil unless the binary was built with the
+	// dashboard tag.
+	dashFS, err := DashboardFS()
+	if err != nil {
+		return fmt.Errorf("unable to load embedded dashboard: %w", err)
+	}
+
 	adminPriority, adminFallback, adminCleanup, err :=
 		createAdminServer(
 			a.cfg, txnStore, secretStore, svcStore,
@@ -461,7 +469,7 @@ func (a *Aperture) Start(errChan chan error, shutdown <-chan struct{}) error {
 				}
 				svcHolder.set(s)
 				return nil
-			},
+			}, dashFS,
 		)
 	if err != nil {
 		return err
@@ -1065,7 +1073,7 @@ func createAdminServer(cfg *Config,
 	secretStore mint.SecretStore,
 	svcStore *aperturedb.ServicesStore,
 	getServices func() []*proxy.Service,
-	updateServices func([]*proxy.Service) error) (
+	updateServices func([]*proxy.Service) error, dashFS fs.FS) (
 	[]proxy.LocalService, []proxy.LocalService, func(), error) {
 
 	if cfg.Admin == nil || !cfg.Admin.Enabled {
@@ -1215,12 +1223,10 @@ func createAdminServer(cfg *Config,
 	log.Infof("Admin gRPC/REST API enabled")
 
 	// Wire the embedded dashboard if it was compiled in (build tag
-	// !nodashboard). When nil, the dashboard is not served.
-	dashFS, err := DashboardFS()
-	if err != nil {
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("unable to load embedded "+
-			"dashboard: %w", err)
+	// dashboard). When nil, the dashboard is not served.
+	if dashFS == nil && cfg.Admin.DashboardListen != "" {
+		log.Warnf("admin.dashboardlisten is set but this binary was " +
+			"built without the dashboard, so it is not served")
 	}
 
 	if dashFS != nil {
@@ -1239,41 +1245,6 @@ func createAdminServer(cfg *Config,
 				"dashboard macaroon: %w", err)
 		}
 		macHex := hex.EncodeToString(macBytes)
-
-		// dashboardProxyPrefix is the path the dashboard JS uses to
-		// reach the admin REST API. The Go server strips this prefix
-		// and forwards internally to adminRESTPrefix.
-		const dashboardProxyPrefix = "/api/proxy/"
-
-		// requireLoopback rejects requests that do not originate
-		// from a loopback address (127.0.0.1 / ::1). The
-		// dashboard proxy injects admin credentials server-side,
-		// so it must only be accessible locally.
-		requireLoopback := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(
-				func(w http.ResponseWriter, r *http.Request) {
-					host, _, err := net.SplitHostPort(
-						r.RemoteAddr,
-					)
-					if err != nil {
-						http.Error(
-							w, "forbidden",
-							http.StatusForbidden,
-						)
-						return
-					}
-					ip := net.ParseIP(host)
-					if ip == nil || !ip.IsLoopback() {
-						http.Error(
-							w, "forbidden",
-							http.StatusForbidden,
-						)
-						return
-					}
-					next.ServeHTTP(w, r)
-				},
-			)
-		}
 
 		// addSecurityHeaders wraps a handler to set standard
 		// browser security headers on every response.
@@ -1484,23 +1455,6 @@ func createAdminServer(cfg *Config,
 			},
 		)
 
-		// Wrap the proxy handler with security middleware:
-		// loopback → CSRF → security headers → handler.
-		wrappedProxy := requireLoopback(
-			csrfProtect(addSecurityHeaders(proxyHandler)),
-		)
-		priorityServices = append(
-			priorityServices, proxy.NewLocalService(
-				wrappedProxy,
-				func(r *http.Request) bool {
-					return strings.HasPrefix(
-						r.URL.Path,
-						dashboardProxyPrefix,
-					)
-				},
-			),
-		)
-
 		// Catch-all static file server with index.html fallback for
 		// client-side routing (SPA deep-link support). This is added
 		// to fallbackServices so it is only checked after proxy
@@ -1532,21 +1486,34 @@ func createAdminServer(cfg *Config,
 			},
 		)
 
-		// Wrap the dashboard static handler with loopback and
-		// security headers.
-		wrappedDash := requireLoopback(
+		// The peer check is applied by dashboardMounts, which also
+		// decides which listener the dashboard is served on. The proxy
+		// chain is CSRF, then security headers, then the handler.
+		dashPriority, dashFallback, dedicated := dashboardMounts(
+			csrfProtect(addSecurityHeaders(proxyHandler)),
 			addSecurityHeaders(dashHandler),
+			cfg.Admin.DashboardListen != "",
+			cfg.Admin.DashboardAllowNonLoopback,
 		)
-		fallbackServices = append(
-			fallbackServices, proxy.NewLocalService(
-				wrappedDash,
-				func(r *http.Request) bool {
-					return true
-				},
-			),
-		)
+		priorityServices = append(priorityServices, dashPriority...)
+		fallbackServices = append(fallbackServices, dashFallback...)
 
-		log.Infof("Admin dashboard embedded and serving")
+		if dedicated != nil {
+			stopDash, err := startDashboardServer(cfg, dedicated)
+			if err != nil {
+				cleanup()
+				return nil, nil, nil, err
+			}
+
+			stopAdmin := cleanup
+			cleanup = func() {
+				stopDash()
+				stopAdmin()
+			}
+		} else {
+			log.Infof("Admin dashboard embedded and serving on the " +
+				"main listener to direct loopback requests")
+		}
 	}
 
 	return priorityServices, fallbackServices, cleanup, nil

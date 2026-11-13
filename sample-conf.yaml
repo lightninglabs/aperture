@@ -142,6 +142,20 @@ authenticator:
 #   macaroonpath: "/path/to/aperture/data/admin.macaroon"
 #   corsorigin:
 #     - "https://dashboard.example.com"
+#
+#   SECURITY: the embedded dashboard (dashboard build tag) injects the admin
+#   macaroon into its API calls, so it must never be reachable by the public.
+#   By default it is served on the main listener to direct loopback requests
+#   only, and requests that carry reverse proxy headers (X-Forwarded-For and
+#   friends) are refused. If aperture runs behind a reverse proxy, always set
+#   dashboardlisten, which serves the dashboard only on its own loopback
+#   listener and not on the main one. Reach it through an SSH tunnel, for
+#   example: ssh -L 8090:127.0.0.1:8090 host
+#   dashboardlisten: "127.0.0.1:8090"
+#
+#   Binding dashboardlisten to a non-loopback address is refused unless this
+#   is set. Anyone who can reach that address gets admin access.
+#   dashboardallownonloopback: false
 
 # List of IPs to block from accessing the proxy.
 blocklist:
