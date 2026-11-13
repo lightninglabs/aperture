@@ -84,8 +84,17 @@ export function useTransactions(params: TransactionParams) {
   return useSWR<Transaction[]>(
     key,
     (path: string) =>
-      fetcher<{ transactions: Transaction[] }>(path).then(
-        (r) => r.transactions ?? []
+      fetcher<{ transactions: Array<Record<string, unknown>> }>(path).then(
+        (r) =>
+          (r.transactions ?? []).map(
+            (t) =>
+              ({
+                ...t,
+                // The admin API encodes int64 fields as JSON strings.
+                id: Number(t.id ?? 0),
+                price_sats: Number(t.price_sats ?? 0),
+              }) as unknown as Transaction
+          )
       ),
     { refreshInterval: 30_000 }
   );

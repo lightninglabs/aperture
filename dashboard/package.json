@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "node --experimental-strip-types --test lib/*.test.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

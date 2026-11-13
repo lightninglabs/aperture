@@ -116,6 +116,10 @@ jobs:
         working-directory: dashboard
         run: npm run format:check
 
+      - name: unit tests
+        working-directory: dashboard
+        run: npm test
+
   ########################
   # run unit tests
   ########################
