@@ -11,7 +11,8 @@ export interface TxLike {
 export interface TimeBucket {
   // Start of the bucket in local time.
   time: Date;
-  // Sum of price_sats for every transaction in the bucket.
+  // Sum of price_sats for settled transactions only. Pending rows are
+  // unpaid quotes (one per payment scheme per 402), not revenue.
   sats: number;
   settled: number;
   pending: number;
@@ -106,9 +107,12 @@ export function bucketTransactions(
 
   for (const { tx, t } of points) {
     const b = buckets[indexOf(t)];
-    b.sats += toSats(tx.price_sats);
-    if (tx.state === "settled") b.settled++;
-    else b.pending++;
+    if (tx.state === "settled") {
+      b.sats += toSats(tx.price_sats);
+      b.settled++;
+    } else {
+      b.pending++;
+    }
   }
 
   return { buckets, hourly };

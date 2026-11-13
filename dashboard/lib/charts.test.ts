@@ -75,6 +75,27 @@ describe("bucketTransactions", () => {
     assert.equal(buckets[0].sats, 42);
   });
 
+  it("counts only settled prices as revenue", () => {
+    const { buckets } = bucketTransactions([
+      { price_sats: 21, state: "pending", created_at: at(11, 11, 20) },
+      { price_sats: 21, state: "settled", created_at: at(11, 11, 20) },
+      { price_sats: 5, state: "pending", created_at: at(11, 11, 20) },
+    ]);
+    assert.equal(buckets.length, 1);
+    assert.equal(buckets[0].sats, 21);
+    // Volume still counts every row.
+    assert.equal(buckets[0].settled + buckets[0].pending, 3);
+  });
+
+  it("yields a flat zero series when everything is pending", () => {
+    const { buckets } = bucketTransactions([
+      { price_sats: 21, state: "pending", created_at: at(11, 11, 20) },
+      { price_sats: 21, state: "pending", created_at: at(11, 11, 23) },
+    ]);
+    assert.equal(buckets.length, 4);
+    assert.ok(buckets.every((b) => b.sats === 0));
+  });
+
   it("does not concatenate if a price arrives as a string", () => {
     const { buckets } = bucketTransactions([
       { price_sats: "21", state: "settled", created_at: at(11, 11, 20) },
