@@ -11,12 +11,27 @@ import { localPoint } from "@visx/event";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { theme } from "@/lib/theme";
 import type { Transaction } from "@/lib/types";
+import {
+  bucketTransactions,
+  fullBucketLabel,
+  shortBucketLabel,
+  tickIndexes,
+} from "@/lib/charts";
 
 interface Bucket {
+  // Full label for tooltips.
   label: string;
+  // Short label for the x-axis.
+  tick: string;
   settled: number;
   pending: number;
 }
+
+// Cap on the number of bars so a long range stays readable.
+const MAX_BUCKETS = 60;
+
+// Approximate pixel width of one x-axis tick label.
+const TICK_LABEL_WIDTH = 64;
 
 const STATES = ["settled", "pending"] as const;
 const STATE_COLORS: Record<string, string> = {
@@ -27,35 +42,12 @@ const STATE_COLORS: Record<string, string> = {
 const margin = { top: 10, right: 16, bottom: 32, left: 48 };
 
 function bucketByDay(transactions: Transaction[]): Bucket[] {
-  if (!transactions.length) return [];
-
-  const sorted = [...transactions].sort(
-    (a, b) =>
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  );
-
-  const earliest = new Date(sorted[0].created_at);
-  const latest = new Date(sorted[sorted.length - 1].created_at);
-  const rangeMs = latest.getTime() - earliest.getTime();
-  const useHours = rangeMs < 2 * 86400000;
-
-  const buckets = new Map<string, { settled: number; pending: number }>();
-
-  for (const tx of sorted) {
-    const d = new Date(tx.created_at);
-    const key = useHours
-      ? `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:00`
-      : `${d.getMonth() + 1}/${d.getDate()}`;
-
-    if (!buckets.has(key)) buckets.set(key, { settled: 0, pending: 0 });
-    const b = buckets.get(key)!;
-    if (tx.state === "settled") b.settled++;
-    else b.pending++;
-  }
-
-  return Array.from(buckets.entries()).map(([label, counts]) => ({
-    label,
-    ...counts,
+  const { buckets, hourly } = bucketTransactions(transactions, MAX_BUCKETS);
+  return buckets.map((b, i) => ({
+    label: fullBucketLabel(b.time, hourly),
+    tick: shortBucketLabel(b.time, hourly, i === 0),
+    settled: b.settled,
+    pending: b.pending,
   }));
 }
 
@@ -104,6 +96,11 @@ function Chart({
     range: [yMax, 0],
     nice: true,
   });
+
+  const tickLabels = new Map(data.map((d) => [d.label, d.tick]));
+  const tickValues = tickIndexes(data.length, xMax, TICK_LABEL_WIDTH).map(
+    (i) => data[i].label
+  );
 
   const colorScale = scaleOrdinal<string, string>({
     domain: [...STATES],
@@ -171,6 +168,7 @@ function Chart({
             stroke={theme.colors.blue}
             tickStroke="transparent"
             numTicks={4}
+            tickFormat={(v) => (Number.isInteger(v) ? String(v) : "")}
             tickLabelProps={{
               fill: theme.colors.gray,
               fontSize: 11,
@@ -185,14 +183,13 @@ function Chart({
             top={yMax}
             stroke={theme.colors.blue}
             tickStroke="transparent"
+            tickValues={tickValues}
+            tickFormat={(v) => tickLabels.get(v) ?? v}
             tickLabelProps={{
               fill: theme.colors.gray,
               fontSize: 10,
               fontFamily: theme.fonts.open,
               textAnchor: "middle",
-              angle: data.length > 14 ? -45 : 0,
-              dy: data.length > 14 ? -4 : 0,
-              dx: data.length > 14 ? -10 : 0,
             }}
           />
         </Group>

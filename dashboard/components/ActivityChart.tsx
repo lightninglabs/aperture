@@ -11,54 +11,15 @@ import { bisector } from "d3-array";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { theme } from "@/lib/theme";
 import type { Transaction } from "@/lib/types";
+import {
+  bucketTransactions,
+  formatCompact,
+  type TimeBucket,
+} from "@/lib/charts";
 
-interface Bucket {
-  time: Date;
-  sats: number;
-}
-
-function bucketTransactions(transactions: Transaction[]): Bucket[] {
-  if (!transactions.length) return [];
-
-  const sorted = [...transactions].sort(
-    (a, b) =>
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  );
-
-  const earliest = new Date(sorted[0].created_at);
-  const latest = new Date(sorted[sorted.length - 1].created_at);
-  const rangeMs = latest.getTime() - earliest.getTime();
-  const bucketMs = rangeMs < 2 * 86400000 ? 3600000 : 86400000;
-
-  const buckets = new Map<number, number>();
-  for (const tx of sorted) {
-    const t = new Date(tx.created_at).getTime();
-    const key = Math.floor(t / bucketMs) * bucketMs;
-    buckets.set(key, (buckets.get(key) || 0) + tx.price_sats);
-  }
-
-  const startKey = Math.floor(earliest.getTime() / bucketMs) * bucketMs;
-  const endKey = Math.floor(latest.getTime() / bucketMs) * bucketMs;
-  const result: Bucket[] = [];
-  for (let k = startKey; k <= endKey; k += bucketMs) {
-    result.push({ time: new Date(k), sats: buckets.get(k) || 0 });
-  }
-  return result;
-}
+type Bucket = TimeBucket;
 
 const bisectDate = bisector<Bucket, Date>((d) => d.time).left;
-
-function formatCompact(value: number): string {
-  if (value >= 1_000_000) {
-    const v = value / 1_000_000;
-    return v % 1 === 0 ? `${v}M` : `${v.toFixed(1)}M`;
-  }
-  if (value >= 1_000) {
-    const v = value / 1_000;
-    return v % 1 === 0 ? `${v}k` : `${v.toFixed(1)}k`;
-  }
-  return String(value);
-}
 
 const LEFT_PAD = 50;
 
@@ -276,7 +237,7 @@ interface Props {
 }
 
 export default function ActivityChart({ transactions }: Props) {
-  const data = bucketTransactions(transactions);
+  const { buckets: data } = bucketTransactions(transactions);
 
   if (data.length === 0) return null;
 

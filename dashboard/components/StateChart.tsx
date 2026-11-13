@@ -76,18 +76,20 @@ export default function StateChart({ transactions }: Props) {
                 return (
                   <g key={arc.data.state}>
                     <path d={pie.path(arc) || ""} fill={color} />
-                    <Text
-                      x={centroidX}
-                      y={centroidY}
-                      textAnchor="middle"
-                      verticalAnchor="middle"
-                      fill="#ffffff"
-                      fontSize={11}
-                      fontFamily="Open Sans, sans-serif"
-                      fontWeight={600}
-                    >
-                      {arc.data.count}
-                    </Text>
+                    {data.length > 1 && (
+                      <Text
+                        x={centroidX}
+                        y={centroidY}
+                        textAnchor="middle"
+                        verticalAnchor="middle"
+                        fill="#ffffff"
+                        fontSize={11}
+                        fontFamily="Open Sans, sans-serif"
+                        fontWeight={600}
+                      >
+                        {arc.data.count}
+                      </Text>
+                    )}
                   </g>
                 );
               })

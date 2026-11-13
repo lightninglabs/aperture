@@ -9,6 +9,7 @@ import { ParentSize } from "@visx/responsive";
 import { LinearGradient } from "@visx/gradient";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { theme } from "@/lib/theme";
+import { formatCompact } from "@/lib/charts";
 import type { ServiceRevenueItem } from "@/lib/types";
 
 const margin = { top: 10, right: 40, bottom: 30, left: 120 };
@@ -40,7 +41,9 @@ function Chart({
   const yMax = height - margin.top - margin.bottom;
 
   const xScale = scaleLinear<number>({
-    domain: [0, Math.max(...data.map((d) => d.total_revenue_sats), 1)],
+    // Keep a minimum domain so all-zero revenue does not produce
+    // fractional tick labels.
+    domain: [0, Math.max(...data.map((d) => d.total_revenue_sats), 5)],
     range: [0, xMax],
     nice: true,
   });
@@ -116,6 +119,7 @@ function Chart({
             stroke="#384770"
             tickStroke="#384770"
             numTicks={5}
+            tickFormat={(v) => formatCompact(Number(v))}
             tickLabelProps={{
               fill: "#848a99",
               fontSize: 11,
