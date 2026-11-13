@@ -3,6 +3,7 @@ package aperture
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/lightninglabs/aperture/aperturedb"
 	"github.com/lightninglabs/aperture/auth"
+	"github.com/lightninglabs/aperture/netutil"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightningnetwork/lnd/build"
 )
@@ -358,8 +360,19 @@ type Config struct {
 	// strictly less than WsPingInterval when pings are enabled.
 	WsPongWait time.Duration `long:"wspongwait" description:"Duration to wait for a WebSocket pong response before closing the connection."`
 
+	// ChallengeRateLimit bounds the 402 challenges issued per client
+	// network, since each one mints invoices before anything is paid.
+	ChallengeRateLimit *proxy.ChallengeRateLimitConfig `group:"challengeratelimit" namespace:"challengeratelimit" description:"Limit on 402 challenges issued per client network."`
+
 	// Blocklist is a list of IPs to deny access to.
 	Blocklist []string `long:"blocklist" description:"List of IP addresses to block from accessing the proxy."`
+
+	// TrustedProxies lists the reverse proxies in front of aperture, as
+	// CIDRs or single IPs. The X-Forwarded-For header of a request from
+	// one of them names the real client, which is then the address used by
+	// the blocklist, rate limits and freebies. Empty means no proxy is
+	// trusted and clients are identified by the TCP peer address.
+	TrustedProxies []string `long:"trustedproxies" description:"CIDRs or IPs of the reverse proxies whose X-Forwarded-For header is trusted to identify the client. Empty trusts none." yaml:"trustedproxies"`
 }
 
 func (c *Config) validate() error {
@@ -371,6 +384,10 @@ func (c *Config) validate() error {
 
 	if c.ListenAddr == "" {
 		return fmt.Errorf("missing listen address for server")
+	}
+
+	if _, err := netutil.ParseTrustedProxies(c.TrustedProxies); err != nil {
+		return err
 	}
 
 	if c.InvoiceBatchSize <= 0 {
@@ -420,19 +437,20 @@ func NewConfig() *Config {
 		Authenticator: &AuthConfig{
 			MPPChallengeExpiry: auth.DefaultChallengeExpiry,
 		},
-		Tor:              &TorConfig{},
-		HashMail:         &HashMailConfig{},
-		Prometheus:       &PrometheusConfig{},
-		Admin:            &AdminConfig{},
-		IdleTimeout:      defaultIdleTimeout,
-		ReadTimeout:      defaultReadTimeout,
-		WriteTimeout:     defaultWriteTimeout,
-		WsPingInterval:   defaultWsPingInterval,
-		WsPongWait:       defaultWsPongWait,
-		InvoiceBatchSize: defaultInvoiceBatchSize,
-		Logging:          build.DefaultLogConfig(),
-		Blocklist:        []string{},
-		StrictVerify:     defaultStrictVerify,
+		Tor:                &TorConfig{},
+		HashMail:           &HashMailConfig{},
+		Prometheus:         &PrometheusConfig{},
+		Admin:              &AdminConfig{},
+		IdleTimeout:        defaultIdleTimeout,
+		ReadTimeout:        defaultReadTimeout,
+		WriteTimeout:       defaultWriteTimeout,
+		WsPingInterval:     defaultWsPingInterval,
+		WsPongWait:         defaultWsPongWait,
+		InvoiceBatchSize:   defaultInvoiceBatchSize,
+		Logging:            build.DefaultLogConfig(),
+		Blocklist:          []string{},
+		StrictVerify:       defaultStrictVerify,
+		ChallengeRateLimit: proxy.DefaultChallengeRateLimitConfig(),
 	}
 }
 
@@ -540,4 +558,27 @@ func checkSqliteDatabaseMoved(dbFile, defaultPath string) error {
 		"move it together with its -wal and -shm files to %s, or "+
 		"unset sqlite.dbfile to keep using it", dbFile, defaultPath,
 		dbFile)
+}
+
+// sharesChallengeBucket reports whether the challenge limiter is likely to put
+// every client into one bucket: it is enabled, no proxy is trusted, and the
+// server listens only on a loopback address, which means every connection
+// comes from a reverse proxy on this host.
+func (c *Config) sharesChallengeBucket() bool {
+	rl := c.ChallengeRateLimit
+	if rl == nil || rl.Requests == 0 || len(c.TrustedProxies) > 0 {
+		return false
+	}
+
+	host, _, err := net.SplitHostPort(c.ListenAddr)
+	if err != nil {
+		host = c.ListenAddr
+	}
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }

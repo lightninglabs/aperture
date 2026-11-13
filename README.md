@@ -366,6 +366,62 @@ Anonymous requests and services with `auth: "off"` keep IP-based limits.
 
 Requests authenticated with a Payment credential are limited by IP address.
 
+### Challenge Rate Limiting
+
+Every `402` response mints invoices at the seller's invoice backend before
+anyone has paid: one for L402, and up to three with MPP and sessions enabled.
+A client that never pays still holds those invoices until they expire, so an
+unauthenticated client would otherwise decide how many unpaid invoices the
+seller holds. That matters most for a backend that caps unpaid invoices, like a
+Wavelength wallet with 32 pending receive intents: about eleven probes fill the
+cap, and challenges then fail for every client until the invoices expire.
+
+Aperture therefore limits the challenges it issues per client network (the
+same masked source address the service rate limits use), before any invoice is
+minted. A client over the limit gets `429` with `Retry-After` and no invoice.
+The limit is on by default at 10 challenges per hour per client network, so
+one network holds at most 30 unpaid invoices. It covers every service. Tune or
+disable it at the top level of `aperture.yaml`:
+
+```yaml
+challengeratelimit:
+  requests: 10   # Challenges per window per client network. 0 disables.
+  per: 1h
+  burst: 10      # Defaults to requests.
+```
+
+This bounds a single network, not a botnet spread over many networks. Raise
+`requests` for a seller with many honest buyers behind one NAT.
+
+#### Behind a reverse proxy
+
+By default Aperture identifies a client by the TCP peer address. Behind a
+reverse proxy on the same host that address is the proxy for every request, so
+all clients would share one bucket, and one scanner would use up the 10
+challenges for every real buyer. The blocklist, the per-service rate limits and
+freebies are keyed the same way and have the same problem.
+
+Set `trustedproxies` to the address of the proxy, as IPs or CIDRs, so that
+Aperture reads the client from `X-Forwarded-For`:
+
+```yaml
+trustedproxies:
+  - "127.0.0.1"
+```
+
+The header is only read when the TCP peer is one of the trusted proxies. It is
+then read from right to left. A proxy appends the address it saw to the end of
+the header, after any value the client sent, so the rightmost entry is the one
+the proxy vouches for and entries to its left can be forged. Entries that are
+themselves trusted proxies are skipped, and the first other entry that parses
+as an IP is the client. With no usable entry the peer address is used. The
+resolved address is the one the blocklist, rate limits, freebies and logs all
+see. The list is empty by default, which trusts no header, and Aperture logs a
+warning at startup if the challenge limit is on, it listens on a loopback
+address and `trustedproxies` is empty. Only list proxies that overwrite or
+append to `X-Forwarded-For` as described, and that are the only way to reach
+Aperture, since a header from any other peer in the list is believed.
+
 ### Features
 
 * **Token bucket algorithm**: Allows controlled bursting while maintaining a
