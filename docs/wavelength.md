@@ -358,7 +358,9 @@ The setup is the same on mainnet, with a few differences:
   limits challenges per client network by default (`challengeratelimit`, 10
   per hour) so one source cannot fill the cap. A flood from many networks
   can still fill it until the invoices expire, so size `requests` for your
-  traffic. See "Challenge Rate Limiting" in the README.
+  traffic. Behind a reverse proxy, set `trustedproxies` to the proxy address,
+  or every client shares one bucket. See "Challenge Rate Limiting" in the
+  README.
 - The seller's balance lives in Ark, and payments below the operator's
   minimum coin size are held as credit by the swap server. See the Wavelength
   docs for how to move funds on-chain.

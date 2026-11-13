@@ -380,10 +380,8 @@ Aperture therefore limits the challenges it issues per client network (the
 same masked source address the service rate limits use), before any invoice is
 minted. A client over the limit gets `429` with `Retry-After` and no invoice.
 The limit is on by default at 10 challenges per hour per client network, so
-one network holds at most 30 unpaid invoices. It covers every service, and
-behind a proxy it keys on the address Aperture sees, so terminate PROXY
-protocol or forwarding upstream of it. Tune or disable it at the top level of
-`aperture.yaml`:
+one network holds at most 30 unpaid invoices. It covers every service. Tune or
+disable it at the top level of `aperture.yaml`:
 
 ```yaml
 challengeratelimit:
@@ -394,6 +392,35 @@ challengeratelimit:
 
 This bounds a single network, not a botnet spread over many networks. Raise
 `requests` for a seller with many honest buyers behind one NAT.
+
+#### Behind a reverse proxy
+
+By default Aperture identifies a client by the TCP peer address. Behind a
+reverse proxy on the same host that address is the proxy for every request, so
+all clients would share one bucket, and one scanner would use up the 10
+challenges for every real buyer. The blocklist, the per-service rate limits and
+freebies are keyed the same way and have the same problem.
+
+Set `trustedproxies` to the address of the proxy, as IPs or CIDRs, so that
+Aperture reads the client from `X-Forwarded-For`:
+
+```yaml
+trustedproxies:
+  - "127.0.0.1"
+```
+
+The header is only read when the TCP peer is one of the trusted proxies. It is
+then read from right to left. A proxy appends the address it saw to the end of
+the header, after any value the client sent, so the rightmost entry is the one
+the proxy vouches for and entries to its left can be forged. Entries that are
+themselves trusted proxies are skipped, and the first other entry that parses
+as an IP is the client. With no usable entry the peer address is used. The
+resolved address is the one the blocklist, rate limits, freebies and logs all
+see. The list is empty by default, which trusts no header, and Aperture logs a
+warning at startup if the challenge limit is on, it listens on a loopback
+address and `trustedproxies` is empty. Only list proxies that overwrite or
+append to `X-Forwarded-For` as described, and that are the only way to reach
+Aperture, since a header from any other peer in the list is believed.
 
 ### Features
 

@@ -166,6 +166,15 @@ challengeratelimit:
   # Defaults to requests if not set.
   burst: 10
 
+# Reverse proxies in front of aperture, as IPs or CIDRs. The X-Forwarded-For
+# header of a request from one of them names the real client, and is read from
+# right to left because the proxy appends the address it saw last. The client
+# address is what the blocklist, rate limits (including challengeratelimit) and
+# freebies use. Leave empty if aperture is reached directly. Without it, behind
+# a local reverse proxy every client shares one rate-limit bucket.
+# trustedproxies:
+#   - "127.0.0.1"
+
 # List of IPs to block from accessing the proxy.
 blocklist:
   - "1.1.1.1"

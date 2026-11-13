@@ -33,6 +33,7 @@ import (
 	"github.com/lightninglabs/aperture/challenger"
 	"github.com/lightninglabs/aperture/lnc"
 	"github.com/lightninglabs/aperture/mint"
+	"github.com/lightninglabs/aperture/netutil"
 	"github.com/lightninglabs/aperture/proxy"
 	"github.com/lightninglabs/lightning-node-connect/hashmailrpc"
 	"github.com/lightninglabs/lndclient"
@@ -1912,6 +1913,21 @@ func createProxy(cfg *Config, services []*proxy.Service,
 	)
 	if err != nil {
 		return prxy, proxyCleanup, err
+	}
+
+	trusted, err := netutil.ParseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return prxy, proxyCleanup, err
+	}
+	prxy.SetTrustedProxies(trusted)
+
+	if cfg.sharesChallengeBucket() {
+		log.Warnf("The challenge rate limit is enabled and aperture " +
+			"listens on a loopback address without trustedproxies " +
+			"set. Behind a local reverse proxy every client then " +
+			"shares one rate-limit bucket, so one scanner can lock " +
+			"out all buyers. Set trustedproxies to the address of " +
+			"the reverse proxy.")
 	}
 
 	err = prxy.SetChallengeRateLimit(cfg.ChallengeRateLimit)

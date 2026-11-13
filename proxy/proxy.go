@@ -20,6 +20,7 @@ import (
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/aperture/mpp"
+	"github.com/lightninglabs/aperture/netutil"
 	"google.golang.org/grpc/codes"
 )
 
@@ -107,6 +108,12 @@ type Proxy struct {
 	services      []*Service
 	blocklist     map[string]struct{}
 
+	// trustedProxies are the reverse proxies whose X-Forwarded-For header
+	// is believed when resolving the client address. It is empty unless
+	// SetTrustedProxies is called, which leaves every client address as
+	// the TCP peer address.
+	trustedProxies []*net.IPNet
+
 	// writeDeadlineWindow, when non-zero, converts the server's absolute
 	// write timeout into a rolling idle deadline for proxied responses:
 	// each write to the client pushes the connection's write deadline this
@@ -117,6 +124,21 @@ type Proxy struct {
 	// With it, the timeout means what an operator almost certainly
 	// intended: a stream dies when it stalls, not when it lasts.
 	writeDeadlineWindow time.Duration
+}
+
+// SetTrustedProxies installs the networks of the reverse proxies in front of
+// this proxy. A request from one of them is attributed to the client address
+// the proxy reports in X-Forwarded-For, see netutil.ClientIP, and every
+// per-client control (blocklist, rate limits, freebies, logs) then sees that
+// address rather than the proxy's. It must be called before the proxy serves
+// requests.
+func (p *Proxy) SetTrustedProxies(nets []*net.IPNet) {
+	p.trustedProxies = nets
+}
+
+// clientIP returns the address of the client behind a request.
+func (p *Proxy) clientIP(r *http.Request) net.IP {
+	return netutil.ClientIP(r, p.trustedProxies)
 }
 
 // SetWriteDeadlineWindow installs the rolling write deadline window applied
@@ -284,7 +306,8 @@ func New(auth auth.Authenticator, services []*Service,
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse and log the remote IP address. We also need the parsed IP
 	// address for the freebie count.
-	remoteIP, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
+	remoteIP := p.clientIP(r)
+	prefixLog := NewIPPrefixLog(log, remoteIP)
 
 	// Log the request target as the client sent it, before canonicalization
 	// rewrites it.
@@ -1191,7 +1214,8 @@ func (p *Proxy) handlePaymentRequired(w http.ResponseWriter, r *http.Request,
 	// challenges would then fail for every client until the invoices
 	// expire.
 	if p.challengeLimiter != nil {
-		remoteIP, prefixLog := NewRemoteIPPrefixLog(log, r.RemoteAddr)
+		remoteIP := p.clientIP(r)
+		prefixLog := NewIPPrefixLog(log, remoteIP)
 		key := ExtractRateLimitKey(r, remoteIP, false)
 		allowed, retryAfter := p.challengeLimiter.Allow(r, key)
 		if !allowed {
