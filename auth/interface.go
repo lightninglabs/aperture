@@ -47,6 +47,11 @@ type InvoiceChecker interface {
 	// hash has the desired status. To make sure we don't fail while the
 	// invoice update is still on its way, we try several times until either
 	// the desired status is set or the given timeout is reached.
+	//
+	// Callers must only invoke it after confirming that the presented
+	// preimage hashes to the payment hash. Checkers whose backend cannot
+	// report invoice state rely on that to treat a SETTLED query as proof
+	// of payment and record the settlement.
 	VerifyInvoiceStatus(lntypes.Hash, lnrpc.Invoice_InvoiceState,
 		time.Duration) error
 }

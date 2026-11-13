@@ -44,8 +44,24 @@ type LndChallenger struct {
 	strictVerify bool
 
 	// onSettled is an optional callback that is invoked when an invoice
-	// transitions to the settled state.
+	// transitions to the settled state. For a client that cannot track
+	// invoices it is instead invoked the first time a credential for the
+	// payment hash passes verification.
 	onSettled func(hash lntypes.Hash)
+
+	// untracked is true when the client cannot list or subscribe to its
+	// invoices. Settlement is then inferred from verified credentials
+	// rather than observed from an invoice stream.
+	untracked bool
+
+	// verifiedMtx guards verified.
+	verifiedMtx sync.Mutex
+
+	// verified holds the payment hashes already handed to onSettled by
+	// the credential path, so a long-lived credential presented on every
+	// request does not queue a database write each time. It is bounded:
+	// once full it is reset, which at worst repeats an idempotent write.
+	verified map[lntypes.Hash]struct{}
 
 	// settlementQueue is an unbounded concurrent queue used to serialize
 	// settlement callbacks without blocking the invoice stream reader.
@@ -90,6 +106,8 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 		quit:          make(chan struct{}),
 		errChan:       errChan,
 		strictVerify:  strictVerification,
+		untracked:     !tracksInvoices(client),
+		verified:      make(map[lntypes.Hash]struct{}),
 	}
 
 	// Apply functional options.
@@ -103,8 +121,8 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 	// fail. Settle that here, once, rather than leaving every call site to
 	// remember which backend it wired up: the admin dashboard turns on a
 	// settlement callback without knowing or caring what is minting the
-	// invoices, and that combination used to be a startup crash.
-	if !tracksInvoices(client) {
+	// invoices.
+	if challenger.untracked {
 		// Strict verification is refused rather than downgraded. It
 		// means the challenger honours a token only once it has seen
 		// that token's invoice settle, so quietly skipping the
@@ -116,12 +134,12 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 				"to its invoices")
 		}
 
+		// The settlement callback is kept: it fires from
+		// VerifyInvoiceStatus once a credential has proven payment.
 		if challenger.onSettled != nil {
-			log.Warnf("Invoice client cannot track invoice " +
-				"state, so settlements will not be recorded " +
-				"for this backend")
-
-			challenger.onSettled = nil
+			log.Infof("Invoice client cannot track invoice " +
+				"state, so settlements will be recorded when " +
+				"a paid credential is first presented")
 		}
 	}
 
@@ -149,6 +167,17 @@ func NewLndChallenger(client InvoiceClient, batchSize int,
 // invoices on startup and a subscription to all subsequent invoice updates
 // is created.
 func (l *LndChallenger) Start() error {
+	// A client that cannot track invoices has no stream to read and no
+	// history to reconcile. All it needs is the worker that drains
+	// settlements queued by verified credentials.
+	if l.untracked {
+		if l.onSettled != nil {
+			l.startSettlementWorker(nil)
+		}
+
+		return nil
+	}
+
 	// If we aren't doing strict verification and have no settlement
 	// callback, we can skip invoice tracking entirely.
 	if !l.strictVerify && l.onSettled == nil {
@@ -266,38 +295,68 @@ func (l *LndChallenger) Start() error {
 	// that processes settlements sequentially from the unbounded queue,
 	// then enqueue any startup-settled invoices for reconciliation.
 	if l.onSettled != nil {
-		l.wg.Add(1)
-		go func() {
-			defer l.wg.Done()
-			for {
-				select {
-				case item, ok := <-l.settlementQueue.ChanOut():
-					if !ok {
-						return
-					}
-
-					hash, valid := item.(lntypes.Hash)
-					if !valid {
-						continue
-					}
-
-					l.onSettled(hash)
-
-				case <-l.quit:
-					return
-				}
-			}
-		}()
-
-		// Enqueue startup-settled invoices through the queue
-		// so they are processed asynchronously by the worker
-		// goroutine above. This avoids blocking startup.
-		for _, hash := range startupSettled {
-			l.settlementQueue.ChanIn() <- hash
-		}
+		l.startSettlementWorker(startupSettled)
 	}
 
 	return nil
+}
+
+// startSettlementWorker starts the goroutine that runs the settlement callback
+// for each hash on the settlement queue, and enqueues the given hashes through
+// it so they are processed asynchronously rather than blocking startup.
+func (l *LndChallenger) startSettlementWorker(initial []lntypes.Hash) {
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		for {
+			select {
+			case item, ok := <-l.settlementQueue.ChanOut():
+				if !ok {
+					return
+				}
+
+				hash, valid := item.(lntypes.Hash)
+				if !valid {
+					continue
+				}
+
+				l.onSettled(hash)
+
+			case <-l.quit:
+				return
+			}
+		}
+	}()
+
+	for _, hash := range initial {
+		l.settlementQueue.ChanIn() <- hash
+	}
+}
+
+// maxVerifiedCache bounds the set of payment hashes remembered by the
+// credential settlement path.
+const maxVerifiedCache = 4096
+
+// settleVerified queues the settlement callback for a payment hash whose
+// credential has just passed verification, at most once per hash until the
+// bounded cache resets. The write happens on the settlement worker, so a slow
+// or failing database never delays the request being authenticated.
+func (l *LndChallenger) settleVerified(hash lntypes.Hash) {
+	l.verifiedMtx.Lock()
+	if _, ok := l.verified[hash]; ok {
+		l.verifiedMtx.Unlock()
+		return
+	}
+	if len(l.verified) >= maxVerifiedCache {
+		l.verified = make(map[lntypes.Hash]struct{})
+	}
+	l.verified[hash] = struct{}{}
+	l.verifiedMtx.Unlock()
+
+	select {
+	case l.settlementQueue.ChanIn() <- hash:
+	case <-l.quit:
+	}
 }
 
 // readInvoiceStream reads the invoice update messages sent on the stream until
@@ -460,6 +519,18 @@ func (l *LndChallenger) VerifyInvoiceStatus(hash lntypes.Hash,
 
 	// If we're not doing strict verification, we can skip this check.
 	if !l.strictVerify {
+		// A backend that cannot report invoice state never fires the
+		// settlement callback itself. Every caller reaches this point
+		// only after checking that the presented preimage hashes to
+		// this payment hash, and a preimage is released only by
+		// paying, so a request that gets here is proof the invoice
+		// settled. Record it from here.
+		if l.untracked && state == lnrpc.Invoice_SETTLED &&
+			l.onSettled != nil {
+
+			l.settleVerified(hash)
+		}
+
 		log.Tracef("Skipping invoice state check, pay_hash=%v", hash)
 		return nil
 	}

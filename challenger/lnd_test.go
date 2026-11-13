@@ -529,13 +529,13 @@ func TestUntrackedClientWithSettlementCallback(t *testing.T) {
 	require.NoError(t, err)
 	defer c.Stop()
 
-	// Neither of the invoice tracking calls may have been attempted, and
-	// no settlement queue should be left running to feed a callback that
-	// can never fire.
+	// Neither of the invoice tracking calls may have been attempted. The
+	// callback is kept, since it fires from credential verification
+	// instead, and nothing has verified a credential yet.
 	require.Zero(t, client.listCalls)
 	require.Zero(t, client.subscribeCalls)
-	require.Nil(t, c.onSettled)
-	require.Nil(t, c.settlementQueue)
+	require.NotNil(t, c.onSettled)
+	require.NotNil(t, c.settlementQueue)
 	require.Empty(t, settled)
 
 	// Minting still works, which is the one thing this backend is for.
@@ -604,4 +604,81 @@ func TestTrackingClientKeepsSettlementCallback(t *testing.T) {
 
 	mockClient.stop()
 	c.Stop()
+}
+
+// TestUntrackedClientSettlesOnVerifiedCredential checks the settlement path of
+// a backend that cannot report invoice state: a SETTLED verification of a
+// payment hash fires the callback for that hash only, once, and a hash nobody
+// presented a credential for stays unsettled.
+func TestUntrackedClientSettlesOnVerifiedCredential(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu      sync.Mutex
+		settled = make(map[lntypes.Hash]int)
+	)
+	c, err := NewLndChallenger(
+		&untrackedInvoiceClient{}, 10,
+		func(int64) (*lnrpc.Invoice, error) {
+			return &lnrpc.Invoice{Value: 99}, nil
+		}, context.Background, make(chan error), false,
+		WithSettlementCallback(func(hash lntypes.Hash) {
+			mu.Lock()
+			settled[hash]++
+			mu.Unlock()
+		}),
+	)
+	require.NoError(t, err)
+
+	paid := lntypes.Hash{1}
+	other := lntypes.Hash{2}
+	unpaid := lntypes.Hash{3}
+
+	// A query for any state but SETTLED proves nothing.
+	require.NoError(t, c.VerifyInvoiceStatus(
+		unpaid, lnrpc.Invoice_OPEN, defaultTimeout,
+	))
+
+	// A long-lived credential is verified on every request, but only the
+	// first one may reach the callback.
+	for i := 0; i < 5; i++ {
+		require.NoError(t, c.VerifyInvoiceStatus(
+			paid, lnrpc.Invoice_SETTLED, defaultTimeout,
+		))
+	}
+	require.NoError(t, c.VerifyInvoiceStatus(
+		other, lnrpc.Invoice_SETTLED, defaultTimeout,
+	))
+
+	// Stop drains the settlement queue, so the counts are final after it.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(settled) == 2
+	}, time.Second, 10*time.Millisecond)
+	c.Stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, map[lntypes.Hash]int{paid: 1, other: 1}, settled)
+}
+
+// TestUntrackedClientWithoutCallback checks that verification on an untracked
+// backend with no settlement callback stays a plain pass-through.
+func TestUntrackedClientWithoutCallback(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewLndChallenger(
+		&untrackedInvoiceClient{}, 10,
+		func(int64) (*lnrpc.Invoice, error) {
+			return &lnrpc.Invoice{Value: 99}, nil
+		}, context.Background, make(chan error), false,
+	)
+	require.NoError(t, err)
+	defer c.Stop()
+
+	require.NoError(t, c.VerifyInvoiceStatus(
+		lntypes.Hash{1}, lnrpc.Invoice_SETTLED, defaultTimeout,
+	))
 }
