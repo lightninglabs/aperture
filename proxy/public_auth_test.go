@@ -217,8 +217,13 @@ func TestPublicPathAuthentication(t *testing.T) {
 		macaroon   string
 		metadata   string
 		verified   bool
+
+		// noCredential means the request has no L402 credential in
+		// the header field FromHeader reads, so the proxy doesn't
+		// call the authenticator.
+		noCredential bool
 	}{
-		{name: "anonymous"},
+		{name: "anonymous", noCredential: true},
 		{
 			name:       "valid L402",
 			authValues: []string{valid.l402Value},
@@ -261,20 +266,24 @@ func TestPublicPathAuthentication(t *testing.T) {
 			metadata: "garbage",
 		},
 		{
-			name:       "Payment is never spent",
-			authValues: []string{"Payment credential"},
+			name:         "Payment is never spent",
+			authValues:   []string{"Payment credential"},
+			noCredential: true,
 		},
 		{
-			name:       "mixed case Payment",
-			authValues: []string{"pAyMeNt credential"},
+			name:         "mixed case Payment",
+			authValues:   []string{"pAyMeNt credential"},
+			noCredential: true,
 		},
 		{
-			name:       "Bearer removed",
-			authValues: []string{"Bearer backend-token"},
+			name:         "Bearer removed",
+			authValues:   []string{"Bearer backend-token"},
+			noCredential: true,
 		},
 		{
-			name:       "Basic removed",
-			authValues: []string{"Basic dXNlcjpwYXNz"},
+			name:         "Basic removed",
+			authValues:   []string{"Basic dXNlcjpwYXNz"},
+			noCredential: true,
 		},
 		{
 			name: "Bearer followed by valid L402",
@@ -313,9 +322,10 @@ func TestPublicPathAuthentication(t *testing.T) {
 			macaroon:   valid.macHex,
 		},
 		{
-			name:       "Bearer shadows direct macaroon",
-			authValues: []string{"Bearer backend-token"},
-			macaroon:   valid.macHex,
+			name:         "Bearer shadows direct macaroon",
+			authValues:   []string{"Bearer backend-token"},
+			macaroon:     valid.macHex,
+			noCredential: true,
 		},
 		{
 			name:     "metadata shadows direct macaroon",
@@ -353,9 +363,10 @@ func TestPublicPathAuthentication(t *testing.T) {
 			},
 		},
 		{
-			name:       "empty authorization with macaroon",
-			authValues: []string{""},
-			macaroon:   valid.macHex,
+			name:         "empty authorization with macaroon",
+			authValues:   []string{""},
+			macaroon:     valid.macHex,
+			noCredential: true,
 		},
 	}
 
@@ -448,9 +459,13 @@ func TestPublicPathAuthentication(t *testing.T) {
 					)
 				}
 
+				require.Empty(t, mppAuth.headers)
+				if tc.noCredential {
+					require.Empty(t, l402Auth.headers)
+					return
+				}
 				require.Len(t, l402Auth.headers, 1)
 				require.Equal(t, header, l402Auth.headers[0])
-				require.Empty(t, mppAuth.headers)
 				for _, resource := range l402Auth.resources {
 					require.Equal(t, service.Name, resource)
 				}
@@ -492,7 +507,9 @@ func TestPublicPathDoesNotCharge(t *testing.T) {
 	require.Empty(t, price.mintedTokens)
 	require.Zero(t, a.receipts)
 	require.Zero(t, a.challenges)
-	require.Len(t, a.resources, 3)
+	// Only the request with an L402 credential reaches the
+	// authenticator.
+	require.Len(t, a.resources, 1)
 	for _, resource := range a.resources {
 		require.Equal(t, service.Name+"/public", resource)
 	}
