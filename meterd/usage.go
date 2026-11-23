@@ -24,6 +24,10 @@ type usageCounts struct {
 	// hasSplit is whether the prompt/completion split is known. When
 	// false, only totalTokens carries information.
 	hasSplit bool
+
+	// cachedTokens is the part of promptTokens served from the upstream's
+	// prompt cache. It is clamped to the range [0, promptTokens].
+	cachedTokens int64
 }
 
 // usageJSON mirrors the OpenAI usage object. Pointer fields distinguish
@@ -32,6 +36,10 @@ type usageJSON struct {
 	PromptTokens     *int64 `json:"prompt_tokens"`
 	CompletionTokens *int64 `json:"completion_tokens"`
 	TotalTokens      *int64 `json:"total_tokens"`
+
+	PromptTokensDetails *struct {
+		CachedTokens *int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 // countsFromUsage converts a parsed usage object into usage counts. It
@@ -54,6 +62,14 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 			counts.completionTokens
 		if u.TotalTokens != nil {
 			counts.totalTokens = *u.TotalTokens
+		}
+
+		if details := u.PromptTokensDetails; details != nil &&
+			details.CachedTokens != nil {
+
+			counts.cachedTokens = min(
+				max(*details.CachedTokens, 0), max(counts.promptTokens, 0),
+			)
 		}
 
 	// Only the total is available, so the caller has to fall back to the

@@ -143,21 +143,3 @@ func (s *Server) SettleSession(_ context.Context,
 
 	return &pricesrpc.SettleSessionResponse{CostSats: costSats}, nil
 }
-
-// usageCostSats prices a usage count at a model's rates, in satoshis rounded
-// up. When the prompt and completion split is known each direction is charged
-// its own rate; otherwise the total is charged at the blended rate, which is
-// the same assumption a bundle is priced under.
-func usageCostSats(counts *usageCounts, rates *ModelConfig) int64 {
-	var costMsat int64
-	if counts.hasSplit {
-		costMsat = counts.promptTokens*rates.InputMsatPerToken +
-			counts.completionTokens*rates.OutputMsatPerToken
-	} else {
-		blendedTimesTwo := counts.totalTokens *
-			(rates.InputMsatPerToken + rates.OutputMsatPerToken)
-		costMsat = (blendedTimesTwo + 1) / 2
-	}
-
-	return (costMsat + 999) / 1000
-}

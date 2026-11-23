@@ -46,6 +46,20 @@ func TestExtractUsage(t *testing.T) {
 			hasSplit:         true,
 		},
 	}, {
+		name:        "SSE cached input tokens",
+		contentType: sseContentType,
+		tail: sseChunk(`{"choices":[],"usage":{"prompt_tokens":100,` +
+			`"completion_tokens":20,"total_tokens":120,` +
+			`"prompt_tokens_details":{"cached_tokens":80}}}`),
+		wantFound: true,
+		want: usageCounts{
+			promptTokens:     100,
+			completionTokens: 20,
+			totalTokens:      120,
+			cachedTokens:     80,
+			hasSplit:         true,
+		},
+	}, {
 		name:        "SSE with DONE sentinel after usage",
 		contentType: sseContentType,
 		tail: sseChunk(`{"choices":[{"delta":{}}],"usage":null}`) +
@@ -80,12 +94,15 @@ func TestExtractUsage(t *testing.T) {
 		contentType: "application/json",
 		tail: `{"id":"chatcmpl-1","choices":[{"message":` +
 			`{"content":"hello"}}],"usage":{"prompt_tokens":100,` +
-			`"completion_tokens":50,"total_tokens":150}}`,
+			`"completion_tokens":50,"total_tokens":150,` +
+			`"prompt_tokens_details":{"cached_tokens":200}}}`,
 		wantFound: true,
+		// A malformed cached count cannot exceed the prompt count.
 		want: usageCounts{
 			promptTokens:     100,
 			completionTokens: 50,
 			totalTokens:      150,
+			cachedTokens:     100,
 			hasSplit:         true,
 		},
 	}, {

@@ -22,6 +22,10 @@ models:
   claude-test:
     inputmsatpertoken: 3000
     outputmsatpertoken: 15000
+  fractional-test:
+    inputmsatperthousandtokens: 213
+    outputmsatperthousandtokens: 427
+    cachedinputpermille: 100
 `
 
 // writeConfigFile writes the given YAML to a temp file and returns its path.
@@ -52,9 +56,15 @@ func TestLoadConfig(t *testing.T) {
 	require.EqualValues(t, 500_000, cfg.BundleTokens)
 	require.Equal(t, "gpt-test", cfg.DefaultModel)
 	require.Equal(t, "/tmp/meterd-test-state.json", cfg.StatePath)
-	require.Len(t, cfg.Models, 2)
+	require.Len(t, cfg.Models, 3)
 	require.EqualValues(
 		t, 15000, cfg.Models["claude-test"].OutputMsatPerToken,
+	)
+	require.EqualValues(
+		t, 213, cfg.Models["fractional-test"].InputMsatPerThousandTokens,
+	)
+	require.EqualValues(
+		t, 100, cfg.Models["fractional-test"].CachedInputPermille,
 	)
 
 	// Command line flags take precedence over the config file.
@@ -121,6 +131,34 @@ func TestConfigValidate(t *testing.T) {
 			}
 		},
 		wantErr: "has negative rates",
+	}, {
+		name: "negative fractional rate",
+		mutate: func(c *Config) {
+			c.Models = map[string]*ModelConfig{
+				"m": {OutputMsatPerThousandTokens: -1},
+			}
+		},
+		wantErr: "has negative rates",
+	}, {
+		name: "cached input rate above input rate",
+		mutate: func(c *Config) {
+			c.Models = map[string]*ModelConfig{
+				"m": {CachedInputPermille: 1001},
+			}
+		},
+		wantErr: "cached input permille must be between 0 and 1000",
+	}, {
+		name: "fractional rates bypass the price ceiling",
+		mutate: func(c *Config) {
+			c.BundleTokens = 4_000_000
+			c.Models = map[string]*ModelConfig{
+				"m": {
+					InputMsatPerThousandTokens:  5e18,
+					OutputMsatPerThousandTokens: 5e18,
+				},
+			}
+		},
+		wantErr: "price overflows",
 	}, {
 		name: "unknown default model",
 		mutate: func(c *Config) {

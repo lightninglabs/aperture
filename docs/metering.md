@@ -318,6 +318,31 @@ without usage, when a request names no `max_tokens`),
 `promptbytespertoken` (body bytes per prompt token in the reservation,
 default 1; does not bound images), `reservationttl` (how long a reservation is
 held before it is presumed leaked),
-`usagetailbytes` (tail capture, up to 1 MiB), and the per-model
-`inputmsatpertoken` / `outputmsatpertoken` rates. `meterd --help` carries the
-full list, and `sample-conf.yaml` shows the service stanza in context.
+`usagetailbytes` (tail capture, up to 1 MiB), and the per-model rates.
+
+Rates can be set with `inputmsatpertoken` / `outputmsatpertoken`, in whole
+millisatoshis per token. For cheaper models, `inputmsatperthousandtokens` /
+`outputmsatperthousandtokens` instead set the price of 1,000 tokens and allow
+fractions of a msat per token. A positive per-thousand rate takes precedence
+over the corresponding legacy per-token field. For example:
+
+```yaml
+models:
+  inexpensive-model:
+    inputmsatperthousandtokens: 213
+    outputmsatperthousandtokens: 427
+    cachedinputpermille: 100
+```
+
+`cachedinputpermille` prices tokens reported in OpenAI's
+`usage.prompt_tokens_details.cached_tokens` field as a fraction of the input
+rate: 100 means one tenth, and 1000 means full price. Zero or an omitted field
+also means full price, preserving the behavior of existing configurations.
+Cached tokens are included in `prompt_tokens`, not added to it, and a malformed
+cached count is clamped to the prompt count. Both bundle debits and session
+settlements apply the discount. Arithmetic retains the fractional rate until
+the final bundle-token or satoshi result; those results still round against the
+buyer.
+
+`meterd --help` carries the full list, and `sample-conf.yaml` shows the service
+stanza in context.
