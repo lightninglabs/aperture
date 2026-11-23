@@ -1,6 +1,9 @@
 package meterd
 
-import "math/big"
+import (
+	"math"
+	"math/big"
+)
 
 const (
 	// perThousandTokens is the denominator of the normalized internal rates.
@@ -96,7 +99,7 @@ func usageCostSats(counts *usageCounts, rates *ModelConfig) int64 {
 		denominator *= 2
 	}
 
-	return quotient(value, big.NewInt(denominator), true).Int64()
+	return satInt64(quotient(value, big.NewInt(denominator), true))
 }
 
 // bundleQuoteSats computes the flat price in satoshis of a full token bundle.
@@ -107,9 +110,9 @@ func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
 	r := rates.rates()
 	value := new(big.Int).Mul(big.NewInt(bundleTokens), r.blendedRate())
 
-	return quotient(
+	return satInt64(quotient(
 		value, big.NewInt(2*perThousandTokens*1000), true,
-	).Int64()
+	))
 }
 
 // weightedDebit converts the value of a split usage count into bundle tokens,
@@ -128,7 +131,7 @@ func weightedDebit(counts *usageCounts, config *ModelConfig) (int64, bool) {
 	)
 	debit := quotient(valueTwice, denominator, true)
 
-	return debit.Int64(), true
+	return satInt64(debit), true
 }
 
 // remainingValueSats values the remaining bundle tokens at the blended rate,
@@ -137,9 +140,9 @@ func remainingValueSats(tokens int64, config *ModelConfig) int64 {
 	r := config.rates()
 	value := new(big.Int).Mul(big.NewInt(tokens), r.blendedRate())
 
-	return quotient(
+	return satInt64(quotient(
 		value, big.NewInt(2*perThousandTokens*1000), false,
-	).Int64()
+	))
 }
 
 // quotient divides value by denominator, optionally rounding up. Pricing uses
@@ -156,4 +159,23 @@ func quotient(value, denominator *big.Int, roundUp bool) *big.Int {
 	}
 
 	return result
+}
+
+// maxInt64Big is math.MaxInt64 as a big.Int, used to saturate final results.
+var maxInt64Big = big.NewInt(math.MaxInt64)
+
+// satInt64 converts a big.Int to int64, saturating at math.MaxInt64 instead of
+// wrapping. Real pricing results fit comfortably; saturation only guards the
+// degenerate corner of a ceiling-rate config combined with a clamped, absurd
+// token count, where the exact value would exceed int64. A wrapped negative
+// charge is never acceptable, so we cap instead.
+func satInt64(v *big.Int) int64 {
+	if v.Cmp(maxInt64Big) > 0 {
+		return math.MaxInt64
+	}
+	if v.Sign() < 0 {
+		return 0
+	}
+
+	return v.Int64()
 }

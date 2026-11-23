@@ -42,6 +42,19 @@ type usageJSON struct {
 	} `json:"prompt_tokens_details"`
 }
 
+// maxTokenCount bounds any single upstream-reported token count. Real
+// responses never approach it, but a crafted or corrupt usage tail could
+// claim near-int64-max counts; clamping here keeps every downstream
+// token-times-rate product within int64 so the final conversion cannot wrap.
+const maxTokenCount = int64(1) << 40
+
+// clampTokenCount bounds an upstream-reported token count to
+// [0, maxTokenCount]. Negative counts are treated as zero, and counts above
+// the ceiling are capped so arithmetic on them cannot overflow.
+func clampTokenCount(n int64) int64 {
+	return min(max(n, 0), maxTokenCount)
+}
+
 // countsFromUsage converts a parsed usage object into usage counts. It
 // returns false when the object is nil or carries no token counts at all.
 func countsFromUsage(u *usageJSON) (usageCounts, bool) {
@@ -54,14 +67,14 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 	// The prompt/completion split is available, which allows exact
 	// pricing at the per-direction rates.
 	case u.PromptTokens != nil && u.CompletionTokens != nil:
-		counts.promptTokens = *u.PromptTokens
-		counts.completionTokens = *u.CompletionTokens
+		counts.promptTokens = clampTokenCount(*u.PromptTokens)
+		counts.completionTokens = clampTokenCount(*u.CompletionTokens)
 		counts.hasSplit = true
 
 		counts.totalTokens = counts.promptTokens +
 			counts.completionTokens
 		if u.TotalTokens != nil {
-			counts.totalTokens = *u.TotalTokens
+			counts.totalTokens = clampTokenCount(*u.TotalTokens)
 		}
 
 		if details := u.PromptTokensDetails; details != nil &&
@@ -75,7 +88,7 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 	// Only the total is available, so the caller has to fall back to the
 	// blended rate.
 	case u.TotalTokens != nil:
-		counts.totalTokens = *u.TotalTokens
+		counts.totalTokens = clampTokenCount(*u.TotalTokens)
 
 	default:
 		return usageCounts{}, false
