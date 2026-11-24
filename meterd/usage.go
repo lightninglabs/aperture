@@ -18,7 +18,7 @@ type usageCounts struct {
 	// completionTokens is the number of output tokens produced.
 	completionTokens int64
 
-	// totalTokens is the total number of tokens consumed.
+	// totalTokens is populated only when the split is unavailable.
 	totalTokens int64
 
 	// hasSplit is whether the prompt/completion split is known. When
@@ -30,6 +30,16 @@ type usageCounts struct {
 	cachedTokens int64
 }
 
+// tokenCount returns the split sum when available, never an independently
+// reported total that could disagree with it.
+func (u usageCounts) tokenCount() int64 {
+	if u.hasSplit {
+		return u.promptTokens + u.completionTokens
+	}
+
+	return u.totalTokens
+}
+
 // usageJSON mirrors the OpenAI usage object. Pointer fields distinguish
 // absent fields from genuine zero counts.
 type usageJSON struct {
@@ -37,15 +47,14 @@ type usageJSON struct {
 	CompletionTokens *int64 `json:"completion_tokens"`
 	TotalTokens      *int64 `json:"total_tokens"`
 
-	PromptTokensDetails *struct {
-		CachedTokens *int64 `json:"cached_tokens"`
-	} `json:"prompt_tokens_details"`
+	// Optional details must not invalidate otherwise billable counts.
+	PromptTokensDetails json.RawMessage `json:"prompt_tokens_details"`
 }
 
 // maxTokenCount bounds any single upstream-reported token count. Real
 // responses never approach it, but a crafted or corrupt usage tail could
-// claim near-int64-max counts; clamping here keeps every downstream
-// token-times-rate product within int64 so the final conversion cannot wrap.
+// claim near-int64-max counts; clamping keeps the sum of the two split
+// counts representable. Pricing separately bounds the final charge.
 const maxTokenCount = int64(1) << 40
 
 // clampTokenCount bounds an upstream-reported token count to
@@ -71,18 +80,15 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 		counts.completionTokens = clampTokenCount(*u.CompletionTokens)
 		counts.hasSplit = true
 
-		counts.totalTokens = counts.promptTokens +
-			counts.completionTokens
-		if u.TotalTokens != nil {
-			counts.totalTokens = clampTokenCount(*u.TotalTokens)
-		}
-
-		if details := u.PromptTokensDetails; details != nil &&
-			details.CachedTokens != nil {
-
-			counts.cachedTokens = min(
-				max(*details.CachedTokens, 0), max(counts.promptTokens, 0),
-			)
+		if len(u.PromptTokensDetails) != 0 {
+			var details struct {
+				CachedTokens int64 `json:"cached_tokens"`
+			}
+			if json.Unmarshal(u.PromptTokensDetails, &details) == nil {
+				counts.cachedTokens = min(
+					max(details.CachedTokens, 0), counts.promptTokens,
+				)
+			}
 		}
 
 	// Only the total is available, so the caller has to fall back to the

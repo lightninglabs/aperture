@@ -42,7 +42,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     10,
 			completionTokens: 20,
-			totalTokens:      30,
 			hasSplit:         true,
 		},
 	}, {
@@ -55,7 +54,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     100,
 			completionTokens: 20,
-			totalTokens:      120,
 			cachedTokens:     80,
 			hasSplit:         true,
 		},
@@ -70,7 +68,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     7,
 			completionTokens: 11,
-			totalTokens:      18,
 			hasSplit:         true,
 		},
 	}, {
@@ -86,7 +83,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     42,
 			completionTokens: 13,
-			totalTokens:      55,
 			hasSplit:         true,
 		},
 	}, {
@@ -101,7 +97,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     100,
 			completionTokens: 50,
-			totalTokens:      150,
 			cachedTokens:     100,
 			hasSplit:         true,
 		},
@@ -117,7 +112,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     200,
 			completionTokens: 300,
-			totalTokens:      500,
 			hasSplit:         true,
 		},
 	}, {
@@ -132,7 +126,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     4,
 			completionTokens: 6,
-			totalTokens:      10,
 			hasSplit:         true,
 		},
 	}, {
@@ -156,7 +149,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     1,
 			completionTokens: 2,
-			totalTokens:      3,
 			hasSplit:         true,
 		},
 	}, {
@@ -171,7 +163,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     8,
 			completionTokens: 9,
-			totalTokens:      17,
 			hasSplit:         true,
 		},
 	}, {

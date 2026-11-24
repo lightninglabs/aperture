@@ -650,11 +650,7 @@ func (s *Server) ReportUsage(_ context.Context,
 	var debitTokens int64
 	switch {
 	case found:
-		debitTokens = counts.totalTokens
-		if counts.hasSplit {
-			debitTokens = counts.promptTokens +
-				counts.completionTokens
-		}
+		debitTokens = counts.tokenCount()
 
 	case settleAtEstimate:
 		debitTokens = settle
@@ -716,8 +712,7 @@ func (s *Server) ReportUsage(_ context.Context,
 		debitedSats = usageCostSats(&counts, rates)
 
 	default:
-		valueCounts := usageCounts{totalTokens: debitTokens}
-		debitedSats = usageCostSats(&valueCounts, rates)
+		debitedSats = blendedValueSats(debitTokens, rates, true)
 	}
 
 	// The remaining balance is valued at the blended rate and rounded

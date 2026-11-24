@@ -52,24 +52,15 @@ func (m *ModelConfig) rates() modelRates {
 	}
 }
 
-// blendedRate returns twice the blended per-thousand-token rate.
-func (r modelRates) blendedRate() *big.Int {
+// rateSum returns twice the blended per-thousand-token rate.
+func (r modelRates) rateSum() *big.Int {
 	return new(big.Int).Add(r.input, r.output)
 }
 
-// usageValue returns the value of a usage count in millionths of a msat. For
-// an unsplit count it returns twice that value, since the blended rate is the
-// average of the input and output rates. The cached-input permille stays in
-// the product so it is never rounded to an intermediate per-token rate.
-func (r modelRates) usageValue(counts *usageCounts) *big.Int {
-	if !counts.hasSplit {
-		value := new(big.Int).Mul(
-			big.NewInt(counts.totalTokens), r.blendedRate(),
-		)
-
-		return value.Mul(value, big.NewInt(wholeCachedInput))
-	}
-
+// splitUsageValue returns the value of split usage in millionths of an msat.
+// The cached-input permille stays in the product so it is never rounded to
+// an intermediate per-token rate.
+func (r modelRates) splitUsageValue(counts *usageCounts) *big.Int {
 	cached := min(max(counts.cachedTokens, 0), max(counts.promptTokens, 0))
 	fresh := counts.promptTokens - cached
 	value := new(big.Int).Mul(big.NewInt(fresh), r.input)
@@ -91,15 +82,14 @@ func (r modelRates) usageValue(counts *usageCounts) *big.Int {
 // its own rate; otherwise the total is charged at the blended rate, which is
 // the same assumption a bundle is priced under.
 func usageCostSats(counts *usageCounts, rates *ModelConfig) int64 {
-	value := rates.rates().usageValue(counts)
-	denominator := int64(
-		perThousandTokens * wholeCachedInput * 1000,
-	)
 	if !counts.hasSplit {
-		denominator *= 2
+		return blendedValueSats(counts.totalTokens, rates, true)
 	}
 
-	return satInt64(quotient(value, big.NewInt(denominator), true))
+	value := rates.rates().splitUsageValue(counts)
+	return satInt64(quotient(value, big.NewInt(
+		perThousandTokens*wholeCachedInput*1000,
+	), true))
 }
 
 // bundleQuoteSats computes the flat price in satoshis of a full token bundle.
@@ -107,12 +97,7 @@ func usageCostSats(counts *usageCounts, rates *ModelConfig) int64 {
 // the input and output rate, on the assumption that a bundle is drawn down by
 // a roughly even mix of prompt and completion tokens.
 func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
-	r := rates.rates()
-	value := new(big.Int).Mul(big.NewInt(bundleTokens), r.blendedRate())
-
-	return satInt64(quotient(
-		value, big.NewInt(2*perThousandTokens*1000), true,
-	))
+	return blendedValueSats(bundleTokens, rates, true)
 }
 
 // weightedDebit converts the value of a split usage count into bundle tokens,
@@ -120,14 +105,14 @@ func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
 // than the full fresh-input value.
 func weightedDebit(counts *usageCounts, config *ModelConfig) (int64, bool) {
 	r := config.rates()
-	blendedRate := r.blendedRate()
-	if blendedRate.Sign() <= 0 {
+	rateSum := r.rateSum()
+	if rateSum.Sign() <= 0 {
 		return 0, false
 	}
 
-	valueTwice := new(big.Int).Mul(r.usageValue(counts), big.NewInt(2))
+	valueTwice := new(big.Int).Mul(r.splitUsageValue(counts), big.NewInt(2))
 	denominator := new(big.Int).Mul(
-		blendedRate, big.NewInt(wholeCachedInput),
+		rateSum, big.NewInt(wholeCachedInput),
 	)
 	debit := quotient(valueTwice, denominator, true)
 
@@ -137,11 +122,15 @@ func weightedDebit(counts *usageCounts, config *ModelConfig) (int64, bool) {
 // remainingValueSats values the remaining bundle tokens at the blended rate,
 // rounding down so the reported balance never exceeds the tokens available.
 func remainingValueSats(tokens int64, config *ModelConfig) int64 {
-	r := config.rates()
-	value := new(big.Int).Mul(big.NewInt(tokens), r.blendedRate())
+	return blendedValueSats(tokens, config, false)
+}
+
+// blendedValueSats converts tokens at the average input and output rate.
+func blendedValueSats(tokens int64, config *ModelConfig, roundUp bool) int64 {
+	value := new(big.Int).Mul(big.NewInt(tokens), config.rates().rateSum())
 
 	return satInt64(quotient(
-		value, big.NewInt(2*perThousandTokens*1000), false,
+		value, big.NewInt(2*perThousandTokens*1000), roundUp,
 	))
 }
 
@@ -161,20 +150,14 @@ func quotient(value, denominator *big.Int, roundUp bool) *big.Int {
 	return result
 }
 
-// maxInt64Big is math.MaxInt64 as a big.Int, used to saturate final results.
-var maxInt64Big = big.NewInt(math.MaxInt64)
-
-// satInt64 converts a big.Int to int64, saturating at math.MaxInt64 instead of
-// wrapping. Real pricing results fit comfortably; saturation only guards the
-// degenerate corner of a ceiling-rate config combined with a clamped, absurd
-// token count, where the exact value would exceed int64. A wrapped negative
-// charge is never acceptable, so we cap instead.
+// satInt64 converts a nonnegative price to int64 without wrapping if the
+// exact value is too large for the RPC field.
 func satInt64(v *big.Int) int64 {
-	if v.Cmp(maxInt64Big) > 0 {
-		return math.MaxInt64
-	}
 	if v.Sign() < 0 {
 		return 0
+	}
+	if !v.IsInt64() {
+		return math.MaxInt64
 	}
 
 	return v.Int64()

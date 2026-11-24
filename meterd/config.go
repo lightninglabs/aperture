@@ -256,8 +256,7 @@ func (c *Config) validate() error {
 		// Preserve the legacy configuration ceiling, applied to the
 		// normalized per-thousand-token rates so the finer fields cannot
 		// express a price the integer per-token fields never could.
-		rates := model.rates()
-		rateSum := new(big.Int).Add(rates.input, rates.output)
+		rateSum := model.rates().rateSum()
 		if rateSum.Sign() > 0 {
 			bundleMsat := new(big.Int).Mul(
 				big.NewInt(c.BundleTokens), rateSum,

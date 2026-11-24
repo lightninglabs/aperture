@@ -61,8 +61,8 @@ func TestSaturatingConversion(t *testing.T) {
 
 	// Push the rate sum to the ceiling for a one-token bundle.
 	rates := &ModelConfig{
-		InputMsatPerToken:  maxMsatPrice,
-		OutputMsatPerToken: maxMsatPrice,
+		InputMsatPerToken:  maxMsatPrice / 2,
+		OutputMsatPerToken: maxMsatPrice / 2,
 	}
 	counts := usageCounts{
 		totalTokens: maxTokenCount,
