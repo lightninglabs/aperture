@@ -42,7 +42,19 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     10,
 			completionTokens: 20,
-			totalTokens:      30,
+			hasSplit:         true,
+		},
+	}, {
+		name:        "SSE cached input tokens",
+		contentType: sseContentType,
+		tail: sseChunk(`{"choices":[],"usage":{"prompt_tokens":100,` +
+			`"completion_tokens":20,"total_tokens":120,` +
+			`"prompt_tokens_details":{"cached_tokens":80}}}`),
+		wantFound: true,
+		want: usageCounts{
+			promptTokens:     100,
+			completionTokens: 20,
+			cachedTokens:     80,
 			hasSplit:         true,
 		},
 	}, {
@@ -56,7 +68,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     7,
 			completionTokens: 11,
-			totalTokens:      18,
 			hasSplit:         true,
 		},
 	}, {
@@ -72,7 +83,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     42,
 			completionTokens: 13,
-			totalTokens:      55,
 			hasSplit:         true,
 		},
 	}, {
@@ -80,12 +90,14 @@ func TestExtractUsage(t *testing.T) {
 		contentType: "application/json",
 		tail: `{"id":"chatcmpl-1","choices":[{"message":` +
 			`{"content":"hello"}}],"usage":{"prompt_tokens":100,` +
-			`"completion_tokens":50,"total_tokens":150}}`,
+			`"completion_tokens":50,"total_tokens":150,` +
+			`"prompt_tokens_details":{"cached_tokens":200}}}`,
 		wantFound: true,
+		// A malformed cached count cannot exceed the prompt count.
 		want: usageCounts{
 			promptTokens:     100,
 			completionTokens: 50,
-			totalTokens:      150,
+			cachedTokens:     100,
 			hasSplit:         true,
 		},
 	}, {
@@ -100,7 +112,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     200,
 			completionTokens: 300,
-			totalTokens:      500,
 			hasSplit:         true,
 		},
 	}, {
@@ -115,7 +126,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     4,
 			completionTokens: 6,
-			totalTokens:      10,
 			hasSplit:         true,
 		},
 	}, {
@@ -139,7 +149,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     1,
 			completionTokens: 2,
-			totalTokens:      3,
 			hasSplit:         true,
 		},
 	}, {
@@ -154,7 +163,6 @@ func TestExtractUsage(t *testing.T) {
 		want: usageCounts{
 			promptTokens:     8,
 			completionTokens: 9,
-			totalTokens:      17,
 			hasSplit:         true,
 		},
 	}, {

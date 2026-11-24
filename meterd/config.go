@@ -2,6 +2,7 @@ package meterd
 
 import (
 	"fmt"
+	"math/big"
 	"os"
 	"time"
 
@@ -66,6 +67,20 @@ type ModelConfig struct {
 	// OutputMsatPerToken is the price in millisatoshi of a single output
 	// (completion) token.
 	OutputMsatPerToken int64 `yaml:"outputmsatpertoken" long:"outputmsatpertoken" description:"Price in millisatoshi per output token"`
+
+	// InputMsatPerThousandTokens is the price in millisatoshis of one
+	// thousand input tokens. When positive, it takes precedence over
+	// InputMsatPerToken and permits sub-msat per-token pricing.
+	InputMsatPerThousandTokens int64 `yaml:"inputmsatperthousandtokens" long:"inputmsatperthousandtokens" description:"Price in millisatoshis per thousand input tokens (overrides inputmsatpertoken)"`
+
+	// OutputMsatPerThousandTokens is the price in millisatoshis of one
+	// thousand output tokens. When positive, it takes precedence over
+	// OutputMsatPerToken and permits sub-msat per-token pricing.
+	OutputMsatPerThousandTokens int64 `yaml:"outputmsatperthousandtokens" long:"outputmsatperthousandtokens" description:"Price in millisatoshis per thousand output tokens (overrides outputmsatpertoken)"`
+
+	// CachedInputPermille is the price of a cached input token in
+	// thousandths of the input rate. Zero selects the full input rate.
+	CachedInputPermille int64 `yaml:"cachedinputpermille" long:"cachedinputpermille" description:"Price of a cached input token in thousandths of the input rate (0 = full price)"`
 }
 
 // Config holds the daemon configuration. Values are read from an optional
@@ -222,25 +237,40 @@ func (c *Config) validate() error {
 		}
 
 		if model.InputMsatPerToken < 0 ||
-			model.OutputMsatPerToken < 0 {
+			model.OutputMsatPerToken < 0 ||
+			model.InputMsatPerThousandTokens < 0 ||
+			model.OutputMsatPerThousandTokens < 0 {
 
 			return fmt.Errorf("model %s has negative rates", name)
 		}
 
-		// Guard the bundleTokens times per-token-rate arithmetic in
-		// bundleQuoteSats against int64 overflow. The intermediate
-		// product bundleTokens*(input+output) must stay within a safe
-		// ceiling.
-		rateSum := model.InputMsatPerToken + model.OutputMsatPerToken
-		if rateSum < 0 {
-			return fmt.Errorf("model %s rates overflow when summed",
-				name)
+		if model.CachedInputPermille < 0 ||
+			model.CachedInputPermille > wholeCachedInput {
+
+			return fmt.Errorf(
+				"model %s cached input permille must be between 0 "+
+					"and 1000", name,
+			)
 		}
-		if rateSum > 0 && c.BundleTokens > maxMsatPrice/rateSum {
-			return fmt.Errorf("model %s price overflows: "+
-				"bundletokens %d times rate sum %d exceeds the "+
-				"ceiling %d", name, c.BundleTokens, rateSum,
-				maxMsatPrice)
+
+		// Preserve the legacy configuration ceiling, applied to the
+		// normalized per-thousand-token rates so the finer fields cannot
+		// express a price the integer per-token fields never could.
+		rateSum := model.rates().rateSum()
+		if rateSum.Sign() > 0 {
+			bundleMsat := new(big.Int).Mul(
+				big.NewInt(c.BundleTokens), rateSum,
+			)
+			ceiling := new(big.Int).Mul(
+				big.NewInt(maxMsatPrice),
+				big.NewInt(perThousandTokens),
+			)
+			if bundleMsat.Cmp(ceiling) > 0 {
+				return fmt.Errorf("model %s price overflows: "+
+					"bundletokens %d times rate sum %s exceeds the "+
+					"ceiling %s", name, c.BundleTokens, rateSum,
+					ceiling)
+			}
 		}
 	}
 

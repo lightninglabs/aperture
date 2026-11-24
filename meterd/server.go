@@ -263,19 +263,6 @@ func (s *Server) unauthorizedBundleTTL() time.Duration {
 	return DefaultUnauthorizedBundleTTL
 }
 
-// bundleQuoteSats computes the flat price in satoshis of a full token
-// bundle. The bundle is priced at the model's blended per-token rate, the
-// average of the input and output rate, on the assumption that a bundle is
-// drawn down by a roughly even mix of prompt and completion tokens:
-//
-//	price_sats = ceil(bundleTokens * (inputMsat + outputMsat) / 2 / 1000).
-func bundleQuoteSats(bundleTokens int64, rates *ModelConfig) int64 {
-	msatTimesTwo := bundleTokens *
-		(rates.InputMsatPerToken + rates.OutputMsatPerToken)
-
-	return (msatTimesTwo + 1999) / 2000
-}
-
 // GetPrice quotes the price of a token bundle for the model named in the
 // JSON body of the serialized HTTP request. Requests naming no model are
 // priced as the default model; requests naming an unknown model are
@@ -663,11 +650,7 @@ func (s *Server) ReportUsage(_ context.Context,
 	var debitTokens int64
 	switch {
 	case found:
-		debitTokens = counts.totalTokens
-		if counts.hasSplit {
-			debitTokens = counts.promptTokens +
-				counts.completionTokens
-		}
+		debitTokens = counts.tokenCount()
 
 	case settleAtEstimate:
 		debitTokens = settle
@@ -690,16 +673,11 @@ func (s *Server) ReportUsage(_ context.Context,
 	// debit is weighted by direction, charging a completion token as
 	// outRate/blend bundle tokens (and a prompt token as inRate/blend), so
 	// the msat value drawn from the bundle always matches the msat value
-	// served. The division rounds up, never favoring the client.
+	// served. Cached prompt tokens contribute their configured discounted
+	// rate. The division rounds up, never favoring the client.
 	if found && counts.hasSplit && rates != nil {
-		rateSum := rates.InputMsatPerToken + rates.OutputMsatPerToken
-		if rateSum > 0 {
-			weightedTimesTwo := 2 *
-				(counts.promptTokens*rates.InputMsatPerToken +
-					counts.completionTokens*
-						rates.OutputMsatPerToken)
-			debitTokens = (weightedTimesTwo + rateSum - 1) /
-				rateSum
+		if debit, ok := weightedDebit(&counts, rates); ok {
+			debitTokens = debit
 		}
 	}
 
@@ -726,26 +704,20 @@ func (s *Server) ReportUsage(_ context.Context,
 	// is known, and at the blended rate otherwise, which covers both a
 	// splitless usage object and a response settled at the estimate.
 	// Millisatoshis round up to satoshis.
-	var debitedMsat int64
+	var debitedSats int64
 	switch {
 	case !found && !settleAtEstimate:
 
 	case counts.hasSplit:
-		debitedMsat = counts.promptTokens*rates.InputMsatPerToken +
-			counts.completionTokens*rates.OutputMsatPerToken
+		debitedSats = usageCostSats(&counts, rates)
 
 	default:
-		blendedTimesTwo := debitTokens *
-			(rates.InputMsatPerToken + rates.OutputMsatPerToken)
-		debitedMsat = (blendedTimesTwo + 1) / 2
+		debitedSats = blendedValueSats(debitTokens, rates, true)
 	}
-	debitedSats := (debitedMsat + 999) / 1000
 
 	// The remaining balance is valued at the blended rate and rounded
 	// down.
-	remainingMsat := after.RemainingTokens *
-		(rates.InputMsatPerToken + rates.OutputMsatPerToken) / 2
-	remainingSats := remainingMsat / 1000
+	remainingSats := remainingValueSats(after.RemainingTokens, rates)
 
 	if debitTokens > 0 {
 		log.Infof("Debited %d tokens (%d sats) from token %s, %d "+

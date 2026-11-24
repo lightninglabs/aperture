@@ -18,12 +18,26 @@ type usageCounts struct {
 	// completionTokens is the number of output tokens produced.
 	completionTokens int64
 
-	// totalTokens is the total number of tokens consumed.
+	// totalTokens is populated only when the split is unavailable.
 	totalTokens int64
 
 	// hasSplit is whether the prompt/completion split is known. When
 	// false, only totalTokens carries information.
 	hasSplit bool
+
+	// cachedTokens is the part of promptTokens served from the upstream's
+	// prompt cache. It is clamped to the range [0, promptTokens].
+	cachedTokens int64
+}
+
+// tokenCount returns the split sum when available, never an independently
+// reported total that could disagree with it.
+func (u usageCounts) tokenCount() int64 {
+	if u.hasSplit {
+		return u.promptTokens + u.completionTokens
+	}
+
+	return u.totalTokens
 }
 
 // usageJSON mirrors the OpenAI usage object. Pointer fields distinguish
@@ -32,6 +46,22 @@ type usageJSON struct {
 	PromptTokens     *int64 `json:"prompt_tokens"`
 	CompletionTokens *int64 `json:"completion_tokens"`
 	TotalTokens      *int64 `json:"total_tokens"`
+
+	// Optional details must not invalidate otherwise billable counts.
+	PromptTokensDetails json.RawMessage `json:"prompt_tokens_details"`
+}
+
+// maxTokenCount bounds any single upstream-reported token count. Real
+// responses never approach it, but a crafted or corrupt usage tail could
+// claim near-int64-max counts; clamping keeps the sum of the two split
+// counts representable. Pricing separately bounds the final charge.
+const maxTokenCount = int64(1) << 40
+
+// clampTokenCount bounds an upstream-reported token count to
+// [0, maxTokenCount]. Negative counts are treated as zero, and counts above
+// the ceiling are capped so arithmetic on them cannot overflow.
+func clampTokenCount(n int64) int64 {
+	return min(max(n, 0), maxTokenCount)
 }
 
 // countsFromUsage converts a parsed usage object into usage counts. It
@@ -46,20 +76,25 @@ func countsFromUsage(u *usageJSON) (usageCounts, bool) {
 	// The prompt/completion split is available, which allows exact
 	// pricing at the per-direction rates.
 	case u.PromptTokens != nil && u.CompletionTokens != nil:
-		counts.promptTokens = *u.PromptTokens
-		counts.completionTokens = *u.CompletionTokens
+		counts.promptTokens = clampTokenCount(*u.PromptTokens)
+		counts.completionTokens = clampTokenCount(*u.CompletionTokens)
 		counts.hasSplit = true
 
-		counts.totalTokens = counts.promptTokens +
-			counts.completionTokens
-		if u.TotalTokens != nil {
-			counts.totalTokens = *u.TotalTokens
+		if len(u.PromptTokensDetails) != 0 {
+			var details struct {
+				CachedTokens int64 `json:"cached_tokens"`
+			}
+			if json.Unmarshal(u.PromptTokensDetails, &details) == nil {
+				counts.cachedTokens = min(
+					max(details.CachedTokens, 0), counts.promptTokens,
+				)
+			}
 		}
 
 	// Only the total is available, so the caller has to fall back to the
 	// blended rate.
 	case u.TotalTokens != nil:
-		counts.totalTokens = *u.TotalTokens
+		counts.totalTokens = clampTokenCount(*u.TotalTokens)
 
 	default:
 		return usageCounts{}, false
