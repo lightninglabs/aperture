@@ -405,6 +405,8 @@ func (s *Server) AuthorizeRequest(_ context.Context,
 			"tokens, %d tokens available", req.TokenId, estimate,
 			auth.Available)
 
+		s.recordPayment(req.TokenId, req.HttpRequestText)
+
 		// The reserved and settle estimates ride back to aperture,
 		// which echoes them in the matching usage report so the exact
 		// reservation is released rather than an approximate default.
@@ -681,7 +683,20 @@ func (s *Server) ReportUsage(_ context.Context,
 		}
 	}
 
-	after, ok, err := s.store.Debit(req.TokenId, debitTokens, release)
+	var (
+		after Bundle
+		ok    bool
+		err   error
+	)
+	if ledger, isLedger := s.store.(UsageLedger); isLedger {
+		after, ok, err = ledger.DebitUsage(
+			req.TokenId, release, usageRecord(
+				debitTokens, &counts, found, rates,
+			),
+		)
+	} else {
+		after, ok, err = s.store.Debit(req.TokenId, debitTokens, release)
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unable to debit "+
 			"bundle: %v", err)
