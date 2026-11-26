@@ -3,7 +3,9 @@ package proxy_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lightninglabs/aperture/auth"
 	"github.com/lightninglabs/aperture/proxy"
@@ -31,8 +33,9 @@ func (a *blockingAuthenticator) Accept(header *http.Header,
 
 // TestUpdateServicesDuringRequest checks that UpdateServices does not rewrite
 // a service while a request is still reading it. The admin API passes the
-// proxy's own *Service values back in, so preparing them must wait for
-// in-flight requests. Run with -race, which reports the conflicting access.
+// same *Service values back in that it handed over before, so the proxy must
+// prepare copies of them. Run with -race, which reports the conflicting
+// access.
 func TestUpdateServicesDuringRequest(t *testing.T) {
 	t.Parallel()
 
@@ -65,8 +68,8 @@ func TestUpdateServicesDuringRequest(t *testing.T) {
 	<-authenticator.entered
 
 	// Pass the same services back, as the admin API does, and release
-	// the request. Only the proxy's own locking orders the update after
-	// the request's remaining reads.
+	// the request. Nothing orders the update after the request's
+	// remaining reads, so the two must not touch the same values.
 	updateErrs := make(chan error, 1)
 	go func() {
 		updateErrs <- p.UpdateServices(services)
@@ -75,4 +78,78 @@ func TestUpdateServicesDuringRequest(t *testing.T) {
 
 	require.Equal(t, http.StatusPaymentRequired, <-statuses)
 	require.NoError(t, <-updateErrs)
+}
+
+// TestUpdateServicesWithOpenRequest checks that UpdateServices does not wait
+// for in-flight requests to finish. A long-lived request such as a gRPC stream
+// may stay open indefinitely, and an update that waits for it also stalls
+// every request arriving behind the update.
+func TestUpdateServicesWithOpenRequest(t *testing.T) {
+	t.Parallel()
+
+	services := []*proxy.Service{{
+		Name:       "paid",
+		Address:    "localhost:8080",
+		HostRegexp: ".*",
+		Auth:       "on",
+		Price:      200,
+	}}
+	authenticator := &blockingAuthenticator{
+		MockAuthenticator: auth.NewMockAuthenticator(),
+		entered:           make(chan struct{}),
+		release:           make(chan struct{}),
+	}
+	p, err := proxy.New(authenticator, services, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+
+	// Let the parked requests go on every way out, so that a failure is
+	// reported rather than left to hang.
+	release := sync.OnceFunc(func() { close(authenticator.release) })
+	t.Cleanup(release)
+
+	// Park a request in Accept and keep it there, standing in for a
+	// stream that never ends.
+	statuses := make(chan int, 2)
+	go func() {
+		w := httptest.NewRecorder()
+		p.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		statuses <- w.Code
+	}()
+	<-authenticator.entered
+
+	// Reprice the service the way the admin API does, by swapping in an
+	// updated copy.
+	updated := *services[0]
+	updated.Price = 1
+	updateErrs := make(chan error, 1)
+	go func() {
+		updateErrs <- p.UpdateServices([]*proxy.Service{&updated})
+	}()
+
+	select {
+	case err := <-updateErrs:
+		require.NoError(t, err)
+
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "UpdateServices blocked on an open request")
+	}
+
+	// A request arriving after the update is not held up either.
+	go func() {
+		w := httptest.NewRecorder()
+		p.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		statuses <- w.Code
+	}()
+
+	select {
+	case <-authenticator.entered:
+
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "request blocked behind UpdateServices")
+	}
+
+	release()
+	require.Equal(t, http.StatusPaymentRequired, <-statuses)
+	require.Equal(t, http.StatusPaymentRequired, <-statuses)
 }

@@ -139,12 +139,12 @@ func TestDirectorOverwritesClientHeaders(t *testing.T) {
 	}
 	require.NoError(t, prepareServices([]*Service{service}))
 
-	p := &Proxy{services: []*Service{service}}
+	direct := director([]*Service{service})
 
 	req := httptest.NewRequest("POST", "http://gateway/v1/foo", nil)
 	req.Header.Set("Authorization", "L402 macaroon:preimage")
 
-	p.director(req)
+	direct(req)
 
 	require.Equal(
 		t, []string{"Bearer upstream-key"},

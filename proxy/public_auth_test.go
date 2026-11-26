@@ -188,6 +188,11 @@ func newPublicAuthProxy(t *testing.T, service *Service,
 		require.NoError(t, p.Close())
 	})
 
+	// The proxy serves a prepared copy of the service. Swap the caller's
+	// value in for it, so that a test can adjust the live service.
+	*service = *p.services[0]
+	p.services[0] = service
+
 	return p, received
 }
 

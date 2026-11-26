@@ -201,12 +201,8 @@ func TestDirectorRewritePrefix(t *testing.T) {
 	err := prepareServices(services)
 	require.NoError(t, err)
 
-	p := &Proxy{
-		services: services,
-	}
-
 	req := httptest.NewRequest("GET", "http://example.com/users", nil)
-	p.director(req)
+	director(services)(req)
 
 	require.Equal(t, "backend:8080", req.Host)
 	require.Equal(t, "backend:8080", req.URL.Host)
