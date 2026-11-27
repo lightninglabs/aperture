@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -52,6 +53,9 @@ func TestFromHeader(t *testing.T) {
 		name    string
 		header  http.Header
 		wantErr bool
+
+		// noCredential means the error must be ErrNoCredential.
+		noCredential bool
 	}{
 		{
 			name: "L402 without preimage caveat",
@@ -74,6 +78,27 @@ func TestFromHeader(t *testing.T) {
 					hex.EncodeToString(paidMacBytes),
 				},
 			},
+		},
+		{
+			name:         "no credential header",
+			header:       http.Header{},
+			wantErr:      true,
+			noCredential: true,
+		},
+		{
+			name: "another scheme",
+			header: http.Header{
+				HeaderAuthorization: {"Payment abc"},
+			},
+			wantErr:      true,
+			noCredential: true,
+		},
+		{
+			name: "malformed L402 credential",
+			header: http.Header{
+				HeaderAuthorization: {"L402 abc"},
+			},
+			wantErr: true,
 		},
 		{
 			name: "text before the scheme",
@@ -114,6 +139,10 @@ func TestFromHeader(t *testing.T) {
 			gotMac, gotPreimage, err := FromHeader(&test.header)
 			if test.wantErr {
 				require.Error(t, err)
+				require.Equal(
+					t, test.noCredential,
+					errors.Is(err, ErrNoCredential),
+				)
 				return
 			}
 
