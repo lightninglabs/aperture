@@ -11,7 +11,7 @@ aperturecli --insecure mcp serve
 ```
 
 The server uses the same connection flags as the CLI (`--host`, `--macaroon`,
-`--tls-cert`, `--insecure`). It communicates over stdin/stdout using the MCP
+`--tlscertpath`, `--insecure`). It communicates over stdin/stdout using the MCP
 JSON-RPC protocol.
 
 ## Claude Code Integration
@@ -40,7 +40,7 @@ For production with TLS:
       "args": [
         "--host", "aperture.example.com:8081",
         "--macaroon", "/path/to/admin.macaroon",
-        "--tls-cert", "/path/to/tls.cert",
+        "--tlscertpath", "/path/to/tls.cert",
         "mcp", "serve"
       ]
     }
