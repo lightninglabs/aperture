@@ -1143,7 +1143,9 @@ func TestMeteredResponseEndsAfterUsageReport(t *testing.T) {
 		require.NoError(t, p.Close())
 	})
 
-	// The pricer is swapped in after New so it is not dialed.
+	// The pricer is swapped in after New so it is not dialed. The proxy
+	// serves a prepared copy of the service, so swap it in there.
+	service = p.services[0]
 	service.pricer = slow
 	service.DynamicPrice.Enabled = true
 	service.DynamicPrice.Metered = true

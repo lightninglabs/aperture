@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -255,6 +256,29 @@ func (s *Service) SkipInvoiceCreation(r *http.Request) bool {
 	return false
 }
 
+// cloneServices copies the given services along with the parts of them that
+// prepareServices rewrites, so that preparing the copies leaves the originals
+// untouched.
+func cloneServices(services []*Service) []*Service {
+	clones := make([]*Service, len(services))
+	for i, service := range services {
+		clone := *service
+		clone.Headers = maps.Clone(service.Headers)
+
+		clone.RateLimits = make(
+			[]*RateLimitConfig, len(service.RateLimits),
+		)
+		for j, rateLimit := range service.RateLimits {
+			rateLimitClone := *rateLimit
+			clone.RateLimits[j] = &rateLimitClone
+		}
+
+		clones[i] = &clone
+	}
+
+	return clones
+}
+
 // prepareServices prepares the backend service configurations to be used by the
 // proxy.
 //
@@ -270,12 +294,7 @@ func prepareServices(services []*Service) error {
 			return fmt.Errorf("service %q: %w", service.Name, err)
 		}
 
-		// Every update prepares the live services again while the
-		// admin API may be reading them, so leave an already
-		// normalized level untouched.
-		if authLevel != service.Auth {
-			service.Auth = authLevel
-		}
+		service.Auth = authLevel
 
 		// Each freebie enabled service gets its own store.
 		if service.Auth.IsFreebie() {

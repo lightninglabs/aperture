@@ -87,7 +87,9 @@ func (l *localService) IsHandling(r *http.Request) bool {
 // proxies the response back to the client.
 type Proxy struct {
 	// servicesMtx protects services and proxyBackend from concurrent
-	// access during dynamic updates via UpdateServices.
+	// access during dynamic updates via UpdateServices. Both are replaced
+	// as a whole and never modified once set, so a request copies them
+	// out and releases the lock rather than holding it while it runs.
 	servicesMtx  sync.RWMutex
 	proxyBackend *httputil.ReverseProxy
 
@@ -380,17 +382,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Take a read lock to get a consistent snapshot of services and the
-	// proxy backend. This is held for the duration of request handling
-	// so that UpdateServices does not swap or re-prepare them mid-flight.
+	// Take a consistent snapshot of services and the proxy backend. The
+	// lock is not held while the request runs: a long-lived stream would
+	// otherwise block UpdateServices, and the waiting update would in turn
+	// block every new request.
 	p.servicesMtx.RLock()
-	defer p.servicesMtx.RUnlock()
+	services, proxyBackend := p.services, p.proxyBackend
+	p.servicesMtx.RUnlock()
 
 	// Requests that can't be matched to a service backend will be
 	// dispatched to the static file server. If the file exists in the
 	// static file folder it will be served, otherwise the static server
 	// will return a 404 for us.
-	target, ok := matchService(r, p.services)
+	target, ok := matchService(r, services)
 	if !ok {
 		// This isn't a request for any configured remote backend that
 		// we are proxying for. So we give it to the local service that
@@ -623,7 +627,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// If we got here, it means everything is OK to pass the request to the
 	// service backend via the reverse proxy.
-	p.proxyBackend.ServeHTTP(w, r)
+	proxyBackend.ServeHTTP(w, r)
 }
 
 // canonicalizeRequestPath rejects paths that a backend could resolve to another
@@ -874,17 +878,28 @@ func publicResourceName(header *http.Header, serviceName,
 
 // UpdateServices re-configures the proxy to use a new set of backend services.
 func (p *Proxy) UpdateServices(services []*Service) error {
-	// Hold the write lock while preparing, not just while swapping.
-	// Callers such as the admin API pass back the *Service values that
-	// in-flight requests are still reading, and prepareServices rewrites
-	// them in place (compiled regexps, rate limiter, pricer, header map).
-	p.servicesMtx.Lock()
-	defer p.servicesMtx.Unlock()
-
-	err := prepareServices(services)
+	// Prepare copies rather than the given services. Callers such as the
+	// admin API pass back the *Service values that in-flight requests are
+	// still reading, and prepareServices rewrites them in place (compiled
+	// regexps, rate limiter, pricer, header map).
+	prepared := cloneServices(services)
+	err := prepareServices(prepared)
 	if err != nil {
 		return err
 	}
+
+	// The admin API lists the caller's services, so report the defaults
+	// that preparing filled in back to them. It may be reading them right
+	// now, so leave a value that is already normalized untouched.
+	for i, service := range services {
+		if service.Auth != prepared[i].Auth {
+			service.Auth = prepared[i].Auth
+		}
+		if service.Price != prepared[i].Price {
+			service.Price = prepared[i].Price
+		}
+	}
+	services = prepared
 
 	certPool, err := certPool(services)
 	if err != nil {
@@ -898,10 +913,8 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 		},
 	}
 
-	p.services = services
-
-	p.proxyBackend = &httputil.ReverseProxy{
-		Director:  p.director,
+	proxyBackend := &httputil.ReverseProxy{
+		Director:  director(services),
 		Transport: &trailerFixingTransport{next: transport},
 		ModifyResponse: func(res *http.Response) error {
 			addCorsHeaders(res.Header)
@@ -964,6 +977,12 @@ func (p *Proxy) UpdateServices(services []*Service) error {
 		FlushInterval: -1,
 	}
 
+	p.servicesMtx.Lock()
+	defer p.servicesMtx.Unlock()
+
+	p.services = services
+	p.proxyBackend = proxyBackend
+
 	return nil
 }
 
@@ -1003,10 +1022,18 @@ func (p *Proxy) injectReceiptContext(r *http.Request,
 	return r.WithContext(ctx)
 }
 
-// director is a method that rewrites an incoming request to be forwarded to a
-// backend service.
-func (p *Proxy) director(req *http.Request) {
-	target, ok := matchService(req, p.services)
+// director returns a function that rewrites an incoming request to be
+// forwarded to one of the given backend services.
+func director(services []*Service) func(*http.Request) {
+	return func(req *http.Request) {
+		directRequest(req, services)
+	}
+}
+
+// directRequest rewrites an incoming request to be forwarded to the backend
+// service it matches.
+func directRequest(req *http.Request, services []*Service) {
+	target, ok := matchService(req, services)
 	if ok {
 		// Rewrite address and protocol in the request so the
 		// real service is called instead.
