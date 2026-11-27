@@ -30,6 +30,21 @@ type Authenticator interface {
 	FreshChallengeHeader(string, int64) (http.Header, error)
 }
 
+// ProblemAuthenticator is an optional interface for authenticators that can say
+// why they refused a credential. The Payment HTTP Authentication Scheme
+// requires the 402 that answers a refused credential to name the reason as a
+// Problem Details type, so that a client can tell an expired or already used
+// challenge from a proof that did not verify.
+type ProblemAuthenticator interface {
+	// AcceptWithProblem does what Accept does. When it refuses a
+	// credential that it handles, it also returns the problem type URI
+	// that describes why. The problem type is empty when the request is
+	// accepted, when the header carries no credential that this
+	// authenticator handles, or when the reason is not one the client can
+	// act on.
+	AcceptWithProblem(*http.Header, string) (bool, string)
+}
+
 // Minter is an entity that is able to mint and verify L402s for a set of
 // services.
 type Minter interface {

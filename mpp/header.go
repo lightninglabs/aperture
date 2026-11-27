@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 )
+
+// ErrNoCredential is returned by ParseCredential when the request carries no
+// Payment credential at all, as opposed to one that cannot be decoded. Only
+// the latter is a malformed credential in the sense of the spec.
+var ErrNoCredential = errors.New("mpp: no Payment credential")
 
 const (
 	// headerAuthorization is the standard HTTP Authorization header.
@@ -212,15 +218,18 @@ func quoteAuthParam(s string) string {
 func ParseCredential(h *http.Header) (*Credential, error) {
 	authHeader := h.Get(headerAuthorization)
 	if authHeader == "" {
-		return nil, fmt.Errorf("mpp: no Authorization header")
+		return nil, fmt.Errorf("%w: no Authorization header",
+			ErrNoCredential)
 	}
 
 	// Split off the scheme. RFC 9110 Section 11.1 makes the auth-scheme
-	// token case-insensitive, so match it that way.
-	scheme, token, found := strings.Cut(authHeader, " ")
-	if !found || !strings.EqualFold(scheme, AuthScheme) {
-		return nil, fmt.Errorf("mpp: authorization header does not "+
-			"use %s scheme", AuthScheme)
+	// token case-insensitive, so match it that way. A bare "Payment" with
+	// no token is a Payment credential, just an empty one, so it is left to
+	// the empty token check below.
+	scheme, token, _ := strings.Cut(authHeader, " ")
+	if !strings.EqualFold(scheme, AuthScheme) {
+		return nil, fmt.Errorf("%w: authorization header does not "+
+			"use %s scheme", ErrNoCredential, AuthScheme)
 	}
 
 	token = strings.TrimSpace(token)

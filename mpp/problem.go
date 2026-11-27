@@ -62,11 +62,56 @@ type ProblemDetails struct {
 // PaymentRequiredProblem returns the default Problem Details body for a 402
 // Payment Required response.
 func PaymentRequiredProblem() []byte {
+	return Problem402(ProblemPaymentRequired)
+}
+
+// problemText is the title and detail of a problem type.
+type problemText struct {
+	title  string
+	detail string
+}
+
+// problems402 holds the problem types that the status code table of
+// draft-httpauth-payment-00 assigns to a 402 response.
+var problems402 = map[string]problemText{
+	ProblemPaymentRequired: {
+		title:  "Payment Required",
+		detail: "Payment required for access.",
+	},
+	ProblemMalformedCredential: {
+		title:  "Malformed Credential",
+		detail: "The Payment credential could not be decoded.",
+	},
+	ProblemInvalidChallenge: {
+		title:  "Invalid Challenge",
+		detail: "The challenge is unknown or has already been used.",
+	},
+	ProblemPaymentExpired: {
+		title:  "Payment Expired",
+		detail: "The challenge has expired.",
+	},
+	ProblemVerificationFailed: {
+		title:  "Payment Verification Failed",
+		detail: "Invalid payment proof.",
+	},
+}
+
+// Problem402 returns the Problem Details body for a 402 response of the given
+// problem type. An empty type, or one that the table does not assign to a 402
+// response, gives the payment-required body, so a caller that cannot say why
+// it refused a credential still sends a valid response.
+func Problem402(problemType string) []byte {
+	text, ok := problems402[problemType]
+	if !ok {
+		problemType = ProblemPaymentRequired
+		text = problems402[problemType]
+	}
+
 	p := ProblemDetails{
-		Type:   ProblemPaymentRequired,
-		Title:  "Payment Required",
+		Type:   problemType,
+		Title:  text.title,
 		Status: 402,
-		Detail: "Payment required for access.",
+		Detail: text.detail,
 	}
 	data, _ := json.Marshal(p)
 	return data

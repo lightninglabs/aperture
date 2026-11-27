@@ -462,6 +462,123 @@ func TestMPPAuthenticatorAcceptNonPayment(t *testing.T) {
 	require.False(t, auth.Accept(&h2, "test-service"))
 }
 
+// TestMPPAuthenticatorAcceptWithProblem asserts that each refusal names the
+// problem type the status code table of draft-httpauth-payment-00 assigns to
+// it, and that a header carrying no charge credential names none, so another
+// authenticator's reason is not overwritten.
+func TestMPPAuthenticatorAcceptWithProblem(t *testing.T) {
+	preimage, paymentHash := testPreimageAndHash(t)
+
+	var wrongPreimage lntypes.Preimage
+	_, err := rand.Read(wrongPreimage[:])
+	require.NoError(t, err)
+
+	pastExpiry := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+
+	header := func(value string) http.Header {
+		h := make(http.Header)
+		if value != "" {
+			h.Set("Authorization", value)
+		}
+		return h
+	}
+
+	tampered := testChargeChallenge(t, paymentHash, testExpiry())
+	tampered.ID = "tampered-challenge-id"
+
+	session := testChargeChallenge(t, paymentHash, testExpiry())
+	session.Intent = mpp.IntentSession
+
+	noPreimageJSON, err := json.Marshal(&mpp.Credential{
+		Challenge: testChargeChallenge(t, paymentHash, testExpiry()),
+		Payload:   json.RawMessage(`{}`),
+	})
+	require.NoError(t, err)
+	noPreimage := header(
+		mpp.AuthScheme + " " + mpp.Base64URLEncode(noPreimageJSON),
+	)
+
+	tests := []struct {
+		name    string
+		header  http.Header
+		problem string
+	}{{
+		name:   "no authorization header",
+		header: header(""),
+	}, {
+		name:   "l402 credential",
+		header: header("L402 abc123:deadbeef"),
+	}, {
+		name:   "session intent",
+		header: buildTestCredential(t, session, preimage),
+	}, {
+		name:    "not base64url",
+		header:  header(mpp.AuthScheme + " %%%"),
+		problem: mpp.ProblemMalformedCredential,
+	}, {
+		name:    "empty token",
+		header:  header(mpp.AuthScheme),
+		problem: mpp.ProblemMalformedCredential,
+	}, {
+		name:    "payload without preimage",
+		header:  noPreimage,
+		problem: mpp.ProblemMalformedCredential,
+	}, {
+		name:    "unknown challenge",
+		header:  buildTestCredential(t, tampered, preimage),
+		problem: mpp.ProblemInvalidChallenge,
+	}, {
+		name: "expired challenge",
+		header: buildTestCredential(
+			t, testChargeChallenge(t, paymentHash, pastExpiry),
+			preimage,
+		),
+		problem: mpp.ProblemPaymentExpired,
+	}, {
+		name: "wrong preimage",
+		header: buildTestCredential(
+			t, testChargeChallenge(t, paymentHash, testExpiry()),
+			wrongPreimage,
+		),
+		problem: mpp.ProblemVerificationFailed,
+	}, {
+		name: "unsettled invoice",
+		header: buildTestCredential(
+			t, testChargeChallenge(t, paymentHash, testExpiry()),
+			preimage,
+		),
+		problem: mpp.ProblemVerificationFailed,
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			auth, _ := newTestChargeAuth(
+				t, &mockChallenger{}, newMockInvoiceChecker(),
+			)
+
+			accepted, problem := auth.AcceptWithProblem(
+				&tc.header, "test-service",
+			)
+			require.False(t, accepted)
+			require.Equal(t, tc.problem, problem)
+		})
+	}
+
+	// A paid credential is accepted with no problem, and presenting it
+	// again names the challenge as already used.
+	checker := newMockInvoiceChecker()
+	auth, _ := newTestChargeAuth(t, &mockChallenger{}, checker)
+	paid, _ := paidCredential(t, checker)
+
+	accepted, problem := auth.AcceptWithProblem(&paid, "test-service")
+	require.True(t, accepted)
+	require.Empty(t, problem)
+
+	accepted, problem = auth.AcceptWithProblem(&paid, "test-service")
+	require.False(t, accepted)
+	require.Equal(t, mpp.ProblemInvalidChallenge, problem)
+}
+
 // TestMPPAuthenticatorRequiresChargeStore asserts that the authenticator
 // refuses to exist without somewhere to record spent payments. Everything else
 // it checks is a property of the payment rather than of the request carrying
